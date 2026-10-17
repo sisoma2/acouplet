@@ -106,7 +106,6 @@ enum LDACPlaybackPriority {
         defaults.bool(forKey: disabledKey)
     }
 
-    /// Returns nil without calling `make` while the switch disables the priority.
     static func control(in defaults: UserDefaults = .standard,
                         _ make: () throws -> LDACPriorityControl?) rethrows -> LDACPriorityControl? {
         isDisabled(in: defaults) ? nil : try make()
@@ -145,7 +144,6 @@ final class LDACNativeSession: @unchecked Sendable {
         case active(LDACFormat)
         case formatChanged(LDACFormat)
         case gainApplied(Double)
-        /// What the AVDTP DISCOVER of this session found: `true` when the sink listed the LDAC endpoint.
         case ldacEndpoint(Bool)
         case audioCaptureAccess(LDACAudioCaptureAccess)
         case failed(String)
@@ -1232,15 +1230,9 @@ final class LDACNativeSession: @unchecked Sendable {
                                   waitForReconnect: (originalConnectionEnded || targetUnavailableBeforeRestore) && !nativeAudioRestored)))
     }
 
-    /// Which finished session folders `LDAC Sessions` keeps (L7). A week of sessions is needed to compare
-    /// connection drops by hour of day, and every abort and restore leaves its own folder, so a plain count of
-    /// eight lost them within a day. Oldest folders go first; the running session and any locked one never go.
     struct DiagnosticsRetention {
-        /// Finished sessions older than this are removed.
         var maxAge: TimeInterval = 7 * 24 * 3600
-        /// Safety cap on finished session folders kept.
         var maxCount = 200
-        /// Safety cap on their total size. A session log is at most 8 MiB plus its `.1`.
         var maxBytes: Int64 = 1 << 30
         static let standard = DiagnosticsRetention()
     }
@@ -1298,7 +1290,6 @@ final class LDACNativeSession: @unchecked Sendable {
             let date = completedDate ?? directoryDate
             return (candidate, date)
         }.sorted { $0.date == $1.date ? $0.url.lastPathComponent > $1.url.lastPathComponent : $0.date > $1.date }
-        // Newest first: keep while the folder is recent enough and the count and size caps still hold.
         var keptBytes: Int64 = 0
         var removable: [(url: URL, date: Date)] = []
         for (index, candidate) in inactive.enumerated() {

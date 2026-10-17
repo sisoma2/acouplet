@@ -170,8 +170,6 @@ struct MenuBarView: View {
         headphones.isReady && headphones.powerOffState == nil && !headphones.headphoneTestNeedsRecovery
     }
 
-    /// Headphones other than the selected ones that are waiting for a confirmation. Their alert no longer
-    /// switches the selection or opens Settings by itself (decision D14).
     private var devicesNeedingConfirmation: [SonyHeadphonesController] {
         devices.controllers.filter {
             $0 !== headphones && ($0.connectionTransition?.alert != nil || $0.multipointTransition?.alert != nil)
@@ -279,7 +277,6 @@ struct MenuBarView: View {
             || (ldac.targetAddress == headphones.address && ldac.state != .off)))
     }
 
-    /// The LDAC controls offer the update themselves; otherwise the panel shows its own row (decision D13).
     private var needsLDACDriverUpdate: Bool {
         settings.experimentalLDACEnabled && ldac.driverState == .outdated && !ldac.isSessionRunning
     }
@@ -728,7 +725,6 @@ struct MenuBarView: View {
                 Button("About Acouplet", action: showAbout)
                 .accessibilityIdentifier("menu.about")
                 Divider()
-                // Quitting concerns this process: only the LaunchAgent's copy sends you to Login Items instead.
                 if settings.isBackgroundServiceProcess {
                     Button("Background Service…") { SMAppService.openSystemSettingsLoginItems() }
                 } else {

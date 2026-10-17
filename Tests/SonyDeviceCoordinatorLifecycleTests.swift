@@ -390,7 +390,6 @@ final class SonyDeviceCoordinatorLifecycleTests: XCTestCase {
         let controller = try XCTUnwrap(devices.controller(for: earbuds.address))
         XCTAssertFalse(controller.canPausePolling)
         controller.simulateControlLoss()
-        // Una pausa solicitada sin temporizador en marcha no cambia nada y se puede revertir.
         controller.setPollingActive(false)
         XCTAssertFalse(controller.isPollingActive)
         controller.setPollingActive(true)

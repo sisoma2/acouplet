@@ -157,8 +157,6 @@ enum LDACSessionDiagnosticsCheck {
         print("LDAC diagnostic retention checks passed: mixed completed/managed-orphan limit, a week of sessions with count and size caps, legacy preservation, concurrent live locks and completion, forced-exit recovery, unrelated paths; the playback priority A/B switch skips the driver request only while set; a full session log moves to session.log.1 and a new one starts")
     }
 
-    /// A week of sessions is kept, the oldest go first when the count or size cap is passed, and the running
-    /// session is never removed (L7).
     private static func checkRetentionByAgeAndSize(in root: URL) throws {
         let manager = FileManager.default
         let base = root.appendingPathComponent("retention", isDirectory: true)
@@ -182,7 +180,6 @@ enum LDACSessionDiagnosticsCheck {
         precondition(!manager.fileExists(atPath: old.path), "A session older than a week must go")
         for directory in recent { precondition(manager.fileExists(atPath: directory.path), "A session under a week old must stay") }
         precondition(manager.fileExists(atPath: current.path))
-        // Size cap: 30 bytes allowed, 10 each, so the three newest stay and the oldest goes first.
         let sized = LDACNativeSession.DiagnosticsRetention(maxAge: 7 * day, maxCount: 200, maxBytes: 30)
         try LDACNativeSession.completeDiagnostics(in: current, releasing: lock, retention: sized)
         precondition(!manager.fileExists(atPath: recent[0].path))
@@ -190,8 +187,6 @@ enum LDACSessionDiagnosticsCheck {
         precondition(manager.fileExists(atPath: current.path), "The finished current session is never removed by its own prune")
     }
 
-    /// A full session log keeps its lines in `session.log.1`, replacing an older one, and logging goes on in a new
-    /// `session.log`, so a session never holds more than twice the limit (L13).
     private static func checkSessionLogRotation(in root: URL) throws {
         let directory = root.appendingPathComponent("rotation", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
@@ -220,7 +215,6 @@ enum LDACSessionDiagnosticsCheck {
         let names = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
         precondition(names == ["session.log", "session.log.1"], "\(names)")
 
-        // A handle without a known file still records, and only skips the rotation.
         let unnamed = directory.appendingPathComponent("unnamed.log")
         precondition(FileManager.default.createFile(atPath: unnamed.path, contents: nil))
         var handle: FileHandle? = try FileHandle(forWritingTo: unnamed)

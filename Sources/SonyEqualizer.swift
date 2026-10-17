@@ -145,7 +145,6 @@ struct SonyEqualizer: Equatable, Sendable {
                                  values: rawValues.map { Int($0) - center })
     }
 
-    /// Presets that store a curve of their own: Manual plus the two user slots the Mac can fill.
     static let userSlots: [UInt8] = [EqualizerPreset.user1.rawValue, EqualizerPreset.user2.rawValue]
 
     private static func isCurveTarget(_ id: UInt8) -> Bool {
@@ -165,7 +164,6 @@ struct SonyEqualizer: Equatable, Sendable {
             && advertises(EqualizerPreset.manual.rawValue)
     }
 
-    /// User slots the headphones advertise and that accept a curve in the current state.
     var savableSlots: [UInt8] {
         supportsCurveWrite ? Self.userSlots.filter(advertises) : []
     }

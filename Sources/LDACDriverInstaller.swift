@@ -48,7 +48,6 @@ enum LDACDriverInstaller {
         }
     }
 
-    /// Descarta la caché; los flujos de instalación la usan para revalidar siempre.
     nonisolated static func invalidateCache() { cache.removeAll() }
 
     static func inspect(bundle: Bundle = .main, useCache: Bool = true) -> State {
@@ -56,8 +55,6 @@ enum LDACDriverInstaller {
         catch { return .unavailable(error.localizedDescription) }
     }
 
-    /// Como `inspect`, pero la validación de firmas (`SecStaticCodeCheckValidity`) corre fuera del hilo principal.
-    /// Solo la consulta del driver cargado, que es barata, se hace de vuelta en el actor principal.
     static func inspectInBackground(bundle: Bundle = .main) async -> State {
         let result = await Task.detached(priority: .utility) { () -> Result<Disk, Error> in
             Result { try validateOnDisk(bundle: bundle) }
@@ -107,7 +104,6 @@ enum LDACDriverInstaller {
                 + [bundled, installedURL, legacyURL].map(fingerprint)).joined(separator: "|")
     }
 
-    /// Huella de lo que cambia al sustituir un bundle: inodo, fecha y tamaño de sus ficheros de firma y ejecutables.
     private nonisolated static func fingerprint(_ bundle: URL) -> String {
         let manager = FileManager.default
         var paths = ["", "Contents", "Contents/Info.plist", "Contents/_CodeSignature", "Contents/_CodeSignature/CodeResources", "Contents/MacOS"]

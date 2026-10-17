@@ -1,6 +1,5 @@
 import Foundation
 
-/// Whether a pair of headphones offers an LDAC audio endpoint. `unknown` behaves as before: the controls stay visible.
 enum LDACSupport: String, Equatable, Sendable {
     case supported, unsupported, unknown
 
@@ -9,7 +8,6 @@ enum LDACSupport: String, Equatable, Sendable {
     ///    while multipoint was on lists only SBC and AAC for those models, so it cannot rule them out.
     /// 2. What the last real AVDTP DISCOVER found for this device: `true` when it listed the LDAC endpoint, `false` when
     ///    it ended with `LDAC_UNAVAILABLE` without having seen one.
-    /// A source built from the MDR support list would be one more parameter here.
     static func decide(modelImpliesLDAC: Bool, discovered: Bool?) -> LDACSupport {
         if modelImpliesLDAC { return .supported }
         switch discovered {
@@ -19,11 +17,9 @@ enum LDACSupport: String, Equatable, Sendable {
         }
     }
 
-    /// A stored request for LDAC never overrides `unsupported`.
     func allowsStart(requested: Bool) -> Bool { requested && self != .unsupported }
 }
 
-/// Per-device result of the last AVDTP DISCOVER, kept in the app's settings store under the normalized address.
 struct LDACSupportStore {
     static let key = "ldac.discoveredSupport"
     private let defaults: UserDefaults?

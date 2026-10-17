@@ -25,7 +25,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var dismissalObservations = Set<AnyCancellable>()
     private var foregroundApplicationPID: Int32?
     private static let logger = Logger(subsystem: "dev.baglayan.Acouplet", category: "MenuBar")
-    /// Uptime at which the status item asked for the panel; cleared once the popover is shown (G9 timing marks).
     private var openRequestedAt: TimeInterval?
 
     init(environment: AppEnvironment, showSettings: @escaping () -> Void) {
@@ -136,7 +135,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let headphones = devices.selectedController
         #if !ACOUPLET_PUBLIC_APIS_ONLY
         let keepsLDACVisible = ldac.targetAddress == headphones.address && ldac.state.keepsMenuBarVisible(isSessionRunning: ldac.isSessionRunning)
-        // The panel offers the driver update instead of opening Installer.app, so it must be reachable (D13).
         let hasPendingDriverUpdate = settings.experimentalLDACEnabled && ldac.driverState == .outdated && !ldac.isSessionRunning
         #else
         let keepsLDACVisible = false

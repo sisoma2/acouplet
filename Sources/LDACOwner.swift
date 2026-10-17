@@ -47,7 +47,6 @@ struct LDACOwnerTimeoutError: LocalizedError {
     var errorDescription: String? { String(localized: "The LDAC audio output did not respond in time.") }
 }
 
-/// Outcome of a request to the owner process, delivered once to the waiting continuation.
 private enum LDACOwnerReply: Sendable {
     case reply(LDACNativeVolume?, String?)
     /// The owner had already ended before the request was sent.
@@ -61,7 +60,6 @@ private enum LDACOwnerReply: Sendable {
 private final class LDACOwnerChannel: @unchecked Sendable {
     private let child: LDACNativeChild
     private let lock = NSLock()
-    /// Requests waiting for their reply. They suspend instead of blocking a cooperative-pool thread (L12).
     private var replies: [UUID: CheckedContinuation<LDACOwnerReply, Never>] = [:]
     private var exitWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     private var ended = false
@@ -162,7 +160,6 @@ private final class LDACOwnerChannel: @unchecked Sendable {
         }
     }
 
-    /// Suspends until the owner process has been reaped, or `timeout` passes.
     private func waitForExit(timeout: TimeInterval) async -> Bool {
         let id = UUID()
         return await withCheckedContinuation { continuation in

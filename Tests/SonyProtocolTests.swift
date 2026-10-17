@@ -1319,7 +1319,6 @@ final class SonyEqualizerControllerTests: XCTestCase {
             XCTAssertEqual(controller.equalizer.savableSlots, [0xA1, 0xA2])
             let sent = controller.simulatedTransmittedFrames.count
             controller.saveEqualizerCurve(slotCurve, toSlot: slot)
-            // 58 00 Ax 00 goes out alone; no values until the slot is confirmed.
             XCTAssertEqual(controller.simulatedPendingFrame?.payload, [0x58, 0, slot, 0])
             XCTAssertEqual(controller.simulatedTransmittedFrames.dropFirst(sent).filter { $0.payload.count > 4 }.count, 0)
             acknowledgeSimulatedCommands(controller)
@@ -1329,7 +1328,6 @@ final class SonyEqualizerControllerTests: XCTestCase {
             XCTAssertEqual(controller.simulatedPendingFrame?.payload, write)
             acknowledgeSimulatedCommands(controller)
             XCTAssertNotNil(controller.pendingChanges[.equalizer])
-            // The re-read of that slot is what confirms the save.
             controller.refreshEqualizer()
             acknowledgeSimulatedCommands(controller)
             deliver([0x57, 0, slot, 6] + slotRaw, to: controller)

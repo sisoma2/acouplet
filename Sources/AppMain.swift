@@ -40,7 +40,6 @@ enum AcoupletMain {
         AcoupletApp.main()
     }
 
-    /// A running copy of the app as the launch check sees it.
     struct RunningCopy: Equatable {
         let processIdentifier: pid_t
         let isFinishedLaunching: Bool
@@ -123,8 +122,6 @@ enum AcoupletMain {
     #endif
 
     #if !ACOUPLET_PUBLIC_APIS_ONLY
-    /// The word that `--ldac-driver-state` prints for Install.command, which tells the user whether the
-    /// LDAC driver needs installing, updating or a restart, using the same checks as the app.
     static func ldacDriverStateKeyword(_ state: LDACDriverInstaller.State) -> String {
         switch state {
         case .missing: "missing"
@@ -201,8 +198,6 @@ struct AcoupletApp: App {
         return paths
     }
 
-    /// Hands the scene's Settings and window actions to the app delegate and App Intents. SwiftUI evaluates
-    /// `body` many times, so this registers only on the first evaluation (G15).
     private func registerNavigation() {
         guard !appDelegate.hasRegisteredNavigation else { return }
         appDelegate.hasRegisteredNavigation = true

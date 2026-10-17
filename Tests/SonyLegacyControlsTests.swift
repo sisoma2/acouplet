@@ -1537,7 +1537,6 @@ final class SonyLegacyControllerTests: XCTestCase {
         acknowledgeAll(controller)
         controller.refreshEqualizer()
         acknowledgeAll(controller)
-        // Another slot's curve does not confirm it; the slot just written does.
         deliver([0x57, 1, 0xA1, 6] + raw, to: controller)
         XCTAssertNotNil(controller.pendingChanges[.equalizer])
         controller.refreshEqualizer()

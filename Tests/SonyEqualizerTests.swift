@@ -152,25 +152,21 @@ final class SonyEqualizerTests: XCTestCase {
         XCTAssertNil(equalizer.curvePayload(curve, target: 0xA3))
         XCTAssertNil(equalizer.curvePayload(curve, target: 0x10))
         XCTAssertEqual(equalizer.presetPayload(0xA1), [0x58, 0, 0xA1, 0])
-        // The slot has to be the active preset when the frame goes out.
         let toUser1 = try XCTUnwrap(equalizer.curvePayload(curve, target: 0xA1))
         XCTAssertFalse(equalizer.acceptsSetPayload(toUser1))
         XCTAssertTrue(equalizer.update([0x59, 0, 0xA1, 0]))
         XCTAssertTrue(equalizer.acceptsSetPayload(toUser1))
         XCTAssertFalse(equalizer.acceptsSetPayload([0x58, 0, 0xA2, 6] + raw))
         XCTAssertFalse(equalizer.acceptsSetPayload([0x58, 0, 0xA0, 6] + raw))
-        // The confirmation is the whole curve in that slot, never the bare selection.
         XCTAssertEqual(equalizer.confirmationValue(toUser1), [0xA1, 6] + raw)
         XCTAssertEqual(equalizer.confirmationValue([0x57, 0, 0xA1, 6] + raw), [0xA1, 6] + raw)
         XCTAssertEqual(equalizer.confirmationValue([0x58, 0, 0xA1, 0]), [0xA1])
-        // The re-read `57 00 Ax n ...` is parsed as that slot's curve.
         XCTAssertTrue(equalizer.update([0x57, 0, 0xA1, 6] + raw))
         XCTAssertEqual(equalizer.presetID, 0xA1)
         XCTAssertEqual(equalizer.settings, curve)
         XCTAssertTrue(equalizer.update([0x57, 0, 0xA2, 6] + raw.reversed()))
         XCTAssertEqual(equalizer.presetID, 0xA2)
         XCTAssertNotEqual(equalizer.settings, curve)
-        // Slots that are not advertised are not offered.
         XCTAssertEqual(prepared(presets: [0, 0xA0, 0xA2]).savableSlots, [0xA2])
         XCTAssertEqual(prepared().savableSlots, [])
     }
@@ -210,7 +206,6 @@ final class SonyEqualizerTests: XCTestCase {
         XCTAssertTrue(equalizer.update([0x57, 1, 0xA1, 6] + raw))
         XCTAssertEqual(equalizer.settings, curve)
         XCTAssertEqual(equalizer.confirmationValue([0x57, 1, 0xA1, 6] + raw), [0xA1, 6] + raw)
-        // A different slot's readback does not confirm the write.
         XCTAssertNotEqual(equalizer.confirmationValue([0x57, 1, 0xA2, 6] + raw), [0xA1, 6] + raw)
     }
 

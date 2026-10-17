@@ -11,17 +11,13 @@ final class LDACController: ObservableObject {
     @Published private(set) var targetAddress: String?
     @Published private(set) var isSessionRunning = false
     @Published private(set) var isRecovering = false
-    /// True while ordinary Bluetooth audio plays after a recoverable abort and the single automatic LDAC retry waits.
     @Published private(set) var isAwaitingAutomaticRetry = false
     @Published private(set) var audioCaptureAccess: LDACAudioCaptureAccess = .unchecked
     @Published private(set) var driverState: LDACDriverInstaller.State
-    /// Result of the last AVDTP DISCOVER per normalized address; see `LDACSupport`.
     @Published private(set) var discoveredSupport: [String: Bool]
     @Published private(set) var driverInstallationError: String?
     @Published private(set) var isOpeningDriverInstaller = false
-    /// Headphones whose LDAC request waits for the user to choose between multipoint and LDAC.
     @Published private(set) var multipointConflictAddress: String?
-    /// Headphones that are turning multipoint off before LDAC starts.
     @Published private(set) var multipointShutdownAddress: String?
     private var multipointConflictConfiguration: LDACConfiguration?
     private var multipointShutdownTask: Task<Void, Never>?
@@ -30,7 +26,6 @@ final class LDACController: ObservableObject {
     @Published private var pendingConnectionModes: [String: UUID] = [:] {
         didSet { defaults?.set(pendingConnectionModes.mapValues(\.uuidString), forKey: "ldac.pendingConnectionPreferences") }
     }
-    /// Inspector inyectado (tests). Sin él se usa `LDACDriverInstaller`, con la validación de firmas fuera del hilo principal.
     private let inspectDriver: ((Bundle) -> LDACDriverInstaller.State)?
     private let isDriverInspectionEnabled: () -> Bool
     private var driverInspectionTask: Task<Void, Never>?
@@ -48,7 +43,6 @@ final class LDACController: ObservableObject {
         }
     }
 
-    /// Tells the Sony controller to reduce its periodic reads to a battery poll while LDAC streams.
     private func syncStreamingFlag() {
         if case .active = state { headphones?.isLDACStreaming = true } else { headphones?.isLDACStreaming = false }
     }
@@ -66,7 +60,6 @@ final class LDACController: ObservableObject {
     private var volumeTask: Task<Void, Never>?
     private var volumeTaskID: UUID?
     private var cleanupTask: Task<Void, Never>?
-    /// Waits out `automaticRetryDelay` before the single automatic LDAC retry; `recoveryTaskID` identifies the current wait.
     private var recoveryTask: Task<Void, Never>?
     private var recoveryTaskID: UUID?
     /// Automatic retries used by the current LDAC request. Only one is allowed until playback stays stable for 30 s.
@@ -151,8 +144,6 @@ final class LDACController: ObservableObject {
         state = .connecting
     }
 
-    /// Records helper launches and session starts instead of spawning the owner process, so tests can drive
-    /// `sessionFinished` without Bluetooth or the Core Audio driver.
     var simulatedLaunches: [(address: String, restoringOnly: Bool)]?
     var simulatedStarts: [String]?
 
@@ -162,7 +153,6 @@ final class LDACController: ObservableObject {
         automaticRetryDelay = retryDelay
     }
 
-    /// Delivers a session completion as the owner would, after a stream that was stable since `stableSince`.
     func simulateSessionFinished(_ completion: LDACNativeSession.Completion, stableSince: Date? = nil, at date: Date = Date()) {
         guard let address = targetAddress else { return }
         self.stableSince = stableSince
@@ -183,15 +173,12 @@ final class LDACController: ObservableObject {
         }
     }
 
-    /// Inspección síncrona, para los flujos que deciden justo antes de arrancar o instalar. Usa la caché del instalador.
     func refreshDriverState() {
         guard !isSessionRunning else { return }
         let state = inspectDriver?(bundle) ?? LDACDriverInstaller.inspect(bundle: bundle)
         if driverState != state { driverState = state }
     }
 
-    /// Inspección para la interfaz (arranque, activación de la app, apertura del panel): no bloquea el hilo principal,
-    /// no hace nada con LDAC desactivado y se fusiona con otra que ya esté en curso.
     func refreshDriverStateInBackground() {
         guard isDriverInspectionEnabled(), !isSessionRunning else { return }
         guard inspectDriver == nil else { refreshDriverState(); return }
@@ -222,8 +209,6 @@ final class LDACController: ObservableObject {
         openDriverInstaller()
     }
 
-    /// Opens the bundled driver update in Installer.app. Only the panel's Update LDAC Driver button calls it:
-    /// the app never opens an installer by itself (decision D13).
     func updateDriver() {
         guard !isSessionRunning, !isOpeningDriverInstaller else { return }
         refreshDriverState()
@@ -263,7 +248,6 @@ final class LDACController: ObservableObject {
         return nil
     }
 
-    /// Whether these headphones offer LDAC, from the one decision in `LDACSupport.decide`.
     func support(forAddress address: String) -> LDACSupport {
         LDACSupport.decide(modelImpliesLDAC: devices?.controller(for: address)?.deviceModel.offersLDACOnlyWithoutMultipoint == true,
                            discovered: SonyBLEIdentity.normalizedAddress(address).flatMap { discoveredSupport[$0] })
@@ -275,7 +259,6 @@ final class LDACController: ObservableObject {
         discoveredSupport[address] = supported
         record("ldac-support", reason: supported ? "endpoint listed" : "no endpoint listed")
         if !supported, support(forAddress: address) == .unsupported, requestedAddress == address {
-            // The request for LDAC does not outlive the finding: no automatic retry and no restart.
             requestedAddress = nil
         }
     }
@@ -945,16 +928,12 @@ final class LDACController: ObservableObject {
 
     private var bindingIsCurrent: Bool { bindingCheck == .current }
 
-    /// How the headphones' current state relates to the volume binding taken at `volume-bound`.
     private enum BindingCheck: Equatable {
-        /// Same control session, source and range, with fresh volume controls.
         case current
         /// Nothing that LDAC depends on changed, but freshness was lost or a transition that may keep the
         /// selected source is still running (keeping, inventory reread, another device's connection, multipoint).
         case held(String, transition: Bool)
-        /// The selected source moved to another device, or the connection mode is leaving Sound Quality (D5).
         case sourceChanged(String)
-        /// The control connection itself changed, so the binding cannot be trusted any more.
         case lost(String)
     }
 
@@ -1147,7 +1126,6 @@ final class LDACController: ObservableObject {
         }
     }
 
-    /// The control connection changed under LDAC: recover, which returns the headphones to ordinary audio (D1).
     private func recoverBinding(_ reason: String) {
         recordRecovery("binding-lost", reason: reason)
         let message = String(localized: "The headphone controls temporarily disconnected.")
@@ -1312,7 +1290,6 @@ final class LDACController: ObservableObject {
         }
     }
 
-    /// Clears the retry wait identified by `taskID` unless a newer one replaced it.
     private func endRetryWait(_ taskID: UUID) {
         guard recoveryTaskID == taskID else { return }
         recoveryTask = nil

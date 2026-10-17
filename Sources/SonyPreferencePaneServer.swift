@@ -13,8 +13,6 @@ final class SonyPreferencePaneServer {
     private let path: String
     private nonisolated static let logger = Logger(subsystem: "dev.baglayan.Acouplet", category: "PreferencePane")
 
-    /// `path` defaults to the socket of this distribution: the container in the sandbox, Application Support
-    /// outside it.
     init(devices: SonyDeviceCoordinator, allowsCommands: Bool = false,
          path: String = SonyPreferencePaneWire.socketPath(
             sandboxed: ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil)) {
@@ -23,7 +21,6 @@ final class SonyPreferencePaneServer {
         self.path = path
     }
 
-    /// Starts listening. Throws, before creating anything, when the path does not fit in `sun_path`.
     func start() throws {
         guard listener == nil else { return }
         var address = try SonyPreferencePaneWire.address(path)

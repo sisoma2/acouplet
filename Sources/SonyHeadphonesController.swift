@@ -407,7 +407,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         guard let transition = sourceTransition, transition.requestedKeeping == nil, transition.phase != .failed else { return nil }
         return transition.targetAddress
     }
-    /// True when a connection-mode change is leaving Sound Quality, or has left it, which LDAC requires.
     var isLeavingLDACConnectionMode: Bool {
         guard supportsConnectionMode else { return false }
         if let transition = connectionTransition, !transition.isFinished { return transition.targetMode != .soundQuality }
@@ -560,7 +559,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         return nil
     }
 
-    /// Whether LDAC needs multipoint turned off first on these headphones.
     var ldacRequiresMultipointOff: Bool {
         deviceModel.offersLDACOnlyWithoutMultipoint && systemFeatures.multipoint?.enabled == true
     }
@@ -728,7 +726,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
          0xB3, 0x2D, 0xE3, 0x16, 0xF5, 0xE0, 0x69, 0xBA],
     ]
 
-    /// Returns the first Sony control service the device publishes, following `sonyServiceUUIDs`.
     static func sonyServiceRecord(on device: any SonyBluetoothDevice) -> (record: any SonyServiceRecord, uuid: [UInt8])? {
         for bytes in sonyServiceUUIDs {
             let uuid = bytes.withUnsafeBytes { IOBluetoothSDPUUID(bytes: $0.baseAddress!, length: bytes.count) }
@@ -783,7 +780,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     private var recoveryUsesBLE: Bool?
     private var recoveryClassicAddress: String?
     private var refreshTimer: Timer?
-    /// El coordinador pidió parar el sondeo porque el dispositivo no está conectado; se reanuda al conectar.
     private var isPollingPaused = false
     private var isPollingRequested = true
     @Published private var bluetoothAuthorization: CBManagerAuthorization?
@@ -817,7 +813,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     private var multipointConnection: MultipointConnection?
     private var multipointRecoveryAttempts = 0
     private var unconfirmedEqualizerRequestID: UUID?
-    /// Curve waiting for its destination preset (Manual or a user slot) to be selected and confirmed.
     private var equalizerCurveFollowUp: (target: UInt8, settings: EqualizerSettings)?
     private var acknowledgmentTimeout: DispatchWorkItem?
     private var transmissionID: UUID?
@@ -1672,7 +1667,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         systemWillSleep()
     }
 
-    /// Sin enlace, transición, reintento ni tarea pendiente: el sondeo de 3 s no tiene nada que hacer.
     var canPausePolling: Bool {
         !hasOpenControlTransport && !isDeviceConnected && channel == nil && bleTransport == nil
             && classicConnectionID == nil && retryWorkItem == nil && nextRetryDate == nil && recoveryUsesBLE == nil
@@ -1683,8 +1677,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
 
     var isPollingActive: Bool { refreshTimer != nil }
 
-    /// Lo llama el coordinador con cada actualización del inventario: un dispositivo no conectado y en reposo
-    /// para su temporizador de 3 s, y al conectar se reanuda y sondea al momento.
     func setPollingActive(_ active: Bool) {
         isPollingRequested = active
         if active {
@@ -1797,7 +1789,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     /// opening new RFCOMM channels, so no reconnection path can race the process exit.
     func beginTermination() { isTerminating = true }
 
-    /// Re-enables RFCOMM opens after a quit was cancelled.
     func cancelTermination() {
         isTerminating = false
         terminationDrainExpired = false
@@ -4399,7 +4390,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         queueEqualizerCurve(settings, target: EqualizerPreset.manual.rawValue, debounce: true)
     }
 
-    /// Stores `settings` in a user slot (User 1 / User 2). Only slots the headphones advertise are accepted.
     func saveEqualizerCurve(_ settings: EqualizerSettings, toSlot slot: UInt8) {
         guard equalizer.savableSlots.contains(slot) else { return }
         queueEqualizerCurve(settings, target: slot, debounce: false)
@@ -4429,7 +4419,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         if queueEqualizer(select, debounce: false) { equalizerCurveFollowUp = (target, settings) }
     }
 
-    /// Runs after an equalizer change is confirmed: sends the waiting curve once its destination is active.
     private func continueEqualizerCurveFollowUp() {
         guard let followUp = equalizerCurveFollowUp else { return }
         if equalizer.presetID == followUp.target {
@@ -6119,8 +6108,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         return payload[0] == 0x21 ? state.threshold != nil : state.enabled != nil && state.effectActive != nil
     }
 
-    /// Stores the read-only MDR v1 device list (`37 01`). Only the lists the headphones send after
-    /// announcing function 0x38 are accepted; nothing here writes to the headphones.
     private func receiveLegacyDeviceList(_ payload: [UInt8]) -> Bool {
         guard multipoint.supportsLegacyInventory, payload.prefix(2) == [0x37, 0x01] else { return false }
         var received = multipoint
@@ -7155,8 +7142,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         }
     }
 
-    /// Persists (`.notice`) the support-function list the headphones just reported, with no Bluetooth address. It only
-    /// logs what the app already receives; it adds no read or write.
     private func logSupportFunctions(generation: String, table: Int, functions: Set<UInt8>) {
         let line = SonySupportFunctionsLog.line(generation: generation, table: table, model: deviceModel.name,
                                                 protocolVersion: protocolVersion, functions: functions)
@@ -7949,7 +7934,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         guard channel === rfcommChannel else { return }
         if pendingOpenChannel === rfcommChannel { pendingOpenChannel = nil }
         if isTerminating {
-            // The open was in flight when the app began quitting; it can be closed now that it completed.
             if terminationDrainCompletion != nil { advanceTerminationDrain() } else { closeSonyLink() }
             return
         }

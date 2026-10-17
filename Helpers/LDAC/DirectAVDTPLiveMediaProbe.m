@@ -142,14 +142,11 @@ static const char *PolicyName(int policy) {
     }
 }
 
-// Time the process spent runnable without running between two samples, or 0 without counters.
 static double SchedulerWaiting(SchedulerSample since, SchedulerSample now) {
     if (!since.available || !now.available) return 0;
     return MachSeconds(now.runnable - since.runnable) - MachSeconds(now.cpu - since.cpu);
 }
 
-// Prints `SCHED_SAMPLE trigger=<line key> …` with the change from `since` to `now` and the calling
-// thread's scheduling state. `packet` is negative when the trigger has no packet number.
 static void PrintSchedulerSample(const char *trigger, long packet, SchedulerSample since, SchedulerSample now) {
     thread_t thread = pthread_mach_thread_np(pthread_self());
     thread_extended_info_data_t state = {0};
@@ -198,7 +195,6 @@ typedef struct {
     double waitingForCPU;
 } BreachStreak;
 
-// Moves a streak that has ended by `now` (or any streak when `force`) into `summary`.
 static BOOL CloseBreachStreak(BreachStreak *streak, double now, BOOL force, BreachStreak *summary) {
     if (!streak->active || (!force && now - streak->lastAt < BreachPrintSeconds)) return NO;
     *summary = *streak;
@@ -212,8 +208,6 @@ static void PrintBreachStreak(const char *kind, BreachStreak summary) {
            summary.events ? summary.totalLate / summary.events : 0, summary.waitingForCPU);
 }
 
-// Counts one breach of `kind`, closing the previous streak first if it had ended, and returns
-// whether this breach's lines should be printed.
 static BOOL NoteBreach(BreachStreak *streak, const char *kind, double now, double late, double waitingForCPU) {
     BreachStreak summary;
     if (CloseBreachStreak(streak, now, NO, &summary)) PrintBreachStreak(kind, summary);
@@ -361,7 +355,6 @@ static double SourceWaitLimit(BOOL continuous, double packetDue, double blockDue
     return continuous ? fmax(blockDue, waitStart) + PCMSourceStallSeconds : packetDue + 0.25;
 }
 
-// How far the schedule moves once a waited-for block arrives: the time past its due, or nothing.
 static double SourceResync(BOOL continuous, double blockDue, double arrived) {
     return continuous ? fmax(0, arrived - blockDue) : 0;
 }
@@ -555,8 +548,6 @@ static kern_return_t ReleaseSenderRealtime(void) {
                              (thread_policy_t)&policy, THREAD_STANDARD_POLICY_COUNT);
 }
 
-// Whether the calling thread runs in the real-time band now: the time-constraint policy is set and
-// the policy in effect is no longer timeshare. `priority` receives the current priority.
 static BOOL SenderRealtimeEffective(int *priority) {
     thread_t thread = pthread_mach_thread_np(pthread_self());
     thread_time_constraint_policy_data_t constraint;
@@ -715,7 +706,6 @@ static LiveQueuePacket *LiveQueueAt(LiveQueue *queue, uint64_t index) {
     return &queue->slots[index % LiveQueueSlots];
 }
 
-/// True when the audio not yet drained is above `capSamples`, or no slot is left: the sender must wait.
 static BOOL LiveQueueFull(const LiveQueue *queue, uint64_t capSamples) {
     return queue->undrainedSamples > capSamples || queue->tail - queue->head >= LiveQueueSlots - 1;
 }
@@ -731,7 +721,6 @@ static void LiveQueueCommit(LiveQueue *queue) {
     queue->tail++;
 }
 
-/// Records the writable space of the socket. Returns YES when more bytes have left it since the last call.
 static BOOL LiveQueueObserve(LiveQueue *queue, long writable) {
     if (writable > queue->capacity) queue->capacity = writable;
     NSUInteger inflight = (NSUInteger)(queue->capacity - writable);
@@ -1476,7 +1465,6 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
     id activity = [NSProcessInfo.processInfo beginActivityWithOptions:NSActivityUserInitiated | NSActivityLatencyCritical reason:@"LDAC streaming"];
     int qos = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     printf("STREAM_ACTIVITY qosStatus=%d\n", qos);
-    // The sender, PCM reads included, runs on this thread. If the policy is refused it streams as before.
     SenderRealtimeBudget realtimeBudget = SenderRealtimeBudgetFor(probe.profile, probe.encoderMTU);
     kern_return_t realtimeStatus = ApplySenderRealtime(realtimeBudget);
     int realtimePriority = -1;
@@ -1559,7 +1547,6 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
         printf("SOCKET fd=%d CID=%04X outgoingMTU=%u type=%d baseline=%d\n",
                fd, owned.cid, owned.outgoingMTU, socketType, baseline);
         started = MonotonicTime();
-        // Packets are due at paceStart + timestamp / rate; paceStart moves later when the source falls behind.
         double paceStart = started;
         probe.degradation = NewDegradation(started, profile.sampleRate, probe.pcmSkippedBytes);
         double deadline = continuous ? INFINITY : started + seconds + 1;
@@ -1578,7 +1565,6 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
         BreachStreak *streaks = breachStreaks;
         if (!LiveQueueInit(&sendQueue, baseline)) break;
         LiveQueue *sendq = &sendQueue;
-        // Audio not yet drained from the socket may reach the PCM reserve (250 ms); beyond it the sender waits.
         const uint64_t capSamples = continuous ? probe.pcmReserveBytes / 8 : 0;
         __block double lastProgressAt = started;
         __block double lastServiceAt = started;
@@ -1588,8 +1574,6 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
         __block NSUInteger statsRetained = 0, statsPeakPackets = 0;
         __block uint64_t statsPeakSamples = 0, statsSkippedBase = probe.pcmSkippedBytes / 8;
         __block double statsMaxDrain = 0, nextStats = started + 5;
-        // Writes queued packets while the socket has room, accounts for what has drained, and watches for a stall.
-        // Returns nonzero when the stream must stop (error, send failure or no drain progress for the hard limit).
         int (^service)(void) = ^int(void) {
             double pollAt = MonotonicTime();
             maximumSchedulerGap = fmax(maximumSchedulerGap, pollAt - lastServiceAt);
@@ -1831,8 +1815,6 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                 if (probe.pcmBytes < requiredBytes || probe.closed || probe.failed || probe.inputEnded) {
                     limitStopped = !probe.closed && !probe.failed && !probe.inputEnded;
                     if (limitStopped && continuous) {
-                        // The capture has delivered nothing for a whole stall period: end the stream
-                        // as a recoverable failure, which the session restarts, not a hard error.
                         limitStopped = NO;
                         probe.failed = YES;
                         printf("PCM_FAILED reason=source-stalled waitedSeconds=%.6f stallSeconds=%.3f sourceSamples=%llu bufferedFrames=%lu sourceResync=%.6f\n",
@@ -1994,7 +1976,6 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
             }
             if (stopSending) { printf("DRAIN_STOP packet=%lu elapsed=%.6f\n", sentPackets ? sentPackets - 1 : 0, MonotonicTime() - started); break; }
         }
-        // After a clean flush, wait for the queue and the socket to empty before judging the stream complete.
         while (flushed && !probe.closed && !probe.failed && !probe.inputEnded && !limitStopped && !serviceStopped &&
                owned.socketFD == fd && sendQueue.head < sendQueue.tail) {
             if (service()) break;

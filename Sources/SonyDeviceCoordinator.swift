@@ -212,7 +212,6 @@ final class SonyDeviceCoordinator: NSObject, ObservableObject {
         for controller in terminationControllers { controller.beginTermination() }
     }
 
-    /// Undoes `beginTermination()` when the quit is cancelled.
     func cancelTermination() {
         isTerminating = false
         for controller in terminationControllers { controller.cancelTermination() }

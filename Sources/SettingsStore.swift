@@ -67,14 +67,12 @@ final class SettingsStore: ObservableObject {
     @Published private(set) var backgroundServiceStatus: SMAppService.Status = .notRegistered
     @Published var backgroundServiceMigrationError: String?
     var retryBackgroundServiceMigration: (() -> Void)?
-    /// Quits and reopens the app, set by the app delegate. The language change needs it.
     var restartApp: (() -> Void)?
     /// Whether the app is installed with its LaunchAgent, read from the plist's real state rather than from
     /// how this copy was started (decision D9). Settings then shows the service instead of Launch at login.
     var hasBackgroundService: Bool {
         backgroundServiceStatus == .enabled || backgroundServiceStatus == .requiresApproval
     }
-    /// Whether this process is the LaunchAgent's copy, which launchd starts with `--background-service`.
     var isBackgroundServiceProcess: Bool {
         CommandLine.arguments.contains("--background-service")
     }
@@ -129,7 +127,6 @@ final class SettingsStore: ObservableObject {
         reconnectAutomatically = defaults.object(forKey: Keys.reconnectAutomatically) == nil
             ? true
             : defaults.bool(forKey: Keys.reconnectAutomatically)
-        // Filled in by refreshLaunchStatus() below, off the main thread.
         launchAtLogin = false
         // Off unless turned on (decision D12): ⌥⌘A is exclusive system-wide. The value is stored only when
         // someone flips the toggle, so a stored true is a deliberate choice and is kept.
@@ -140,10 +137,6 @@ final class SettingsStore: ObservableObject {
         refreshLaunchStatus()
     }
 
-    /// Returns true the first time a build runs, and records it so later launches of that build return false.
-    ///
-    /// The background service opens Settings on that launch, so the app does not look closed after an
-    /// installation or update when no headphones are connected and its menu-bar icon is hidden.
     func consumeFirstLaunch(ofBuild build: String?) -> Bool {
         guard let build, !build.isEmpty, defaults.string(forKey: Keys.lastLaunchedBuild) != build else { return false }
         defaults.set(build, forKey: Keys.lastLaunchedBuild)
@@ -341,7 +334,6 @@ final class SettingsStore: ObservableObject {
     }
 }
 
-/// The part of `SMAppService` that the installer's login-item commands use, so tests can replace it.
 protocol LoginItemService {
     var status: SMAppService.Status { get }
     func register() throws
@@ -382,8 +374,6 @@ enum LegacyBackgroundService {
     }
 
     #if !DEBUG
-    /// Returns true when this process is the LaunchAgent's copy and its job still runs the old policy, so
-    /// `prepare` has to migrate it. Once the job runs the new policy, this clears the record of the attempt.
     static func needsMigration(defaults: UserDefaults = .standard) -> Bool {
         let environment = ProcessInfo.processInfo.environment
         guard Bundle.main.bundleIdentifier == "dev.baglayan.Acouplet",

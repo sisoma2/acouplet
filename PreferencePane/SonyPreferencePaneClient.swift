@@ -19,8 +19,6 @@ final class SonyPreferencePaneClient: ObservableObject {
     private var commandFailure: (request: SonyPreferencePaneRequest, reported: Bool)?
     private let paths = SonyPreferencePaneClient.socketPaths()
 
-    /// The app's sockets in the order the pane tries them: the App Store build's container, then the direct
-    /// build's Application Support folder (G11).
     nonisolated static func socketPaths(home: String = SonyPreferencePaneWire.userHome) -> [String] {
         [SonyPreferencePaneWire.socketPath(sandboxed: true, home: home),
          SonyPreferencePaneWire.socketPath(sandboxed: false, home: home)]

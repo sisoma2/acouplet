@@ -4,7 +4,6 @@ import XCTest
 @MainActor
 @available(macOS 27.0, *)
 final class SonyPreferencePaneTests: XCTestCase {
-    /// A socket of the test's own, so the tests never touch the installed app's socket.
     private let socketPath = FileManager.default.temporaryDirectory.path + "/pane-\(UUID().uuidString.prefix(8)).sock"
 
     func testSocketPathFollowsTheDistribution() {
@@ -221,7 +220,6 @@ final class SonyPreferencePaneTests: XCTestCase {
         let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller), allowsCommands: true, path: socketPath)
         try server.start()
         defer { server.stop(); controller.simulateControlLoss() }
-        // Manual is already active, so the curve goes out without a preceding selection.
         deliver([0x57, 0, 0xA0, 0], to: controller)
         let snapshot = await server.reply(to: .init(version: SonyPreferencePaneWire.version, id: UUID(), action: .snapshot))
         let equalizer = try XCTUnwrap(snapshot.snapshot?.devices.first?.equalizer)
