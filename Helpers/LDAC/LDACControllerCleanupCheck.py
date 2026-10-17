@@ -140,6 +140,8 @@ final class Session {
 
 @MainActor
 final class Controller: ObservableObject {
+    let localBluetoothAddress: () -> String? = { IOBluetoothHostController.default()?.addressAsString() }
+    func synchronizeMicrophoneHandoff() -> Bool { true }
     struct Helpers { var isAvailable = true }
     var helpers = Helpers()
     var driverState = LDACDriverInstaller.State.current
@@ -725,7 +727,7 @@ enum LDACControllerCleanupCheck {
         print("PASS actual finder admission: active finding and unconfirmed Stop block LDAC and manual installation; absent or idle finder allows admission")
     }
 }
-'''.replace("__METHODS__", "\n".join(method(name) for name in ["needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "openDriverInstaller", "setEnabled", "stop", "suspend", "resumeIfReady", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
+'''.replace("__METHODS__", "\n".join(method(name) for name in ["needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "openDriverInstaller", "setEnabled", "stop", "suspend", "resumeIfReady", "startWhenMicrophoneIsIdle", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
 
 with tempfile.TemporaryDirectory(prefix="acouplet-ldac-controller-cleanup-") as directory:
     directory = pathlib.Path(directory)

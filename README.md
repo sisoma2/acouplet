@@ -49,6 +49,18 @@ Administrator authorization is needed to install the plug-in in
 `/Library/Audio/Plug-Ins/HAL/`. The driver is only needed for LDAC;
 headphone controls and ordinary Bluetooth playback work without it.
 
+When an app starts using a microphone, Acouplet pauses LDAC, restores ordinary
+Bluetooth call audio and selects the headset microphone when it becomes
+available. In Zoom, choose **Same as System** for both Speaker and Microphone
+so it follows this automatic switch. LDAC resumes after microphone input has
+been idle for three seconds, provided the headphones are still selected.
+The headset uses its normal call codec during calls; LDAC has no microphone
+return channel. Apps with a specific microphone selected keep that selection.
+An app that keeps its microphone open also keeps LDAC paused.
+Detection requires an input the app can initially open, such as the Mac's
+built-in microphone. If no input is available while LDAC is on, turn LDAC off
+before joining the call.
+
 To remove the driver, stop LDAC, then choose "Remove LDAC Audio Driver…" in
 More Settings > General. Acouplet quits and opens macOS Installer for removal.
 Restart the Mac afterward.

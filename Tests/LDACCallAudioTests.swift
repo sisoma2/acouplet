@@ -1,0 +1,332 @@
+import CoreAudio
+import XCTest
+@testable import Acouplet
+
+#if !ACOUPLET_PUBLIC_APIS_ONLY
+@MainActor
+final class LDACCallAudioTests: XCTestCase {
+    private let address = "02:53:4F:4E:59:01"
+
+    func testAcoupletCaptureHelpersDoNotTriggerCallHandoff() {
+        let otherPID = ProcessInfo.processInfo.processIdentifier + 1
+        for bundleID in ["dev.baglayan.Acouplet", "dev.baglayan.Acouplet.debug", "dev.baglayan.Acouplet.ldac-audio"] {
+            XCTAssertTrue(LDACCallHardware.isAcouplet(pid: otherPID, bundleID: bundleID))
+        }
+        XCTAssertTrue(LDACCallHardware.isAcouplet(pid: ProcessInfo.processInfo.processIdentifier, bundleID: nil))
+        XCTAssertFalse(LDACCallHardware.isAcouplet(pid: otherPID, bundleID: "us.zoom.xos"))
+        XCTAssertFalse(LDACCallHardware.isAcouplet(pid: otherPID, bundleID: nil))
+    }
+
+    func testOutputTapsDoNotTriggerCallsButAggregatedMicrophonesDo() throws {
+        let devices: [AudioObjectID: [AudioObjectID]] = [1: [], 2: [3, 1], 3: [7], 4: [4], 5: [1, 6]]
+        let channels: [AudioObjectID: UInt32] = [1: 2, 3: 0, 6: 0, 7: 1]
+        func usesMicrophone(_ device: AudioObjectID) throws -> Bool {
+            try LDACCallHardware.containsMicrophone([device], channels: { channels[$0] ?? 0 }, subdevices: { devices[$0] })
+        }
+        XCTAssertFalse(try usesMicrophone(1))
+        XCTAssertTrue(try usesMicrophone(2))
+        XCTAssertFalse(try usesMicrophone(4))
+        XCTAssertFalse(try usesMicrophone(5))
+    }
+
+    func testMicrophoneReleaseMustStayIdleForThreeSeconds() {
+        let hardware = Hardware()
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        XCTAssertEqual(audio.activity, .idle)
+        hardware.active = true
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .active)
+        hardware.active = false
+        hardware.time = 2.99
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .active)
+        hardware.active = true
+        audio.refresh()
+        hardware.active = false
+        hardware.time = 5
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .active)
+        hardware.time = 8
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .idle)
+    }
+
+    func testRoutingWaitsForNativeDevicesAndRestoresBothDefaults() {
+        let hardware = Hardware()
+        hardware.active = true
+        hardware.available = false
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        XCTAssertTrue(hardware.selections.isEmpty)
+        hardware.available = true
+        audio.refresh()
+        XCTAssertEqual(hardware.input, "headset-input")
+        XCTAssertEqual(hardware.output, "headset-output")
+        XCTAssertTrue(audio.finishCall())
+        XCTAssertEqual(hardware.input, "built-in-input")
+        XCTAssertEqual(hardware.output, "built-in-output")
+    }
+
+    func testManualRouteChangesDuringCallAreKept() {
+        let hardware = Hardware()
+        hardware.active = true
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        hardware.input = "usb-input"
+        hardware.output = "usb-output"
+        audio.refresh()
+        XCTAssertEqual(hardware.input, "usb-input")
+        XCTAssertEqual(hardware.output, "usb-output")
+        XCTAssertTrue(audio.finishCall())
+        XCTAssertEqual(hardware.input, "usb-input")
+        XCTAssertEqual(hardware.output, "usb-output")
+    }
+
+    func testExistingHeadsetDefaultsAreNotChangedOrRestored() {
+        let hardware = Hardware()
+        hardware.input = "headset-input"
+        hardware.output = "headset-output"
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        XCTAssertTrue(audio.finishCall())
+        XCTAssertTrue(hardware.selections.isEmpty)
+    }
+
+    func testMonitoringFailuresDoNotReportIdle() {
+        let hardware = Hardware()
+        hardware.active = true
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        hardware.unreadable = true
+        hardware.active = false
+        hardware.time = 10
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .unknown)
+        XCTAssertNotNil(audio.issue)
+        hardware.unreadable = false
+        audio.refresh()
+        hardware.time = 14
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .idle)
+        XCTAssertNil(audio.issue)
+    }
+
+    func testRoutingFailuresDoNotPreventDetectingTheEndOfACall() {
+        let hardware = Hardware()
+        hardware.active = true
+        hardware.rejectWrites = true
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .active)
+        hardware.active = false
+        audio.refresh()
+        hardware.time = 4
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .idle)
+        XCTAssertTrue(audio.finishCall())
+    }
+
+    func testRestorationFailureWaitsForRecoveryOrUserSelection() {
+        let hardware = Hardware()
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        hardware.rejectWrites = true
+        XCTAssertFalse(audio.finishCall())
+        XCTAssertNotNil(audio.issue)
+        hardware.input = "usb-input"
+        hardware.output = "usb-output"
+        XCTAssertTrue(audio.finishCall())
+        XCTAssertEqual(hardware.input, "usb-input")
+        XCTAssertEqual(hardware.output, "usb-output")
+    }
+
+    func testDisablingLDACDuringCallKeepsCallAudioAndStopsMonitoring() {
+        let hardware = Hardware()
+        hardware.active = true
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        audio.monitor(address: nil)
+        hardware.available = false
+        hardware.active = false
+        hardware.time = 20
+        audio.refresh()
+        XCTAssertEqual(hardware.input, "headset-input")
+        XCTAssertEqual(hardware.output, "headset-output")
+        XCTAssertEqual(audio.activity, .unknown)
+    }
+
+    func testControllerSuspendsForMicrophoneAndResumesWithoutUsingRecoveryRetry() async throws {
+        let hardware = Hardware()
+        let audio = hardware.audio()
+        let (controller, headphones) = try controller(audio: audio)
+        defer { controller.stop(); headphones.simulateControlLoss() }
+        hardware.active = true
+        audio.refresh()
+        await drainTasks()
+        XCTAssertEqual(controller.state, .waitingForDevice)
+        XCTAssertTrue(controller.isSuspendedForMicrophone)
+        XCTAssertFalse(controller.isSessionRunning)
+        XCTAssertEqual(controller.simulatedRequestedAddress, address)
+        XCTAssertEqual(controller.simulatedRecoveryAttempt, 0)
+        XCTAssertTrue(controller.simulatedRestoresAudioOnStop)
+        XCTAssertEqual(hardware.input, "headset-input")
+        hardware.active = false
+        hardware.time = 2
+        audio.refresh()
+        await drainTasks()
+        XCTAssertTrue(controller.simulatedStarts?.isEmpty == true)
+        hardware.time = 6
+        audio.refresh()
+        await drainTasks()
+        XCTAssertFalse(controller.isSuspendedForMicrophone)
+        XCTAssertEqual(controller.simulatedStarts, [address])
+        XCTAssertEqual(hardware.input, "built-in-input")
+        XCTAssertEqual(hardware.output, "built-in-output")
+    }
+
+    func testExplicitStopDuringCallCannotResumeLDAC() async throws {
+        let hardware = Hardware()
+        let audio = hardware.audio()
+        let (controller, headphones) = try controller(audio: audio)
+        defer { headphones.simulateControlLoss() }
+        hardware.active = true
+        audio.refresh()
+        await drainTasks()
+        controller.stop()
+        hardware.active = false
+        hardware.time = 10
+        audio.refresh()
+        await drainTasks()
+        XCTAssertEqual(controller.state, .off)
+        XCTAssertNil(controller.simulatedRequestedAddress)
+        XCTAssertFalse(controller.isSuspendedForMicrophone)
+        XCTAssertTrue(controller.simulatedStarts?.isEmpty == true)
+        XCTAssertEqual(hardware.input, "headset-input")
+    }
+
+    func testEnablingLDACDuringACallWaitsWithoutStartingPlayback() async throws {
+        let hardware = Hardware()
+        let audio = hardware.audio()
+        let (controller, headphones) = try controller(audio: audio)
+        defer { controller.stop(); headphones.simulateControlLoss() }
+        controller.stop()
+        await drainTasks()
+        hardware.active = true
+        controller.setEnabled(true, forAddress: address)
+        await drainTasks()
+        XCTAssertTrue(controller.isSuspendedForMicrophone)
+        XCTAssertEqual(controller.state, .waitingForDevice)
+        XCTAssertFalse(controller.isSessionRunning)
+        XCTAssertTrue(controller.simulatedStarts?.isEmpty == true)
+        XCTAssertEqual(hardware.input, "headset-input")
+    }
+
+    func testSelectingAnotherOutputDuringACallBlocksAutomaticResume() async throws {
+        let hardware = Hardware()
+        let audio = hardware.audio()
+        let route = MacAudioRouteObserver(startAutomatically: false)
+        let (controller, headphones) = try controller(audio: audio, route: route)
+        defer { controller.stop(); headphones.simulateControlLoss() }
+        hardware.active = true
+        audio.refresh()
+        await drainTasks()
+        hardware.output = "usb-output"
+        route.simulateRoute(MacAudioRoute(deviceID: 2, name: nil, uid: "usb-output",
+                                         transport: MacAudioTransport(rawValue: kAudioDeviceTransportTypeUSB),
+                                         outputChannels: 2, nominalSampleRate: 48000))
+        hardware.active = false
+        audio.refresh()
+        hardware.time = 4
+        audio.refresh()
+        await drainTasks()
+        XCTAssertFalse(controller.isSuspendedForMicrophone)
+        XCTAssertEqual(controller.state, .waitingForDevice)
+        XCTAssertTrue(controller.simulatedStarts?.isEmpty == true)
+        XCTAssertEqual(hardware.output, "usb-output")
+    }
+
+    func testUnknownMicrophoneStateBlocksControllerResume() async throws {
+        let hardware = Hardware()
+        let audio = hardware.audio()
+        let (controller, headphones) = try controller(audio: audio)
+        defer { controller.stop(); headphones.simulateControlLoss() }
+        hardware.active = true
+        audio.refresh()
+        await drainTasks()
+        hardware.active = false
+        hardware.time = 10
+        hardware.unreadable = true
+        audio.refresh()
+        await drainTasks()
+        XCTAssertTrue(controller.isSuspendedForMicrophone)
+        XCTAssertTrue(controller.simulatedStarts?.isEmpty == true)
+        hardware.unreadable = false
+        audio.refresh()
+        hardware.time = 14
+        audio.refresh()
+        await drainTasks()
+        XCTAssertEqual(controller.simulatedStarts, [address])
+    }
+
+    private func drainTasks() async {
+        for _ in 0..<40 { await Task.yield() }
+    }
+
+    private func controller(audio: LDACCallAudio, route: MacAudioRouteObserver? = nil) throws -> (LDACController, SonyHeadphonesController) {
+        let coordinator = SonyDeviceCoordinator(fallbackController: SonyHeadphonesController(startAutomatically: false, simulated: true)) { device in
+            let controller = SonyHeadphonesController(startAutomatically: false, simulatedReady: true,
+                pinnedAddress: device.address, advertisedName: device.name)
+            controller.simulateDeviceConnection(named: device.name, simulatedAddress: device.address, galleryModel: .wfXM5)
+            return controller
+        }
+        coordinator.reconcileConnectedDevices([try XCTUnwrap(SonyConnectedDevice(address: address, name: "WF-1000XM5", model: .wfXM5))])
+        let headphones = try XCTUnwrap(coordinator.controller(for: address))
+        let route = route ?? MacAudioRouteObserver(startAutomatically: false)
+        route.simulateRoute(MacAudioRoute(deviceID: 1, name: nil, uid: "built-in-output",
+                                         transport: MacAudioTransport(rawValue: kAudioDeviceTransportTypeBuiltIn),
+                                         outputChannels: 2, nominalSampleRate: 48000))
+        let controller = LDACController(devices: coordinator, audioRoute: route, inspectDriver: { _ in .current }, callAudio: audio,
+                                        localBluetoothAddress: { "02:00:00:00:00:01" })
+        controller.simulateHelpers()
+        controller.simulateRecoverySession(headphones)
+        return (controller, headphones)
+    }
+
+    @MainActor
+    private final class Hardware {
+        var active = false
+        var available = true
+        var unreadable = false
+        var rejectWrites = false
+        var input = "built-in-input"
+        var output = "built-in-output"
+        var time: TimeInterval = 0
+        var selections: [String] = []
+
+        func audio() -> LDACCallAudio {
+            LDACCallAudio(access: .init(microphoneIsActive: {
+                if self.unreadable { throw Failure() }
+                return self.active
+            }, defaultInputUID: { self.input }, headsetInputUID: { _ in self.available ? "headset-input" : nil }, selectInput: {
+                if self.rejectWrites { throw Failure() }
+                self.input = $0
+                self.selections.append($0)
+            }, defaultOutputUID: { self.output }, headsetOutputUID: { _ in self.available ? "headset-output" : nil }, selectOutput: {
+                if self.rejectWrites { throw Failure() }
+                self.output = $0
+                self.selections.append($0)
+            }), pollsAutomatically: false, now: { self.time })
+        }
+
+        struct Failure: Error {}
+    }
+}
+#endif

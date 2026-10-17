@@ -17044,6 +17044,91 @@
           }
         }
       }
+    },
+    "Headset call audio · LDAC paused": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Headset call audio · LDAC paused"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kulaklık arama sesi · LDAC duraklatıldı"
+          }
+        }
+      }
+    },
+    "Microphone activity could not be checked. LDAC will wait until audio monitoring is available.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone activity could not be checked. LDAC will wait until audio monitoring is available."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon etkinliği kontrol edilemedi. LDAC, ses izleme kullanılabilir olana kadar bekleyecek."
+          }
+        }
+      }
+    },
+    "Headset call audio could not be selected. Select the headset in Sound settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Headset call audio could not be selected. Select the headset in Sound settings."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kulaklık arama sesi seçilemedi. Ses ayarlarından kulaklığı seçin."
+          }
+        }
+      }
+    },
+    "The previous audio devices could not be restored. Select your audio devices in Sound settings to resume LDAC.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The previous audio devices could not be restored. Select your audio devices in Sound settings to resume LDAC."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki ses aygıtları geri yüklenemedi. LDAC oynatımına devam etmek için Ses ayarlarından ses aygıtlarınızı seçin."
+          }
+        }
+      }
+    },
+    "In calling apps, choose Same as System for the microphone and speaker.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In calling apps, choose Same as System for the microphone and speaker."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arama uygulamalarında mikrofon ve hoparlör için Sistemle Aynı seçeneğini seçin."
+          }
+        }
+      }
     }
   },
   "version": "1.1"

@@ -271,6 +271,8 @@ final class LDACNativeSession {
 
 @MainActor
 final class Controller: ObservableObject {
+    let localBluetoothAddress: () -> String? = { IOBluetoothHostController.default()?.addressAsString() }
+    func synchronizeMicrophoneHandoff() -> Bool { true }
     var state = LDACState.off
     var targetAddress: String?
     var isSessionRunning = false
@@ -814,7 +816,7 @@ names = ["needsStopBeforeTermination", "deviceUnavailableReason", "refreshDriver
          "hasOtherMusicSource", "bindingIsCurrent", "bindingCheck", "musicControlStatus", "waitForControls", "controlsChanged",
          "holdBinding", "recoverBinding", "stopForChange", "sendPendingVolume", "setOutputGain", "fail", "beginRecovery",
          "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry", "stop", "stopSession",
-         "suspend", "resumeIfReady", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode",
+         "suspend", "resumeIfReady", "startWhenMicrophoneIsIdle", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode",
          "restoreConnectionPreference", "finish", "completeStop"]
 fixture = fixture.replace("precondition(", "check(")
 fixture = fixture.replace("__VOLUME__", volume).replace("__METHODS__", "\n".join(member(name) for name in names))
