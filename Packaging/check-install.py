@@ -38,6 +38,7 @@ elif name == 'codesign':
             if expected_id and expected_id[1] != plistlib.loads((target / 'Contents/Info.plist').read_bytes())['CFBundleIdentifier']: sys.exit(21)
     if mode == 'legacy-bad-signature' and 'XM5 Control Native.app' in args[-1]: sys.exit(21)
     if mode == 'installed-bad-signature' and '/Applications/Acouplet.app' in args[-1]: sys.exit(21)
+    if mode == 'source-bad-signature' and '/package/Acouplet.app' in args[-1]: sys.exit(21)
     if mode == 'installed-validation-failure' and '/Applications/Acouplet.app' in args[-1] and (Path(args[-1]) / 'version').read_text() == 'new': sys.exit(21)
     if mode == 'pane-bad-signature' and args[-1].endswith('.prefPane'): sys.exit(21)
     if mode == 'pane-stage-failure' and '.prefPane.installing-' in args[-1]: sys.exit(21)
@@ -271,6 +272,51 @@ def run(root, mode, name='Install.command', arguments=()):
            'ACOUPLET_INSTALL_CHECK_ROOT': str(root), 'ACOUPLET_INSTALL_CHECK_MODE': mode}
     return subprocess.run(['/bin/zsh', str(command), *arguments], env=env, text=True, capture_output=True, timeout=30)
 
+
+for scenario, mode, arguments, successful in (
+    ('explicit-team-migration', 'success', ('--require-stopped', '--replace-team', 'OTHER12345'), True),
+    ('team-migration-without-opt-in', 'success', (), False),
+    ('team-migration-wrong-pin', 'success', ('--replace-team', 'WRONG12345'), False),
+    ('team-migration-invalid-pin', 'success', ('--replace-team', 'invalid'), False),
+    ('team-migration-missing-pin', 'success', ('--replace-team',), False),
+    ('team-migration-bad-installed-signature', 'installed-bad-signature', ('--replace-team', 'OTHER12345'), False),
+    ('team-migration-bad-source-signature', 'source-bad-signature', ('--replace-team', 'OTHER12345'), False),
+    ('team-migration-rollback', 'installed-validation-failure', ('--replace-team', 'OTHER12345'), False),
+):
+    with tempfile.TemporaryDirectory(prefix='acouplet-team-migration-check-') as directory:
+        root = Path(directory)
+        configs, original_state = fixture(root, mode)
+        applications = root / 'Applications'
+        for app in applications.glob('*.app'):
+            if (app / 'version').exists(): (app / 'team').write_text('OTHER12345')
+        pane_info = {'CFBundleIdentifier': 'dev.baglayan.Acouplet.preference-pane.001122334455',
+                     'SonyDeviceAddress': '00:11:22:33:44:55', 'NSPrincipalClass': 'SonyPreferencePane_001122334455'}
+        for parent, version in ((root / 'package/PreferencePanes', 'new'), (root / 'PreferencePanes', 'old')):
+            pane = parent / 'Sony-001122334455.prefPane'
+            (pane / 'Contents').mkdir(parents=True)
+            (pane / 'Contents/Info.plist').write_bytes(plistlib.dumps(pane_info))
+            (pane / 'version').write_text(version)
+            if version == 'old': (pane / 'team').write_text('OTHER12345')
+        result = run(root, mode, arguments=arguments)
+        output = result.stdout + result.stderr
+        assert (result.returncode == 0) == successful, (scenario, output)
+        native = applications / 'Acouplet.app'
+        pane = root / 'PreferencePanes/Sony-001122334455.prefPane'
+        assert (native / 'version').read_text() == ('new' if successful else 'old'), (scenario, output)
+        assert (pane / 'version').read_text() == ('new' if successful else 'old'), (scenario, output)
+        commands = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines()]
+        if successful:
+            validations = [command for command in commands if command[:2] == ['codesign', '--verify']]
+            assert any('subject.OU] = "OTHER12345"' in ' '.join(command) and command[-1] == str(native) for command in validations)
+            assert any('subject.OU] = "ABCDE12345"' in ' '.join(command) and command[-1] == str(native) for command in validations)
+        else:
+            assert json.loads((root / 'state.json').read_text()) == original_state, (scenario, output)
+            assert (root / 'LaunchAgents' / (native_label + '.plist')).read_bytes() == configs[native_label]
+            if mode != 'installed-validation-failure':
+                assert not any(command[0] in ('mv', 'osascript') for command in commands), (scenario, commands)
+        assert not list(applications.glob('.*installing-*.app'))
+        assert not [path for path in applications.glob('.*previous-*.app') if 'interrupted' not in path.name]
+        print(scenario + ': passed', flush=True)
 
 scenarios = ('helper-failure', 'success', 'matching-plist', 'matching-plist-failure', 'previous-plist', 'fresh-install', 'inactive-update', 'staging-failure',
              'bootstrap-failure', 'stop-failure', 'restore-app-failure', 'restore-plist-failure',

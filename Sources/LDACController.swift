@@ -50,6 +50,7 @@ final class LDACController: ObservableObject {
     private var availabilityObservations = Set<AnyCancellable>()
     private let audioRoute: MacAudioRouteObserver?
     private var resumeOutputUID: String?
+    private var lastResumeBlockers: String?
     private var suspensionRequested = false
     private var deferredConnectionModes: [String: UUID] = [:]
     private var preferenceRestoreTasks: [String: Task<Void, Never>] = [:]
@@ -201,8 +202,8 @@ final class LDACController: ObservableObject {
         if driverState != state { driverState = state }
     }
 
-    func installDriver(forAddress address: String) {
-        guard deviceUnavailableReason(forAddress: address) == nil, !isSessionRunning, !isOpeningDriverInstaller else { return }
+    func installDriver() {
+        guard !isSessionRunning, !isOpeningDriverInstaller else { return }
         LDACDriverInstaller.invalidateCache()
         refreshDriverState()
         guard driverState == .missing || driverState == .outdated else { return }
@@ -281,7 +282,7 @@ final class LDACController: ObservableObject {
                 guard driverState == .current else {
                     state = .off
                     targetAddress = nil
-                    installDriver(forAddress: address)
+                    installDriver()
                     return
                 }
             }
@@ -457,9 +458,9 @@ final class LDACController: ObservableObject {
               devices?.selectedAddress == address, headphones.isDeviceConnected,
               support(forAddress: address).allowsStart(requested: true),
               deviceUnavailableReason(forAddress: address) == nil, !headphones.ldacRequiresMultipointOff,
-              let resumeOutputUID, audioRoute?.route?.uid == resumeOutputUID,
+              canResumeOnCurrentOutput(forAddress: address),
               headphones.hasCurrentMusicSourceContext(for: IOBluetoothHostController.default()?.addressAsString()) else {
-            if fromRetryTimer { recordRetryBlocked() }
+            if fromRetryTimer || state == .waitingForDevice && requestedAddress != nil { recordRetryBlocked() }
             return
         }
         refreshDriverState()
@@ -471,6 +472,13 @@ final class LDACController: ObservableObject {
             return
         }
         start(address)
+    }
+
+    private func canResumeOnCurrentOutput(forAddress address: String) -> Bool {
+        guard let resumeOutputUID, let route = audioRoute?.route, let uid = route.uid else { return false }
+        if uid == resumeOutputUID { return true }
+        guard let transport = route.transport?.rawValue else { return false }
+        return LDACNativeOutput.canTransferControls(uid: uid, transport: transport, address: address)
     }
 
     /// Names the `resumeIfReady` clauses that currently fail. Clause names only, never addresses.
@@ -493,14 +501,19 @@ final class LDACController: ObservableObject {
             if headphones?.ldacRequiresMultipointOff == true { failed.append("multipointOn") }
         }
         if resumeOutputUID == nil { failed.append("noResumeOutput") }
-        else if audioRoute?.route?.uid != resumeOutputUID { failed.append("macOutputChanged") }
+        else if let address, !canResumeOnCurrentOutput(forAddress: address) { failed.append("macOutputChanged") }
         if headphones?.hasCurrentMusicSourceContext(for: IOBluetoothHostController.default()?.addressAsString()) != true {
             failed.append("noMusicContext")
         }
-        recordRecovery("retry-blocked", reason: "failed=" + failed.joined(separator: ","))
+        let reason = "failed=" + failed.joined(separator: ",")
+        if lastResumeBlockers != reason {
+            lastResumeBlockers = reason
+            recordRecovery("retry-blocked", reason: reason)
+        }
     }
 
     private func start(_ address: String) {
+        lastResumeBlockers = nil
         sessionID = UUID()
         state = .requested
         targetAddress = address

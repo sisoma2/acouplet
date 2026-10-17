@@ -5,13 +5,24 @@ package_dir="${0:A:h}"
 # --require-stopped is the local-build mode: it quits the running app and service like any update,
 # and also verifies the package against its Local Build Receipt and writes an install receipt.
 require_stopped=false
-if (( $# )); then
-    if (( $# != 1 )) || [[ "$1" != --require-stopped ]]; then
-        print -u2 "Usage: Install.command [--require-stopped]"
-        exit 2
-    fi
-    require_stopped=true
-fi
+replace_team=""
+while (( $# )); do
+    case "$1" in
+        --require-stopped) require_stopped=true; shift ;;
+        --replace-team)
+            if (( $# < 2 )) || [[ ! "$2" =~ '^[A-Z0-9]{10}$' || -n "$replace_team" ]]; then
+                print -u2 "--replace-team requires the previous app's ten-character signing team."
+                exit 2
+            fi
+            replace_team="$2"
+            shift 2
+            ;;
+        *)
+            print -u2 "Usage: Install.command [--require-stopped] [--replace-team PREVIOUS_TEAM_ID]"
+            exit 2
+            ;;
+    esac
+done
 local_receipt="$package_dir/Local Build Receipt.txt"
 verify_local_update=false
 if [[ "$require_stopped" == true && -f "$local_receipt" ]]; then verify_local_update=true; fi
@@ -100,8 +111,22 @@ if [[ ! "$app_team" =~ '^[A-Z0-9]{10}$' ]]; then
     print -u2 "This package requires an Apple-signed application; nothing was replaced."
     exit 1
 fi
+verify_existing_bundle() {
+    local bundle="$1" identifier="${2:-}" team="$app_team" requirement
+    if [[ -n "$replace_team" ]] &&
+       [[ "$(/usr/bin/codesign --display --verbose=2 "$bundle" 2>&1 | /usr/bin/sed -n 's/^TeamIdentifier=//p')" == "$replace_team" ]]; then
+        team="$replace_team"
+    fi
+    requirement="anchor apple generic and certificate leaf[subject.OU] = \"$team\""
+    if [[ -n "$identifier" ]]; then requirement+=" and identifier \"$identifier\""; fi
+    if ! /usr/bin/codesign --verify --deep --strict --test-requirement="=$requirement" "$bundle"; then
+        print -u2 -r -- "The existing bundle's signature or signing team does not match: $bundle"
+        print -u2 "For an intentional signing-team change, pass --replace-team PREVIOUS_TEAM_ID after checking the previous app's signing identity."
+        return 1
+    fi
+}
 if [[ -d "$installed_app" ]]; then
-    /usr/bin/codesign --verify --deep --strict --test-requirement="=anchor apple generic and identifier \"dev.baglayan.Acouplet\" and certificate leaf[subject.OU] = \"$app_team\"" "$installed_app"
+    verify_existing_bundle "$installed_app" dev.baglayan.Acouplet
 fi
 
 pane_directory="$HOME/Library/PreferencePanes"
@@ -141,7 +166,7 @@ if [[ -e "$package_dir/PreferencePanes" ]]; then
                 print -u2 "An unexpected preference pane exists at $target; nothing was replaced."
                 exit 1
             fi
-            /usr/bin/codesign --verify --deep --strict --test-requirement="=anchor apple generic and identifier \"$target_id\" and certificate leaf[subject.OU] = \"$pane_team\"" "$target"
+            verify_existing_bundle "$target" "$target_id"
         fi
         for recovery in "$pane_directory/.${pane:t}.installing-$$" "$pane_directory/.${pane:t}.previous-$$"; do
             if [[ -e "$recovery" || -L "$recovery" ]]; then
@@ -195,7 +220,7 @@ for index in {1..2}; do
             print -u2 "An unexpected application exists at $legacy_app; nothing was replaced."
             exit 1
         fi
-        /usr/bin/codesign --verify --deep --strict --test-requirement="=anchor apple generic and identifier \"$legacy_identifiers[$index]\" and certificate leaf[subject.OU] = \"$app_team\"" "$legacy_app"
+        verify_existing_bundle "$legacy_app" "$legacy_identifiers[$index]"
         legacy_controls="$legacy_app/Contents/PlugIns/XM5 Controls.appex"
         if [[ -e "$legacy_controls" || -L "$legacy_controls" ]] &&
            [[ -L "$legacy_controls" || "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$legacy_controls/Contents/Info.plist")" != "$legacy_identifiers[$index].controls" ]]; then
@@ -507,7 +532,7 @@ install_preference_panes() {
         local prototype="$pane_directory/Sony Headphones Compatibility.prefPane"
         if [[ -d "$prototype" && ! -L "$prototype" ]] &&
            [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$prototype/Contents/Info.plist")" == (dev.baglayan.Acouplet.research.preference-pane|local.xm5control.research.preference-pane) ]]; then
-            /usr/bin/codesign --verify --deep --strict --test-requirement="=anchor apple generic and certificate leaf[subject.OU] = \"$pane_team\"" "$prototype" || return 1
+            verify_existing_bundle "$prototype" || return 1
             rm -rf "$prototype" || return 1
         fi
         print "Installed ${#source_panes} device preference pane(s). Reopen System Settings to refresh its sidebar."

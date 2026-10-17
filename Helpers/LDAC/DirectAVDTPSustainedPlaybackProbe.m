@@ -17,10 +17,80 @@
 #endif
 
 @interface CBClassicPeer : CBPeer
+@property(readonly) id manager;
 @property(copy) void (^connectL2CAPCallback)(CBL2CAPChannel *, NSInteger);
 @property(copy) void (^disconnectL2CAPCallback)(CBL2CAPChannel *, NSInteger);
 - (void)openL2CAPChannel:(UInt16)psm;
 - (void)closeL2CAPChannel:(UInt16)psm;
+@end
+
+@interface CBClassicManager : CBManager
+@property(copy) void (^connectionStatusHandler)(CBClassicPeer *, NSInteger);
+@end
+
+@interface IOBluetoothCoreBluetoothCoordinator : NSObject
++ (instancetype)sharedInstance;
+@property(readonly) dispatch_queue_t coordinatorQueue;
+@end
+
+@interface DirectSignalingCallbacks : NSObject
+@property CBClassicPeer *peer;
+@property CBClassicManager *manager;
+@property dispatch_queue_t queue;
+@property(copy) void (^opened)(CBL2CAPChannel *, NSInteger);
+@property(copy) void (^closed)(CBL2CAPChannel *, NSInteger);
+@property(copy) void (^previousOpened)(CBL2CAPChannel *, NSInteger);
+@property(copy) void (^previousClosed)(CBL2CAPChannel *, NSInteger);
+@property(copy) void (^previousConnection)(CBClassicPeer *, NSInteger);
+@property(copy) void (^connection)(CBClassicPeer *, NSInteger);
+- (instancetype)initWithPeer:(CBClassicPeer *)peer
+                     opened:(void (^)(CBL2CAPChannel *, NSInteger))opened
+                     closed:(void (^)(CBL2CAPChannel *, NSInteger))closed;
+- (void)invalidate;
+@end
+
+@implementation DirectSignalingCallbacks
+- (instancetype)initWithPeer:(CBClassicPeer *)peer
+                     opened:(void (^)(CBL2CAPChannel *, NSInteger))opened
+                     closed:(void (^)(CBL2CAPChannel *, NSInteger))closed {
+    self = [super init];
+    if (!self) return nil;
+    self.peer = peer;
+    self.manager = peer.manager;
+    self.queue = [IOBluetoothCoreBluetoothCoordinator sharedInstance].coordinatorQueue;
+    if (!self.manager || !self.queue || ![self.manager respondsToSelector:@selector(connectionStatusHandler)]) return nil;
+    self.opened = opened;
+    self.closed = closed;
+    dispatch_sync(self.queue, ^{
+        self.previousOpened = peer.connectL2CAPCallback;
+        self.previousClosed = peer.disconnectL2CAPCallback;
+        self.previousConnection = self.manager.connectionStatusHandler;
+        __weak DirectSignalingCallbacks *weakSelf = self;
+        self.connection = ^(CBClassicPeer *value, NSInteger error) {
+            DirectSignalingCallbacks *owner = weakSelf;
+            if (!owner) return;
+            if (owner.previousConnection) owner.previousConnection(value, error);
+            if (value == owner.peer) {
+                value.connectL2CAPCallback = owner.opened;
+                value.disconnectL2CAPCallback = owner.closed;
+            }
+        };
+        self.manager.connectionStatusHandler = self.connection;
+        peer.connectL2CAPCallback = self.opened;
+        peer.disconnectL2CAPCallback = self.closed;
+    });
+    return self;
+}
+- (void)invalidate {
+    dispatch_sync(self.queue, ^{
+        if (self.manager.connectionStatusHandler == self.connection)
+            self.manager.connectionStatusHandler = self.previousConnection;
+        if (self.peer.connectL2CAPCallback == self.opened)
+            self.peer.connectL2CAPCallback = self.previousOpened;
+        if (self.peer.disconnectL2CAPCallback == self.closed)
+            self.peer.disconnectL2CAPCallback = self.previousClosed;
+    });
+}
 @end
 
 @interface IOBluetoothDevice (ClassicPeerAccess)
@@ -95,6 +165,9 @@ static void PrintChannel(const char *event, CBL2CAPChannel *channel) {
 @property BOOL continuous;
 @property BOOL stopRequested;
 @property BOOL stdinEnded;
+@property BOOL connectionDone;
+@property IOReturn connectionStatus;
+@property(copy) NSString *connectionAddress;
 @property BOOL protocolCleanup;
 @property BOOL inputEnded;
 @property BOOL configurationSent;
@@ -112,6 +185,19 @@ static void PrintChannel(const char *event, CBL2CAPChannel *channel) {
 @end
 
 @implementation DirectPlaybackProbe
+- (void)connectionComplete:(IOBluetoothDevice *)device status:(IOReturn)status {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (![device.addressString isEqualToString:self.connectionAddress]) {
+            self.failed = YES;
+            return;
+        }
+        if (!self.connectionDone) {
+            self.connectionStatus = status;
+            self.connectionDone = YES;
+        }
+        printf("SIGNALING_REGISTRATION status=0x%08X connected=%d\n", (unsigned int)status, SonyClassicIsConnected(device));
+    });
+}
 - (void)pollInput {
     if (self.closed || self.failed || !self.input) return;
     while (self.input.hasBytesAvailable) {
@@ -484,6 +570,52 @@ static BOOL LDACSelection(NSData *reply, uint32_t sampleRate, BOOL *delayReporti
     return ldac;
 }
 
+static BOOL AwaitConnection(DirectPlaybackProbe *probe, IOBluetoothDevice *device, double deadline) {
+    CBClassicManager *manager = device.classicPeer.manager;
+    while (manager.state != CBManagerStatePoweredOn && !probe.stopRequested && !probe.failed && MonotonicTime() < deadline) {
+        NSString *control = ReadLine(probe, MonotonicTime() + 0.001, NO, 0.001);
+        if (control && ![control isEqualToString:@"stop"]) probe.failed = YES;
+    }
+    if (manager.state != CBManagerStatePoweredOn || probe.stopRequested || probe.failed) return NO;
+    if (SonyClassicIsConnected(device)) {
+        printf("SIGNALING_WAIT_ENDED reason=already-connected\n");
+        return NO;
+    }
+    printf("SIGNALING_ARMED waitingForACL=1\n");
+    BOOL aclConfirmed = NO;
+    BOOL registrationIssued = NO;
+    while (!probe.stopRequested && !probe.failed && MonotonicTime() < deadline) {
+        NSString *control = ReadLine(probe, MonotonicTime() + 0.001, NO, 0.001);
+        if (control && ![control isEqualToString:@"stop"] && ![control isEqualToString:@"acl-connected"]) probe.failed = YES;
+        if (probe.stopRequested || probe.failed) break;
+        if ([control isEqualToString:@"acl-connected"]) {
+            if (aclConfirmed) { probe.failed = YES; break; }
+            aclConfirmed = YES;
+            printf("SIGNALING_ACL_CONFIRMED\n");
+            probe.connectionAddress = device.addressString;
+            IOReturn status = [device openConnection:probe];
+            printf("SIGNALING_REGISTER_RETURN status=0x%08X\n", (unsigned int)status);
+            if (status != kIOReturnSuccess) { probe.failed = YES; break; }
+            registrationIssued = YES;
+        }
+        if (probe.connectionDone && probe.connectionStatus != kIOReturnSuccess) { probe.failed = YES; break; }
+        if (aclConfirmed && probe.connectionDone && SonyClassicIsConnected(device)) {
+            printf("SIGNALING_PEER_READY connected=1\n");
+            return YES;
+        }
+    }
+    if (registrationIssued && !probe.connectionDone) {
+        double settleDeadline = MonotonicTime() + 5;
+        while (!probe.connectionDone && MonotonicTime() < settleDeadline) RunLoopFor(0.001);
+        if (!probe.connectionDone) {
+            printf("OPEN_CANCELLATION_UNCONFIRMED registration=1\n");
+            probe.failed = YES;
+        }
+    }
+    printf("SIGNALING_WAIT_ENDED stopped=%d failed=%d\n", probe.stopRequested, probe.failed);
+    return NO;
+}
+
 static BOOL PlaybackSequence(DirectPlaybackProbe *probe) {
     uint8_t transaction = 1;
     BOOL completed = NO;
@@ -762,6 +894,7 @@ int main(int argc, const char *argv[]) {
         BOOL addressSeen = NO;
         BOOL rateSeen = NO, qualitySeen = NO;
         BOOL continuous = NO;
+        BOOL waitForConnection = NO;
 #if ACOUPLET_LDAC_PROBE_ONLY
         BOOL argumentsValid = capabilities || playback || discover;
         int firstOption = capabilities || playback ? 3 : 2;
@@ -776,6 +909,8 @@ int main(int argc, const char *argv[]) {
                 argumentsValid = address != nil;
             } else if (!strcmp(argv[index], "--continuous") && playback && !continuous) {
                 continuous = YES;
+            } else if (!strcmp(argv[index], "--wait-for-connection") && playback && !waitForConnection) {
+                waitForConnection = YES;
             } else if (!strcmp(argv[index], "--sample-rate") && !rateSeen && index + 1 < argc) {
                 argumentsValid = ParseSampleRate(argv[++index], &sampleRate);
                 rateSeen = YES;
@@ -790,9 +925,9 @@ int main(int argc, const char *argv[]) {
 #endif
         if (!argumentsValid || !addressSeen) {
 #if ACOUPLET_LDAC_PROBE_ONLY
-            fprintf(stderr, "Usage: %s --discover|--discover-disconnected OR --capabilities-disconnected|--playback-disconnected received.bin --address XX-XX-XX-XX-XX-XX [--continuous for playback] [--sample-rate 44100|48000|88200|96000] [--quality auto|low|mid|high]\n", argv[0]);
+            fprintf(stderr, "Usage: %s --discover|--discover-disconnected OR --capabilities-disconnected|--playback-disconnected received.bin --address XX-XX-XX-XX-XX-XX [--continuous for playback] [--wait-for-connection for playback] [--sample-rate 44100|48000|88200|96000] [--quality auto|low|mid|high]\n", argv[0]);
 #else
-            fprintf(stderr, "Usage: %s --playback-disconnected received.bin --address XX-XX-XX-XX-XX-XX --continuous [--sample-rate 44100|48000|88200|96000] [--quality auto|low|mid|high]\n", argv[0]);
+            fprintf(stderr, "Usage: %s --playback-disconnected received.bin --address XX-XX-XX-XX-XX-XX --continuous [--wait-for-connection] [--sample-rate 44100|48000|88200|96000] [--quality auto|low|mid|high]\n", argv[0]);
 #endif
             return 2;
         }
@@ -802,18 +937,10 @@ int main(int argc, const char *argv[]) {
         printf("BEFORE time=%.6f device=%p address=%s paired=%d connected=%d\n",
                NSDate.date.timeIntervalSince1970, (__bridge void *)device,
                device.addressString.UTF8String, device.isPaired, SonyClassicIsConnected(device));
-        if (!device || !device.isPaired || !SonyClassicIsConnected(device)) {
+        if (!device || !device.isPaired || (!waitForConnection && !SonyClassicIsConnected(device))) {
             printf("NO_OPEN direct stream acquisition requires an already-paired connected target\n");
             return 3;
         }
-        CBClassicPeer *peer __attribute__((objc_precise_lifetime)) = device.classicPeer;
-        if (!peer) {
-            printf("NO_OPEN coordinator returned no Classic peer\n");
-            return 4;
-        }
-        printf("SCOPE direct Classic coordinator stream owner; historical disconnected CLI requires connected ACL\n");
-        printf("TARGET owner=IOBluetoothCoordinator address=%s UUID=%s\n", device.addressString.UTF8String,
-               peer.identifier.UUIDString.UTF8String);
         DirectPlaybackProbe *probe __attribute__((objc_precise_lifetime)) = [DirectPlaybackProbe new];
         probe.pending = [NSMutableData data];
         probe.raw = [NSMutableData data];
@@ -822,9 +949,17 @@ int main(int argc, const char *argv[]) {
         probe.continuous = continuous;
         probe.sampleRate = sampleRate;
         probe.quality = quality;
+        CBClassicPeer *peer __attribute__((objc_precise_lifetime)) = device.classicPeer;
+        if (!peer) {
+            printf("NO_OPEN coordinator returned no Classic peer\n");
+            return 4;
+        }
+        printf("SCOPE direct Classic coordinator stream owner; historical disconnected CLI requires connected ACL\n");
+        printf("TARGET owner=IOBluetoothCoordinator address=%s UUID=%s\n", device.addressString.UTF8String,
+               peer.identifier.UUIDString.UTF8String);
         __block BOOL openDone = NO;
         __block NSInteger openError = 0;
-        peer.connectL2CAPCallback = ^(CBL2CAPChannel *value, NSInteger error) {
+        void (^opened)(CBL2CAPChannel *, NSInteger) = ^(CBL2CAPChannel *value, NSInteger error) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 printf("OPEN_CALLBACK time=%.6f status=0x%08X\n", NSDate.date.timeIntervalSince1970, (unsigned int)error);
                 PrintChannel("OPEN_CALLBACK_CHANNEL", value);
@@ -840,7 +975,7 @@ int main(int argc, const char *argv[]) {
                 openDone = YES;
             });
         };
-        peer.disconnectL2CAPCallback = ^(CBL2CAPChannel *value, NSInteger error) {
+        void (^closed)(CBL2CAPChannel *, NSInteger) = ^(CBL2CAPChannel *value, NSInteger error) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 PrintChannel("CLOSED_CALLBACK", value);
                 printf("DIRECT_CLOSE_CALLBACK status=0x%08X\n", (unsigned int)error);
@@ -848,6 +983,16 @@ int main(int argc, const char *argv[]) {
                     probe.closed = YES;
             });
         };
+        DirectSignalingCallbacks *callbacks __attribute__((objc_precise_lifetime)) =
+            [[DirectSignalingCallbacks alloc] initWithPeer:peer opened:opened closed:closed];
+        if (!callbacks) {
+            printf("NO_OPEN coordinator callbacks unavailable\n");
+            return 4;
+        }
+        if (waitForConnection && !AwaitConnection(probe, device, MonotonicTime() + 45)) {
+            [callbacks invalidate];
+            return probe.stopRequested && !probe.stdinEnded && !probe.failed ? 0 : 5;
+        }
         NSString *initialControl = playback ? ReadLine(probe, MonotonicTime() + 0.001, NO, 0.001) : nil;
         if (initialControl && ![initialControl isEqualToString:@"stop"]) probe.failed = YES;
         printf("OPEN_BEGIN time=%.6f PSM=0019\n", NSDate.date.timeIntervalSince1970);
@@ -944,8 +1089,7 @@ int main(int argc, const char *argv[]) {
         }
         [probe.input close];
         [probe.output close];
-        peer.connectL2CAPCallback = nil;
-        peer.disconnectL2CAPCallback = nil;
+        [callbacks invalidate];
         printf("DELEGATE_CLEAR time=%.6f status=0x%08X\n", NSDate.date.timeIntervalSince1970, 0);
 #if ACOUPLET_LDAC_PROBE_ONLY
         if (capabilities || playback) {

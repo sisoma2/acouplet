@@ -14,6 +14,11 @@ Manage background access in System Settings > General > Login
 Items & Extensions. If installation fails, keep any recovery files named in
 the error.
 
+When switching from an upstream app to a build signed by your own team, check
+the installed app's TeamIdentifier with codesign -dv --verbose=2, then run
+Install.command --replace-team PREVIOUS_TEAM_ID. The installer still verifies
+the previous signature and checks the replacement against its new signing team.
+
 LDAC setup
 
 Use the app's LDAC setup action, approve macOS Installer, then restart the Mac.

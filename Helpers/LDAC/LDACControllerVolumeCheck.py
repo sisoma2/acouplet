@@ -21,6 +21,7 @@ volume = output_source[output_source.index("struct LDACNativeVolume:"):output_so
 fixture = r'''
 import Foundation
 import Combine
+import CoreAudio
 
 func check(_ condition: @autoclosure () -> Bool, _ message: @autoclosure () -> String = "Fixture assertion failed") {
     if !condition() {
@@ -56,7 +57,8 @@ struct ConnectionTransition {
     var isFinished: Bool { [.confirmed, .cancelled, .failed].contains(phase) }
     var awaitingUser: Bool { phase == .awaitingUser }
 }
-struct Route { var uid: String? }
+struct Transport { var rawValue: UInt32 }
+struct Route { var uid: String?; var transport: Transport? }
 struct EarbudFinder {
     var isBusy: Bool
     var mayBeRinging: Bool
@@ -197,6 +199,7 @@ final class SonyDeviceCoordinator: ObservableObject {
 @MainActor
 final class LDACNativeOutput {
     nonisolated static let uid = "fixture-output"
+__TRANSFER_CONTROLS__
     var controls = LDACNativeVolume(scalar: 0.8, muted: false)
     var ready = false
     var selected = false
@@ -289,6 +292,7 @@ final class Controller: ObservableObject {
     var driverState = LDACDriverInstaller.State.current
     var audioRoute: MacAudioRouteObserver? = MacAudioRouteObserver()
     var resumeOutputUID: String?
+    var lastResumeBlockers: String?
     var suspensionRequested = false
     var pendingConnectionModes: [String: UUID] = [:]
     var deferredConnectionModes: [String: UUID] = [:]
@@ -814,9 +818,12 @@ names = ["needsStopBeforeTermination", "deviceUnavailableReason", "refreshDriver
          "hasOtherMusicSource", "bindingIsCurrent", "bindingCheck", "musicControlStatus", "waitForControls", "controlsChanged",
          "holdBinding", "recoverBinding", "stopForChange", "sendPendingVolume", "setOutputGain", "fail", "beginRecovery",
          "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry", "stop", "stopSession",
-         "suspend", "resumeIfReady", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode",
+         "suspend", "resumeIfReady", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode",
          "restoreConnectionPreference", "finish", "completeStop"]
 fixture = fixture.replace("precondition(", "check(")
+transfer_start = output_source.index("    nonisolated static func canTransferControls(")
+transfer_end = output_source.index("\n    func claim(", transfer_start)
+fixture = fixture.replace("__TRANSFER_CONTROLS__", output_source[transfer_start:transfer_end])
 fixture = fixture.replace("__VOLUME__", volume).replace("__METHODS__", "\n".join(member(name) for name in names))
 
 with tempfile.TemporaryDirectory(prefix="acouplet-ldac-controller-volume-") as directory:
