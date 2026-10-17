@@ -264,16 +264,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         else { showPopover() }
     }
 
-    func popoverShouldClose(_ popover: NSPopover) -> Bool {
-        if let event = NSApp.currentEvent,
-           event.type == .leftMouseDown || event.type == .leftMouseUp,
-           let button = statusItem.button, event.window === button.window,
-           button.bounds.contains(button.convert(event.locationInWindow, from: nil)) {
-            return false
-        }
-        return true
-    }
-
     func popoverWillShow(_ notification: Notification) {
         #if !ACOUPLET_PUBLIC_APIS_ONLY
         ldac.refreshDriverStateInBackground()

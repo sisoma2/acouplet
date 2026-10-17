@@ -998,6 +998,17 @@ final class AppUITests: XCTestCase {
         let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
         finder.activate()
         XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+        let statusFrame = status.frame
+        let finderFrame = finder.frame
+        let icon = finder.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: statusFrame.midX - finderFrame.minX, dy: statusFrame.midY - finderFrame.minY
+        ))
+        for _ in 0..<2 {
+            icon.click()
+            XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+            icon.click()
+            XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+        }
         status.click()
         XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
         finder.menuBars.menuBarItems["Finder"].click()
