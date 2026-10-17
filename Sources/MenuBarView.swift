@@ -181,7 +181,7 @@ struct MenuBarView: View {
     private var showsConnectOnly: Bool {
         headphones.linkState == .disconnected && !headphones.isDeviceConnected
             && headphones.powerOffState == nil && !headphones.headphoneTestNeedsRecovery
-            && headphones.lastErrorMessage == nil && !showsLDACSession
+            && headphones.lastErrorMessage == nil && !showsLDACSession && !devices.hasOtherSelectableDevices
     }
 
     private var showsLDACSession: Bool {
@@ -895,9 +895,24 @@ struct ConnectedHeadphonePicker: View {
             let disconnected = devices.selectableDevices.filter { device in
                 !devices.connectedDevices.contains(where: { $0.address == device.address })
             }
-            if !disconnected.isEmpty {
+            let possiblyPlaying = disconnected.filter { device in
+                let finder = devices.controller(for: device.address)?.earbudFinder
+                return finder?.isBusy == true || finder?.mayBeRinging == true
+            }
+            if !possiblyPlaying.isEmpty {
                 Section("Sound may still be playing") {
-                    ForEach(disconnected) { device in
+                    ForEach(possiblyPlaying) { device in
+                        Text(Self.title(for: device, among: devices.selectableDevices))
+                            .tag(Optional(device.address))
+                    }
+                }
+            }
+            let availableForConnection = disconnected.filter { device in
+                !possiblyPlaying.contains(where: { $0.address == device.address })
+            }
+            if !availableForConnection.isEmpty {
+                Section("Disconnected") {
+                    ForEach(availableForConnection) { device in
                         Text(Self.title(for: device, among: devices.selectableDevices))
                             .tag(Optional(device.address))
                     }
