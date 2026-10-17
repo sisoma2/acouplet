@@ -91,6 +91,12 @@ final class MacAudioRouteObserver: ObservableObject {
         return output + "\nCoreAudio issue: \(error ?? "None")"
     }
 
+    #if DEBUG
+    func simulateRoute(_ route: MacAudioRoute?) {
+        self.route = route
+    }
+    #endif
+
     func refresh() {
         var errors = systemListenerErrors
         do {

@@ -12,6 +12,7 @@ final class LDACController: ObservableObject {
     @Published private(set) var isSessionRunning = false
     @Published private(set) var isRecovering = false
     @Published private(set) var isAwaitingAutomaticRetry = false
+    @Published private(set) var isSuspendedForMicrophone = false
     @Published private(set) var audioCaptureAccess: LDACAudioCaptureAccess = .unchecked
     @Published private(set) var driverState: LDACDriverInstaller.State
     @Published private(set) var discoveredSupport: [String: Bool]
@@ -30,9 +31,17 @@ final class LDACController: ObservableObject {
     private let isDriverInspectionEnabled: () -> Bool
     private var driverInspectionTask: Task<Void, Never>?
     private let isClassicConnected: (String) -> Bool
+    private let localBluetoothAddress: () -> String?
     private var session: LDACOwnerSession?
     private var sessionID = UUID()
-    private var requestedAddress: String?
+    private var requestedAddress: String? {
+        didSet {
+            callAudio?.monitor(address: requestedAddress)
+            if requestedAddress == nil { isSuspendedForMicrophone = false }
+        }
+    }
+    private let callAudio: LDACCallAudio?
+    var microphoneHandoffIssue: String? { callAudio?.issue }
     private var requestedConfiguration = LDACConfiguration()
     private var nativeOutput: LDACOwnerOutput?
     private var outputID: UUID?
@@ -90,14 +99,18 @@ final class LDACController: ObservableObject {
 
     init(bundle: Bundle = .main, devices: SonyDeviceCoordinator? = nil, audioRoute: MacAudioRouteObserver? = nil, defaults: UserDefaults? = nil,
          inspectDriver: ((Bundle) -> LDACDriverInstaller.State)? = nil,
+         callAudio: LDACCallAudio? = nil,
          isDriverInspectionEnabled: @escaping () -> Bool = { true },
+         localBluetoothAddress: @escaping () -> String? = { IOBluetoothHostController.default()?.addressAsString() },
          isClassicConnected: @escaping (String) -> Bool = { IOBluetoothDevice(addressString: $0)?.isClassicConnected() == true }) {
         self.bundle = bundle
         self.defaults = defaults
         discoveredSupport = LDACSupportStore(defaults: defaults).all
         self.inspectDriver = inspectDriver
+        self.callAudio = callAudio ?? (inspectDriver == nil ? LDACCallAudio() : nil)
         self.isDriverInspectionEnabled = isDriverInspectionEnabled
         self.isClassicConnected = isClassicConnected
+        self.localBluetoothAddress = localBluetoothAddress
         driverState = inspectDriver?(bundle) ?? .unavailable("")
         helpers = LDACNativeSession.Helpers(bundle: bundle)
         self.devices = devices
@@ -107,9 +120,12 @@ final class LDACController: ObservableObject {
                 if let request = UUID(uuidString: value) { pendingConnectionModes[address] = request }
             }
         }
-        for changes in [devices?.objectWillChange, audioRoute?.objectWillChange].compactMap({ $0 }) {
+        for changes in [devices?.objectWillChange, audioRoute?.objectWillChange, self.callAudio?.objectWillChange].compactMap({ $0 }) {
             changes.sink { [weak self] _ in
-                Task { @MainActor [weak self] in self?.resumeIfReady() }
+                Task { @MainActor [weak self] in
+                    self?.objectWillChange.send()
+                    self?.resumeIfReady()
+                }
             }.store(in: &availabilityObservations)
         }
         NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didTerminateApplicationNotification)
@@ -139,6 +155,7 @@ final class LDACController: ObservableObject {
 
     func simulateRecoverySession(_ headphones: SonyHeadphonesController) {
         self.headphones = headphones
+        resumeOutputUID = audioRoute?.route?.uid
         requestedAddress = headphones.address
         targetAddress = headphones.address
         isSessionRunning = true
@@ -300,7 +317,7 @@ final class LDACController: ObservableObject {
             requestedAddress = address
             recoveryAttempt = 0
             cancelAutomaticRetry()
-            if !isSessionRunning { start(address) }
+            if !isSessionRunning { startWhenMicrophoneIsIdle(address) }
             else { stopSession(reason: "target changed") }
         } else if targetAddress == address || requestedAddress == address {
             requestedAddress = nil
@@ -445,6 +462,7 @@ final class LDACController: ObservableObject {
             if fromRetryTimer { recordRecovery("retry-blocked", reason: "failed=systemSleeping") }
             return
         }
+        guard synchronizeMicrophoneHandoff() else { return }
         reconcileConnectionPreferences()
         for (address, request) in deferredConnectionModes where address != requestedAddress && preferenceRestoreTasks[address] == nil {
             guard let headphones = devices?.controller(for: address), headphones.isDeviceConnected, headphones.isReady,
@@ -459,7 +477,7 @@ final class LDACController: ObservableObject {
               support(forAddress: address).allowsStart(requested: true),
               deviceUnavailableReason(forAddress: address) == nil, !headphones.ldacRequiresMultipointOff,
               canResumeOnCurrentOutput(forAddress: address),
-              headphones.hasCurrentMusicSourceContext(for: IOBluetoothHostController.default()?.addressAsString()) else {
+              headphones.hasCurrentMusicSourceContext(for: localBluetoothAddress()) else {
             if fromRetryTimer || state == .waitingForDevice && requestedAddress != nil { recordRetryBlocked() }
             return
         }
@@ -472,6 +490,36 @@ final class LDACController: ObservableObject {
             return
         }
         start(address)
+    }
+
+    private func startWhenMicrophoneIsIdle(_ address: String) {
+        targetAddress = address
+        resumeOutputUID = audioRoute?.route?.uid
+        if synchronizeMicrophoneHandoff() { start(address) }
+        else { state = .waitingForDevice }
+    }
+
+    private func synchronizeMicrophoneHandoff() -> Bool {
+        guard requestedAddress != nil, let callAudio else { return true }
+        switch callAudio.activity {
+        case .unknown:
+            return false
+        case .active:
+            if !isSuspendedForMicrophone {
+                isSuspendedForMicrophone = true
+                record("microphone-active", reason: "restoring ordinary Bluetooth call audio")
+                suspend(restoreAudio: true, reason: "an application is using microphone input")
+            }
+            if !isSessionRunning { callAudio.routeForCall() }
+            return false
+        case .idle:
+            guard !isSuspendedForMicrophone || callAudio.finishCall() else { return false }
+            if isSuspendedForMicrophone {
+                isSuspendedForMicrophone = false
+                record("microphone-idle", reason: "resuming requested LDAC playback")
+            }
+            return true
+        }
     }
 
     private func canResumeOnCurrentOutput(forAddress address: String) -> Bool {
@@ -502,7 +550,7 @@ final class LDACController: ObservableObject {
         }
         if resumeOutputUID == nil { failed.append("noResumeOutput") }
         else if let address, !canResumeOnCurrentOutput(forAddress: address) { failed.append("macOutputChanged") }
-        if headphones?.hasCurrentMusicSourceContext(for: IOBluetoothHostController.default()?.addressAsString()) != true {
+        if headphones?.hasCurrentMusicSourceContext(for: localBluetoothAddress()) != true {
             failed.append("noMusicContext")
         }
         let reason = "failed=" + failed.joined(separator: ",")
@@ -918,7 +966,7 @@ final class LDACController: ObservableObject {
               SonyBLEIdentity.normalizedAddress(headphones.address) == address,
               headphones.isDeviceConnected, headphones.hasCurrentMusicVolumeControl else { return false }
         return headphones.playback.generation == .v1
-            || headphones.hasCurrentMusicSourceContext(for: IOBluetoothHostController.default()?.addressAsString())
+            || headphones.hasCurrentMusicSourceContext(for: localBluetoothAddress())
     }
 
     private var hasOwnedMusicContext: Bool {
@@ -929,7 +977,7 @@ final class LDACController: ObservableObject {
         guard let headphones, headphones.isDeviceConnected, headphones.hasCurrentMusicVolumeControl,
               let address = headphones.multipoint.selectedSource?.address,
               let source = SonyBLEIdentity.normalizedAddress(address),
-              let local = SonyBLEIdentity.normalizedAddress(IOBluetoothHostController.default()?.addressAsString() ?? "") else { return false }
+              let local = SonyBLEIdentity.normalizedAddress(localBluetoothAddress() ?? "") else { return false }
         return source != local
     }
 
@@ -1407,7 +1455,7 @@ final class LDACController: ObservableObject {
                     self.targetAddress = next
                     self.state = .waitingForDevice
                     if retry { self.scheduleRecovery(next) }
-                } else { self.start(next) }
+                } else { self.startWhenMicrophoneIsIdle(next) }
             } else {
                 self.targetAddress = nil
                 self.state = .off

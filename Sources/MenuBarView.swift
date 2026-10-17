@@ -287,7 +287,8 @@ struct MenuBarView: View {
     private var ldacIsEnabled: Bool {
         switch ldacState {
         case .waitingForDevice, .requested, .connecting, .active: true
-        case .off, .stopping, .failed: false
+        case .stopping: ldac.isSuspendedForMicrophone
+        case .off, .failed: false
         }
     }
 
@@ -295,7 +296,8 @@ struct MenuBarView: View {
         switch ldacState {
         case .off: String(localized: "Off")
         case .waitingForDevice:
-            ldac.isAwaitingAutomaticRetry ? String(localized: "Ordinary audio · retrying LDAC…") : String(localized: "Waiting for headphones…")
+            ldac.isSuspendedForMicrophone ? String(localized: "Headset call audio · LDAC paused")
+                : ldac.isAwaitingAutomaticRetry ? String(localized: "Ordinary audio · retrying LDAC…") : String(localized: "Waiting for headphones…")
         case .requested: ldac.audioCaptureAccess == .checking ? String(localized: "Checking permission…") : String(localized: "Requested…")
         case .connecting: ldac.isRecovering ? String(localized: "Reconnecting…") : String(localized: "Connecting…")
         case .active(let format):
@@ -370,6 +372,13 @@ struct MenuBarView: View {
                 }
             }
             if !ldac.isSessionRunning, ldacState != .waitingForDevice { LDACDriverGuidance() }
+            if ldac.targetAddress == headphones.address, ldac.isSuspendedForMicrophone {
+                Text("In calling apps, choose Same as System for the microphone and speaker.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if ldac.targetAddress == headphones.address, let issue = ldac.microphoneHandoffIssue {
+                Text(issue).font(.caption).foregroundStyle(.primary)
+            }
             if case .failed(let error) = ldacState {
                 if ldac.audioCaptureAccess == .permissionRequired {
                     LDACPermissionGuidance()
