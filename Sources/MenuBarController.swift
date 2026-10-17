@@ -21,8 +21,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var imageState: (model: SonyDeviceModel, leftConnected: Bool?, rightConnected: Bool?, batteries: SonyBatteries, chargingCase: Bool)?
     private var measuredContentSize = NSSize.zero
     private var wantsPopover = false
+    private var isPopoverClosing = false
     private var retriedControllers = Set<ObjectIdentifier>()
     private var dismissalObservations = Set<AnyCancellable>()
+    private var trackingMenus = Set<ObjectIdentifier>()
     private var foregroundApplicationPID: Int32?
     private static let logger = Logger(subsystem: "dev.baglayan.Acouplet", category: "MenuBar")
     private var openRequestedAt: TimeInterval?
@@ -52,7 +54,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             statusItem.button?.action = #selector(togglePopover)
         }
         popover.appearance = NSApp.appearance
-        popover.behavior = .transient
+        popover.behavior = .applicationDefined
         popover.delegate = self
         var changes = devices.objectWillChange.merge(with: settings.objectWillChange).eraseToAnyPublisher()
         #if ACOUPLET_SPARKLE
@@ -105,7 +107,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                     guard let self, self.wantsPopover else { return }
                     self.measuredContentSize = size
                     Task { @MainActor [weak self] in
-                        guard let self, self.wantsPopover else { return }
+                        guard let self, self.wantsPopover, !self.isPopoverClosing else { return }
                         self.updatePopoverSize()
                         if !self.popover.isShown { self.showPopover() }
                     }
@@ -237,6 +239,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             openRequestedAt = ProcessInfo.processInfo.systemUptime
             Self.logger.notice("Panel open requested")
         }
+        guard !isPopoverClosing else { return }
         preparePopoverContent()
         popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         popover.contentViewController?.view.layoutSubtreeIfNeeded()
@@ -252,16 +255,32 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func closeMenu() {
         wantsPopover = false
         openRequestedAt = nil
+        if #unavailable(macOS 27.0) { statusItem.button?.highlight(false) }
         if #available(macOS 27.0, *), let session = statusItem.expandedInterfaceSession {
             session.cancel()
         }
-        popover.close()
-        if !popover.isShown { releasePopoverContent() }
+        if !isPopoverClosing { popover.close() }
+        if !isPopoverClosing, !popover.isShown { releasePopoverContent() }
     }
 
     @objc private func togglePopover() {
-        if popover.isShown || wantsPopover { closeMenu() }
+        if wantsPopover { closeMenu() }
         else { showPopover() }
+    }
+
+    private func isStatusItemClick(_ event: NSEvent) -> Bool {
+        guard event.type == .leftMouseDown || event.type == .leftMouseUp,
+              let button = statusItem.button, let window = button.window else { return false }
+        let frame = window.convertToScreen(button.convert(button.bounds, to: nil))
+        let location = event.window.map { $0.convertPoint(toScreen: event.locationInWindow) } ?? NSEvent.mouseLocation
+        return frame.contains(location)
+    }
+
+    private func updateStatusItemHighlight(for event: NSEvent) {
+        if #unavailable(macOS 27.0) {
+            if event.type == .leftMouseUp { statusItem.button?.highlight(false) }
+            else if event.type == .leftMouseDown, isStatusItemClick(event) { statusItem.button?.highlight(true) }
+        }
     }
 
     func popoverWillShow(_ notification: Notification) {
@@ -271,9 +290,43 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         retriedControllers.removeAll()
         let shownAt = ProcessInfo.processInfo.systemUptime
         dismissalObservations.removeAll()
-        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] event in
+        trackingMenus.removeAll()
+        for (name, isTracking) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
+            NotificationCenter.default.publisher(for: name)
+                .sink { [weak self] notification in
+                    guard let self, let menu = notification.object as? NSMenu else { return }
+                    if isTracking { self.trackingMenus.insert(ObjectIdentifier(menu)) }
+                    else { self.trackingMenus.remove(ObjectIdentifier(menu)) }
+                }
+                .store(in: &dismissalObservations)
+        }
+        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown], handler: { [weak self] event in
             guard event.timestamp > shownAt else { return }
-            MainActor.assumeIsolated { self?.closeMenu() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.updateStatusItemHighlight(for: event)
+                guard event.type != .leftMouseUp, !self.isStatusItemClick(event) else { return }
+                self.closeMenu()
+            }
+        }) {
+            AnyCancellable { NSEvent.removeMonitor(monitor) }.store(in: &dismissalObservations)
+        }
+        if let monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown, .keyDown], handler: { [weak self] event in
+            let consumesEvent = MainActor.assumeIsolated {
+                guard let self else { return false }
+                if event.type == .keyDown {
+                    guard event.keyCode == 53, self.trackingMenus.isEmpty else { return false }
+                    self.closeMenu()
+                    return true
+                }
+                self.updateStatusItemHighlight(for: event)
+                guard event.type != .leftMouseUp, let window = event.window, window.canBecomeMain,
+                      window !== self.popover.contentViewController?.view.window,
+                      !self.isStatusItemClick(event) else { return false }
+                self.closeMenu()
+                return false
+            }
+            return consumesEvent ? nil : event
         }) {
             AnyCancellable { NSEvent.removeMonitor(monitor) }.store(in: &dismissalObservations)
         }
@@ -304,9 +357,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     func popoverWillClose(_ notification: Notification) {
+        isPopoverClosing = true
         wantsPopover = false
         retriedControllers.removeAll()
-        dismissalObservations.removeAll()
         #if !ACOUPLET_PUBLIC_APIS_ONLY
         noiseModeHUD.setMenuVisible(false)
         #endif
@@ -314,9 +367,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     func popoverDidClose(_ notification: Notification) {
+        isPopoverClosing = false
         if wantsPopover {
             if !popover.isShown { showPopover() }
         } else {
+            dismissalObservations.removeAll()
             releasePopoverContent()
         }
     }
@@ -343,9 +398,7 @@ extension MenuBarController: @MainActor NSStatusItemExpandedInterfaceDelegate {
 
     func statusItemDidEndExpandedInterfaceSession(_ statusItem: NSStatusItem, animated: Bool) {
         guard wantsPopover else { return }
-        wantsPopover = false
         popover.animates = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        popover.close()
-        if !popover.isShown { releasePopoverContent() }
+        closeMenu()
     }
 }

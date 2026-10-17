@@ -954,6 +954,36 @@ final class AppUITests: XCTestCase {
     }
 
     @MainActor
+    func testRapidMenuBarClicksPreserveTheLastRequestedVisibility() throws {
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = ["-ui-testing", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        let status = app.statusItems.firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        guard status.frame.minX >= 0 else { throw XCTSkip("The status icon is in macOS menu bar overflow.") }
+        let dashboard = app.descendants(matching: .any)["headphones.dashboard"]
+        for startsVisible in [false, true] {
+            if startsVisible {
+                status.click()
+                XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+            }
+            for pairs in [1, 2, 3] {
+                for _ in 0..<pairs { status.doubleClick() }
+                if startsVisible {
+                    XCTAssertTrue(dashboard.waitForExistence(timeout: 3), "\(pairs * 2) clicks while open")
+                } else {
+                    XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3), "\(pairs * 2) clicks while closed")
+                }
+            }
+            if startsVisible {
+                app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+                XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+            }
+        }
+    }
+
+    @MainActor
     func testNativeMenuBarControlsAndDismissal() throws {
         let app = XCUIApplication()
         defer { app.terminate() }
