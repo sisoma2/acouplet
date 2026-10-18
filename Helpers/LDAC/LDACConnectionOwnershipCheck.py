@@ -1,6 +1,6 @@
-from pathlib import Path
 import subprocess
 import tempfile
+from pathlib import Path
 
 base = Path(__file__).resolve().parents[2]
 source = (base / 'Helpers/LDAC/PairedSonyConnectionProbe.m').read_text()

@@ -1,6 +1,13 @@
-from check_runner import CheckCases
+import fcntl
+import json
+import os
+import plistlib
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
-import fcntl, json, os, plistlib, shutil, subprocess, tempfile
+
+from check_runner import CheckCases
 
 packaging = Path(__file__).parent
 identifier = 'dev.baglayan.Acouplet.LDACOutput'

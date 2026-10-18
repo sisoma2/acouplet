@@ -1,4 +1,3 @@
-from pathlib import Path
 import hashlib
 import json
 import plistlib
@@ -7,8 +6,9 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from urllib.parse import unquote, urlsplit
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 REPO = Path(__file__).resolve().parent.parent
 SPARKLE = REPO / '.build/Sparkle-2.10.0/bin'

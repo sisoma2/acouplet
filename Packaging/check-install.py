@@ -1,6 +1,15 @@
-from check_runner import CheckCases
+import fcntl
+import hashlib
+import json
+import os
+import plistlib
+import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
-import fcntl, hashlib, json, os, plistlib, re, shutil, subprocess, tempfile
+
+from check_runner import CheckCases
 
 packaging = Path(__file__).parent
 service_check = (packaging / 'check-service.sh').read_text().split("<<'PLIST'\n", 1)[1].split('\nPLIST\n', 1)[0]

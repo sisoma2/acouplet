@@ -1,7 +1,7 @@
-from pathlib import Path
 import importlib.util
 import json
 import tempfile
+from pathlib import Path
 
 root = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('ldac_session_stats', root / 'ldac-session-stats.py')
@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix='acouplet-session-stats-') as directory:
     replay = stats.analyze('rotated', stats.log_files(rotated))
     assert replay['partial'] and replay['bitrate_seconds'] == {'660': 10, '990': 10}
     json.dumps(results, allow_nan=False)
-    report = stats.render(list(results.values()), dict(sessions=5, aborts=0, stream_hours=1, aborts_per_hour=0, cascades=0, cascades_per_hour=0))
+    report = stats.render(list(results.values()), {'sessions': 5, 'aborts': 0, 'stream_hours': 1, 'aborts_per_hour': 0, 'cascades': 0, 'cascades_per_hour': 0})
     assert 'rate/last kbps' in report and '990 kb/s for 10s' in report
 
 print('PASS adaptive bitrate promotions, demotions, malformed events, resets, rotations and partial timelines')

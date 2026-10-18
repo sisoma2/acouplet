@@ -1,5 +1,8 @@
+import base64
+import plistlib
+import subprocess
+import sys
 from pathlib import Path
-import base64, plistlib, subprocess, sys
 
 
 def code_targets(app):

@@ -1,5 +1,8 @@
+import importlib.util
+import json
+import subprocess
+import tempfile
 from pathlib import Path
-import importlib.util, json, subprocess, tempfile
 
 packaging = Path(__file__).parent
 spec = importlib.util.spec_from_file_location('localizations', packaging / 'check-localizations.py')

@@ -1,6 +1,10 @@
-from pathlib import Path
+import json
+import plistlib
+import re
+import subprocess
+import sys
 from collections import Counter
-import json, plistlib, re, subprocess, sys
+from pathlib import Path
 
 
 def placeholders(value):

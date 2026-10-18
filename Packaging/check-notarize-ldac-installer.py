@@ -1,6 +1,9 @@
+import json
+import runpy
+import subprocess
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
-import json, runpy, subprocess, tempfile
 
 helper = runpy.run_path(str(Path(__file__).with_name('notarize-ldac-installer.py')))
 calls = []

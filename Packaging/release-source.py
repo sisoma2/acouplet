@@ -1,5 +1,10 @@
+import hashlib
+import json
+import os
+import stat
+import subprocess
+import sys
 from pathlib import Path
-import hashlib, json, os, stat, subprocess, sys
 
 source_roots = ('Sources', 'Helpers', 'Vendor', 'Resources', 'Configuration', 'Packaging', 'Controls', 'Acouplet.xcodeproj')
 
@@ -43,7 +48,7 @@ def snapshot(repo, development, artwork):
         status = git(repo, 'status', '--porcelain=v1', '--untracked-files=all', '--ignore-submodules=none')
         index = os.fsdecode(git(repo, 'ls-files', '--stage', '-z'))
         unchecked = [os.fsdecode(name) for name in git(repo, 'ls-files', '-v', '-z').split(b'\0') if name and (name[:1].islower() or name.startswith(b'S '))]
-        names = set(os.fsdecode(name) for name in git(repo, 'ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\0') if name)
+        names = {os.fsdecode(name) for name in git(repo, 'ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\0') if name}
         ignored = [os.fsdecode(name) for name in git(repo, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--', *source_roots).split(b'\0') if name]
         ignored = [name for name in ignored if name != 'Configuration/Direct.xcconfig' and not ignored_artifact(name)]
         if not development and (status or ignored or unchecked):

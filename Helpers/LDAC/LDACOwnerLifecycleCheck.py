@@ -1,10 +1,10 @@
-from pathlib import Path
 import json
 import os
 import signal
 import subprocess
 import tempfile
 import time
+from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
 owner = (root / 'Sources/LDACOwner.swift').read_text()

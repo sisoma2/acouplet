@@ -1,8 +1,13 @@
-from pathlib import Path
-from unittest.mock import patch
+import json
+import os
+import plistlib
+import runpy
+import subprocess
+import tempfile
 from contextlib import redirect_stdout
 from io import StringIO
-import json, os, plistlib, runpy, subprocess, tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 runner = runpy.run_path(str(Path(__file__).with_name('check-all.py')))
 main = runner['main']

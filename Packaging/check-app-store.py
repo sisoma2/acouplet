@@ -1,6 +1,13 @@
+import json
+import os
+import plistlib
+import runpy
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
-import json, os, plistlib, runpy, shutil, subprocess, sys, tempfile
 
 packaging = Path(__file__).parent
 checker = runpy.run_path(str(packaging / 'check-store-bundle.py'))

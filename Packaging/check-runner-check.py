@@ -1,11 +1,11 @@
-from check_runner import CheckCases
-from contextlib import redirect_stdout, redirect_stderr
+import os
+import time
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from threading import Barrier, Lock
 from unittest.mock import patch
-import os
-import time
 
+from check_runner import CheckCases
 
 barrier = Barrier(2, timeout=5)
 lock = Lock()

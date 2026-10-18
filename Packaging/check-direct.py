@@ -1,8 +1,15 @@
-from check_runner import CheckCases
+import json
+import os
+import plistlib
+import runpy
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
-from unittest.mock import patch
 from types import SimpleNamespace
-import json, os, plistlib, runpy, shutil, subprocess, tempfile
+from unittest.mock import patch
+
+from check_runner import CheckCases
 
 packaging = Path(__file__).parent
 checker = runpy.run_path(str(packaging / 'check-distribution.py'))
@@ -82,8 +89,7 @@ def command(args, **kwargs):
             flags = '0x0(none)' if failure == ('runtime', target.name) else '0x10000(runtime)'
             stderr = ('CodeDirectory v=20500 flags=' + flags + '\nTeamIdentifier=' + team + '\n').encode()
             if failure != ('timestamp', target.name): stderr += b'Timestamp=Oct 1 2026\n'
-    elif failure == ('signature', target.name): status = 1
-    elif failure == ('developer-id', target.name) and any(arg.startswith('--test-requirement=') for arg in args): status = 1
+    elif failure == ('signature', target.name) or failure == ('developer-id', target.name) and any(arg.startswith('--test-requirement=') for arg in args): status = 1
     return subprocess.CompletedProcess(args, status, stdout, stderr)
 
 

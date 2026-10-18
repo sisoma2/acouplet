@@ -1,4 +1,3 @@
-from pathlib import Path
 import argparse
 import datetime
 import importlib.util
@@ -6,6 +5,7 @@ import json
 import math
 import platform
 import sys
+from pathlib import Path
 
 RATES = (44100, 48000, 88200, 96000)
 QUALITIES = ('low', 'mid', 'high', 'auto')
@@ -30,7 +30,7 @@ SCENARIOS = (
 
 
 def timestamp():
-    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
+    return datetime.datetime.now(datetime.UTC).isoformat(timespec='seconds')
 
 
 def prepare(model, firmware, minutes):
@@ -40,12 +40,12 @@ def prepare(model, firmware, minutes):
     for profile, reserve in [('music', 250), ('video', 100)]:
         for rate in RATES:
             for quality in QUALITIES:
-                cases.append(dict(id=f'{profile}-{rate}-{quality}', profile=profile, reserve_ms=reserve,
-                                  rate=rate, quality=quality, minimum_seconds=minutes * 60,
-                                  instructions='Play continuously; record audible defects, stalls, skips and final restored routes.', result='pending'))
-    cases.extend(dict(id=name, instructions=instructions, result='pending') for name, instructions in SCENARIOS)
-    return dict(schema=1, created=timestamp(), macOS=platform.mac_ver()[0], model=model, firmware=firmware,
-                evidence='Manual hardware observations plus session logs; offline checks do not qualify audible or RF behavior.', cases=cases)
+                cases.append({'id': f'{profile}-{rate}-{quality}', 'profile': profile, 'reserve_ms': reserve,
+                                  'rate': rate, 'quality': quality, 'minimum_seconds': minutes * 60,
+                                  'instructions': 'Play continuously; record audible defects, stalls, skips and final restored routes.', 'result': 'pending'})
+    cases.extend({'id': name, 'instructions': instructions, 'result': 'pending'} for name, instructions in SCENARIOS)
+    return {'schema': 1, 'created': timestamp(), 'macOS': platform.mac_ver()[0], 'model': model, 'firmware': firmware,
+                'evidence': 'Manual hardware observations plus session logs; offline checks do not qualify audible or RF behavior.', 'cases': cases}
 
 
 def session_statistics(directory):

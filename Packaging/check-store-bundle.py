@@ -1,5 +1,10 @@
+import json
+import plistlib
+import re
+import runpy
+import subprocess
+import sys
 from pathlib import Path
-import json, plistlib, re, runpy, subprocess, sys
 
 private_tokens = [
     b'SystemBannerUI', b'SonyNativeHUD', b'sony_native_hud_', b'SwiftUI6_Glass', b'GlassV8explicit',

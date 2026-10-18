@@ -1,10 +1,9 @@
-from pathlib import Path
+import os
+import re
+import signal
 import subprocess
 import tempfile
-import os
-import signal
-import re
-
+from pathlib import Path
 
 source = (Path(__file__).resolve().parents[2] / "Sources/LDACNativeOutput.swift").read_text()
 driver = (Path(__file__).resolve().parent / "VirtualOutput/AcoupletVirtualOutput.c").read_text()

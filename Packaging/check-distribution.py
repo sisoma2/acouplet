@@ -1,6 +1,16 @@
-from datetime import datetime, timezone
+import argparse
+import hashlib
+import json
+import os
+import plistlib
+import re
+import runpy
+import stat
+import subprocess
+import sys
+import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
-import argparse, hashlib, json, os, plistlib, re, runpy, subprocess, sys, tempfile, stat
 from xml.etree import ElementTree as ET
 
 DEVELOPER_ID = '=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
@@ -138,7 +148,7 @@ def inspect_package(package, signatures_only=False, dmg=None):
     if controls.exists(): blockers.append('Deferred Control Center extension is embedded')
     blockers += [name + ': stapled ticket ' + check['status'] for name, check in staples.items() if not check['verified']]
     return {
-        'checked_utc': datetime.now(timezone.utc).isoformat(),
+        'checked_utc': datetime.now(UTC).isoformat(),
         'package': str(package),
         'scope': 'App, battery helper, native HUD, Sparkle framework and nested tools, LDAC transport/audio helpers, HAL driver and embedded installer/uninstaller, separately packaged panes and optional DMG. No notarization upload or installed-app modification.',
         'signing_team': team,

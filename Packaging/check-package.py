@@ -1,6 +1,15 @@
+import hashlib
+import json
+import os
+import plistlib
+import re
+import shutil
+import subprocess
+import tempfile
+import zipfile
 from pathlib import Path
+
 from check_runner import CheckCases
-import hashlib, json, os, plistlib, re, shutil, subprocess, tempfile, zipfile
 
 packaging = Path(__file__).parent
 project = json.loads(subprocess.check_output(['/usr/bin/plutil', '-convert', 'json', '-o', '-', str(packaging.parent / 'Acouplet.xcodeproj/project.pbxproj')]))

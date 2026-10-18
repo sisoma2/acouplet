@@ -1,5 +1,9 @@
+import argparse
+import json
+import re
+import runpy
+import subprocess
 from pathlib import Path
-import argparse, json, re, runpy, subprocess
 
 distribution = runpy.run_path(str(Path(__file__).with_name('check-distribution.py')))
 

@@ -1,6 +1,6 @@
-from pathlib import Path
 import importlib.util
 import tempfile
+from pathlib import Path
 
 source = Path(__file__).with_name('qualify-ldac.py')
 spec = importlib.util.spec_from_file_location('qualification', source)

@@ -2,7 +2,6 @@ import pathlib
 import subprocess
 import tempfile
 
-
 source = (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift").read_text()
 
 fixture = r'''

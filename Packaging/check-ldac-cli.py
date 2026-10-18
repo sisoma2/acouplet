@@ -1,6 +1,6 @@
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 helpers = Path(sys.argv[1]) / 'Contents/Helpers'
 for name, arguments in [

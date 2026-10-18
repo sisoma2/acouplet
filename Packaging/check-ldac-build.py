@@ -1,5 +1,10 @@
+import json
+import os
+import plistlib
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
-import json, os, plistlib, subprocess, sys, tempfile
 
 packaging = Path(__file__).parent
 stub_source = '''#!/usr/bin/python3

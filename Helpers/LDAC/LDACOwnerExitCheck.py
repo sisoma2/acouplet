@@ -1,4 +1,3 @@
-from pathlib import Path
 import os
 import select
 import signal
@@ -6,7 +5,7 @@ import subprocess
 import sys
 import tempfile
 import time
-
+from pathlib import Path
 
 root = Path(__file__).resolve().parent
 capture = (root / "SystemAudioTapProbe.m").read_text()

@@ -1,5 +1,10 @@
+import hashlib
+import os
+import plistlib
+import subprocess
+import tarfile
+import tempfile
 from pathlib import Path
-import hashlib, os, plistlib, subprocess, tarfile, tempfile
 
 packaging = Path(__file__).parent
 

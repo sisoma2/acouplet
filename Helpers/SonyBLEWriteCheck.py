@@ -1,7 +1,7 @@
 import os
-from pathlib import Path
 import subprocess
 import tempfile
+from pathlib import Path
 
 source_path = Path(__file__).resolve().parents[1] / "Sources/SonyBLETransport.swift"
 source = source_path.read_text()

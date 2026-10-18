@@ -1,6 +1,6 @@
-from pathlib import Path
 import subprocess
 import tempfile
+from pathlib import Path
 
 source = Path(__file__).with_name("SystemAudioTapProbe.m").read_text()
 read_format = source[source.index("static BOOL ReadFormat("):source.index("static BOOL RingWrite(")]

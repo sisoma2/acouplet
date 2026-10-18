@@ -1,5 +1,11 @@
+import json
+import plistlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
-import json, plistlib, re, shutil, subprocess, sys, tempfile
 
 
 def build(repo, manifest, output, identity, team, version):

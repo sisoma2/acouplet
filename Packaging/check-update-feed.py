@@ -1,4 +1,3 @@
-from pathlib import Path
 import base64
 import importlib.util
 import io
@@ -9,8 +8,9 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from unittest.mock import patch
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from unittest.mock import patch
 
 packaging = Path(__file__).parent.resolve()
 spec = importlib.util.spec_from_file_location('release', packaging / 'update-feed.py')
@@ -236,9 +236,9 @@ if CommandLine.arguments.count == 1 {
     for version, build in [('1.2.3', 42), ('1.2.4', 43)]:
         phase = root / ('feed-' + str(build))
         phase.mkdir()
-        metadata = dict(version=version, build=build, initializeFeed=first_history is None,
-                        sdkVersion='27.2', architecture='arm64', githubRepository='fixture/repo',
-                        sdk='/private/fixture-sdk')
+        metadata = {'version': version, 'build': build, 'initializeFeed': first_history is None,
+                        'sdkVersion': '27.2', 'architecture': 'arm64', 'githubRepository': 'fixture/repo',
+                        'sdk': '/private/fixture-sdk'}
         (phase / 'release.json').write_text(json.dumps(metadata))
         (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(dict(info, CFBundleVersion=str(build), CFBundleShortVersionString=version)))
         (fixture_repo / 'dist' / ('Acouplet-' + version + '.dmg')).write_bytes(b'Fixture notarized image')

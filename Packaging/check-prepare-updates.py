@@ -1,8 +1,8 @@
-from pathlib import Path
 import json
 import plistlib
 import runpy
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 prepare = runpy.run_path(str(Path(__file__).with_name('prepare-updates.py')))

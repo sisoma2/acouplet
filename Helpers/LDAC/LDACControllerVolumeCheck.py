@@ -1,14 +1,14 @@
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
-
+from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(root / "Packaging"))
 from check_runner import CheckCases
+
 source = (root / "Sources/LDACController.swift").read_text()
 output_source = (root / "Sources/LDACNativeOutput.swift").read_text()
 

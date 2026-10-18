@@ -1,4 +1,3 @@
-from pathlib import Path
 import argparse
 import json
 import os
@@ -6,6 +5,7 @@ import plistlib
 import re
 import runpy
 import tempfile
+from pathlib import Path
 
 packaging = Path(__file__).resolve().parent
 release = runpy.run_path(str(packaging / 'update-feed.py'))

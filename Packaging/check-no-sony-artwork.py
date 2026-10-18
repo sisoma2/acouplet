@@ -1,5 +1,12 @@
+import hashlib
+import importlib.util
+import json
+import os
+import plistlib
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
-import hashlib, importlib.util, json, os, plistlib, shutil, subprocess, tempfile
 
 packaging = Path(__file__).parent
 root = packaging.parent

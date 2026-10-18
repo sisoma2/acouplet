@@ -124,11 +124,11 @@ def analyze(session_id, files):
     start, end = events[0][0], events[-1][0]
     stream_start = stream_end = None
     target = None
-    s = dict(
-        id=session_id[:8], underruns=0, quality=None, pcm_reserve_ms=None, rate=None, bitrate_kbps=None, drain_breaches=0, cascades=0,
-        pacing_breaches=0, pcm_skips=0, skipped_frames=0, pcm_failed=0, lost_percent=[],
-        successful=None, connection_lost=0, queue_peak=None, queue_drops=None, max_drain=None,
-        other_acl=[], other_a2dp=[], l2cap_in_stream=[], media=False)
+    s = {
+        'id': session_id[:8], 'underruns': 0, 'quality': None, 'pcm_reserve_ms': None, 'rate': None, 'bitrate_kbps': None, 'drain_breaches': 0, 'cascades': 0,
+        'pacing_breaches': 0, 'pcm_skips': 0, 'skipped_frames': 0, 'pcm_failed': 0, 'lost_percent': [],
+        'successful': None, 'connection_lost': 0, 'queue_peak': None, 'queue_drops': None, 'max_drain': None,
+        'other_acl': [], 'other_a2dp': [], 'l2cap_in_stream': [], 'media': False}
     bitrate_observations = []
     daemon = []  # (timestamp, kind, detail) for bluetoothd events
     for ts, text in events:
@@ -244,7 +244,7 @@ def analyze(session_id, files):
         if observed_start > stream_end or observed_end < stream_start:
             continue
         seconds = max(0, observed_end - observed_start)
-        timeline.append(dict(offset_seconds=observed_start - stream_start, rate=rate, bitrate_kbps=bitrate, seconds=seconds))
+        timeline.append({'offset_seconds': observed_start - stream_start, 'rate': rate, 'bitrate_kbps': bitrate, 'seconds': seconds})
         seconds_by_bitrate[str(bitrate)] = seconds_by_bitrate.get(str(bitrate), 0) + seconds
     known_seconds = sum(seconds_by_bitrate.values())
     unknown_seconds = max(0, stream_end - stream_start - known_seconds)
@@ -280,7 +280,7 @@ def clock(ts):
 
 
 def hms(seconds):
-    seconds = int(round(seconds))
+    seconds = round(seconds)
     return f'{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}'
 
 
@@ -357,9 +357,9 @@ def main():
     hours = seconds / 3600
     aborts = sum(1 for s in sessions if s['aborted'])
     cascades = sum(s['cascades'] for s in sessions)
-    totals = dict(sessions=len(sessions), aborts=aborts, stream_hours=hours, cascades=cascades,
-                  aborts_per_hour=aborts / hours if hours else 0.0,
-                  cascades_per_hour=cascades / hours if hours else 0.0)
+    totals = {'sessions': len(sessions), 'aborts': aborts, 'stream_hours': hours, 'cascades': cascades,
+                  'aborts_per_hour': aborts / hours if hours else 0.0,
+                  'cascades_per_hour': cascades / hours if hours else 0.0}
 
     if args.json:
         out = []

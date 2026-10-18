@@ -1,5 +1,8 @@
+import hashlib
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
-import hashlib, shutil, subprocess, tempfile
 
 vendor = Path(__file__).resolve().parent.parent / 'Vendor/libldac'
 notice = '/* Modified by Acouplet on 2026-10-03: defined unsigned packing shift. */\n\n'

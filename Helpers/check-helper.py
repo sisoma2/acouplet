@@ -1,5 +1,13 @@
+import json
+import os
+import select
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
 from pathlib import Path
-import json, os, select, signal, subprocess, sys, tempfile, time, uuid
 
 binary = str(Path(sys.argv[1]).resolve())
 identifier, marker = str(uuid.uuid4()).upper(), str(uuid.uuid4()).upper()

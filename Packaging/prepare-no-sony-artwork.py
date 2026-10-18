@@ -1,73 +1,10 @@
+import json
+import shutil
+import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
-import json, shutil, sys, xml.etree.ElementTree as ET
 
-mini_icons = '''
-WFXM6Earbuds WFXM6EarbudLeft WFXM6EarbudRight WFXM6CaseSymbol WFXM6CaseSymbolFill
-Earbuds EarbudLeft EarbudRight WFXM5CaseSymbol WFXM5CaseSymbolFill
-WFXM4Earbuds WFXM4EarbudLeft WFXM4EarbudRight WFXM4CaseSymbol WFXM4CaseSymbolFill
-WFXM3Earbuds WFXM3EarbudLeft WFXM3EarbudRight WFXM3CaseSymbol WFXM3CaseSymbolFill
-WF1000XEarbuds WF1000XEarbudLeft WF1000XEarbudRight WF1000XCaseSymbol WF1000XCaseSymbolFill
-WFL900Earbuds WFL900EarbudLeft WFL900EarbudRight WFL900CaseSymbol WFL900CaseSymbolFill
-WFLC900Earbuds WFLC900EarbudLeft WFLC900EarbudRight WFLC900CaseSymbol WFLC900CaseSymbolFill
-WFLS910NEarbuds WFLS910NEarbudLeft WFLS910NEarbudRight WFLS910NCaseSymbol WFLS910NCaseSymbolFill
-WFL910Earbuds WFL910EarbudLeft WFL910EarbudRight WFL910CaseSymbol WFL910CaseSymbolFill
-WFLS900NEarbuds WFLS900NEarbudLeft WFLS900NEarbudRight WFLS900NCaseSymbol WFLS900NCaseSymbolFill
-WFL900UCEarbuds WFL900UCEarbudLeft WFL900UCEarbudRight WFL900UCCaseSymbol WFL900UCCaseSymbolFill
-WFC500Earbuds WFC500EarbudLeft WFC500EarbudRight WFC500CaseSymbol WFC500CaseSymbolFill
-WFC510Earbuds WFC510EarbudLeft WFC510EarbudRight WFC510CaseSymbol WFC510CaseSymbolFill
-WFC700NEarbuds WFC700NEarbudLeft WFC700NEarbudRight WFC700NCaseSymbol WFC700NCaseSymbolFill
-WFC710NEarbuds WFC710NEarbudLeft WFC710NEarbudRight WFC710NCaseSymbol WFC710NCaseSymbolFill
-WFH800Earbuds WFH800EarbudLeft WFH800EarbudRight WFH800CaseSymbol WFH800CaseSymbolFill
-WFSP700NEarbuds WFSP700NEarbudLeft WFSP700NEarbudRight WFSP700NCaseSymbol WFSP700NCaseSymbolFill
-WFSP800NEarbuds WFSP800NEarbudLeft WFSP800NEarbudRight WFSP800NCaseSymbol WFSP800NCaseSymbolFill
-WFSP900Earbuds WFSP900EarbudLeft WFSP900EarbudRight WFSP900CaseSymbol WFSP900CaseSymbolFill
-WHXM6Headphones
-WHXM5Headphones
-WHXM4Headphones
-WHXM4CHeadphones
-WHXM3Headphones
-WHXM2Headphones
-WH1000XXHeadphones
-WHCH520Headphones
-WHCH530Headphones
-WHCH535Headphones
-WHCH700NHeadphones
-WHCH720NHeadphones
-WHCH730NHeadphones
-WHCH735NHeadphones
-WHH800Headphones
-WHH810Headphones
-WHH900NHeadphones
-WHH910NHeadphones
-WHXB700Headphones
-WHXB900NHeadphones
-WHXB910NHeadphones
-WHULT900NHeadphones
-MDRXB950B1Headphones
-MDRXB950N1Headphones
-WI1000XEarbuds
-WI1000XM2Earbuds
-WIC100Earbuds
-WIC600NEarbuds
-WIH700Earbuds
-WISP600NEarbuds
-WFG700NEarbuds WFG700NEarbudLeft WFG700NEarbudRight WFG700NCaseSymbol WFG700NCaseSymbolFill
-WHG910NHeadphones
-HTAN7Speaker
-SRSLS1Speaker
-SRSNS7Speaker
-SRSNS7RSpeaker
-SRSULT10Speaker
-SRSULT30Speaker
-SRSULT50Speaker
-SRSULT70Speaker
-SRSULT500Speaker
-SRSULT700Speaker
-SRSULT900Speaker
-SRSULT900ACSpeaker
-SRSULT1000Speaker
-SRSULT3000Speaker
-'''.split()
+mini_icons = ['WFXM6Earbuds', 'WFXM6EarbudLeft', 'WFXM6EarbudRight', 'WFXM6CaseSymbol', 'WFXM6CaseSymbolFill', 'Earbuds', 'EarbudLeft', 'EarbudRight', 'WFXM5CaseSymbol', 'WFXM5CaseSymbolFill', 'WFXM4Earbuds', 'WFXM4EarbudLeft', 'WFXM4EarbudRight', 'WFXM4CaseSymbol', 'WFXM4CaseSymbolFill', 'WFXM3Earbuds', 'WFXM3EarbudLeft', 'WFXM3EarbudRight', 'WFXM3CaseSymbol', 'WFXM3CaseSymbolFill', 'WF1000XEarbuds', 'WF1000XEarbudLeft', 'WF1000XEarbudRight', 'WF1000XCaseSymbol', 'WF1000XCaseSymbolFill', 'WFL900Earbuds', 'WFL900EarbudLeft', 'WFL900EarbudRight', 'WFL900CaseSymbol', 'WFL900CaseSymbolFill', 'WFLC900Earbuds', 'WFLC900EarbudLeft', 'WFLC900EarbudRight', 'WFLC900CaseSymbol', 'WFLC900CaseSymbolFill', 'WFLS910NEarbuds', 'WFLS910NEarbudLeft', 'WFLS910NEarbudRight', 'WFLS910NCaseSymbol', 'WFLS910NCaseSymbolFill', 'WFL910Earbuds', 'WFL910EarbudLeft', 'WFL910EarbudRight', 'WFL910CaseSymbol', 'WFL910CaseSymbolFill', 'WFLS900NEarbuds', 'WFLS900NEarbudLeft', 'WFLS900NEarbudRight', 'WFLS900NCaseSymbol', 'WFLS900NCaseSymbolFill', 'WFL900UCEarbuds', 'WFL900UCEarbudLeft', 'WFL900UCEarbudRight', 'WFL900UCCaseSymbol', 'WFL900UCCaseSymbolFill', 'WFC500Earbuds', 'WFC500EarbudLeft', 'WFC500EarbudRight', 'WFC500CaseSymbol', 'WFC500CaseSymbolFill', 'WFC510Earbuds', 'WFC510EarbudLeft', 'WFC510EarbudRight', 'WFC510CaseSymbol', 'WFC510CaseSymbolFill', 'WFC700NEarbuds', 'WFC700NEarbudLeft', 'WFC700NEarbudRight', 'WFC700NCaseSymbol', 'WFC700NCaseSymbolFill', 'WFC710NEarbuds', 'WFC710NEarbudLeft', 'WFC710NEarbudRight', 'WFC710NCaseSymbol', 'WFC710NCaseSymbolFill', 'WFH800Earbuds', 'WFH800EarbudLeft', 'WFH800EarbudRight', 'WFH800CaseSymbol', 'WFH800CaseSymbolFill', 'WFSP700NEarbuds', 'WFSP700NEarbudLeft', 'WFSP700NEarbudRight', 'WFSP700NCaseSymbol', 'WFSP700NCaseSymbolFill', 'WFSP800NEarbuds', 'WFSP800NEarbudLeft', 'WFSP800NEarbudRight', 'WFSP800NCaseSymbol', 'WFSP800NCaseSymbolFill', 'WFSP900Earbuds', 'WFSP900EarbudLeft', 'WFSP900EarbudRight', 'WFSP900CaseSymbol', 'WFSP900CaseSymbolFill', 'WHXM6Headphones', 'WHXM5Headphones', 'WHXM4Headphones', 'WHXM4CHeadphones', 'WHXM3Headphones', 'WHXM2Headphones', 'WH1000XXHeadphones', 'WHCH520Headphones', 'WHCH530Headphones', 'WHCH535Headphones', 'WHCH700NHeadphones', 'WHCH720NHeadphones', 'WHCH730NHeadphones', 'WHCH735NHeadphones', 'WHH800Headphones', 'WHH810Headphones', 'WHH900NHeadphones', 'WHH910NHeadphones', 'WHXB700Headphones', 'WHXB900NHeadphones', 'WHXB910NHeadphones', 'WHULT900NHeadphones', 'MDRXB950B1Headphones', 'MDRXB950N1Headphones', 'WI1000XEarbuds', 'WI1000XM2Earbuds', 'WIC100Earbuds', 'WIC600NEarbuds', 'WIH700Earbuds', 'WISP600NEarbuds', 'WFG700NEarbuds', 'WFG700NEarbudLeft', 'WFG700NEarbudRight', 'WFG700NCaseSymbol', 'WFG700NCaseSymbolFill', 'WHG910NHeadphones', 'HTAN7Speaker', 'SRSLS1Speaker', 'SRSNS7Speaker', 'SRSNS7RSpeaker', 'SRSULT10Speaker', 'SRSULT30Speaker', 'SRSULT50Speaker', 'SRSULT70Speaker', 'SRSULT500Speaker', 'SRSULT700Speaker', 'SRSULT900Speaker', 'SRSULT900ACSpeaker', 'SRSULT1000Speaker', 'SRSULT3000Speaker']
 
 
 def check_vector(path):

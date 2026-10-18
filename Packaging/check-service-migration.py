@@ -1,5 +1,11 @@
+import errno
+import os
+import plistlib
+import subprocess
+import tempfile
+import time
+import uuid
 from pathlib import Path
-import errno, os, plistlib, subprocess, tempfile, time, uuid
 
 repo = Path(__file__).resolve().parent.parent
 source = (repo / 'Sources/SettingsStore.swift').read_text()

@@ -1,9 +1,9 @@
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-from functools import partial
 import argparse
 import fnmatch
 import os
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from functools import partial
 
 
 class CheckCases:

@@ -1,6 +1,11 @@
+import importlib.util
+import json
+import plistlib
+import socket
+import subprocess
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
-import importlib.util, json, plistlib, socket, subprocess, tempfile
 
 packaging = Path(__file__).parent
 spec = importlib.util.spec_from_file_location('pane_builder', packaging / 'build-preference-panes.py')

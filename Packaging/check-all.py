@@ -1,6 +1,14 @@
+import argparse
+import fnmatch
+import json
+import os
+import plistlib
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
+
 from check_runner import CheckCases
-import argparse, fnmatch, json, os, plistlib, subprocess, sys, tempfile
 
 repo = Path(__file__).resolve().parent.parent
 python_checks = (
