@@ -24,8 +24,8 @@ struct LDACNativeVolume: Equatable, Codable, Sendable {
         return true
     }
 
-    static func shouldRestore(currentUID: String, savedUID: String) -> Bool {
-        currentUID == LDACNativeOutput.uid && savedUID != LDACNativeOutput.uid
+    static func shouldRestore(currentUID: String, savedUID: String, ownedUID: String = LDACNativeOutput.uid) -> Bool {
+        currentUID == ownedUID && savedUID != ownedUID
     }
 
     static func canHandoff(currentUID: String, savedUID: String?) -> Bool {
@@ -40,6 +40,7 @@ struct LDACRouteRecovery: Codable, Sendable {
     let defaults: [UInt32: String]
     let controls: LDACNativeVolume
     let selected: Bool
+    var handoffOutputUID: String? = nil
 }
 
 @MainActor
@@ -62,6 +63,7 @@ final class LDACNativeOutput {
     private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     private var renewTask: Task<Void, Never>?
     private var leaseActivity: NSObjectProtocol?
+    private var handoffOutputUID: String?
     private var savedDefaults: [AudioObjectPropertySelector: String] = [:]
     private var expected = LDACNativeVolume(scalar: 0, muted: true)
     private(set) var controls = LDACNativeVolume(scalar: 0, muted: true)
@@ -78,6 +80,21 @@ final class LDACNativeOutput {
     func updateLatency(frames: UInt32) throws {
         guard frames <= UInt32(sampleRateHz * 4) else { throw OutputError("Invalid LDAC presentation latency.") }
         try Self.write(device, selector: 0x786D6C74, value: NSNumber(value: frames) as CFNumber, requiringLease: true)
+    }
+
+    func configureRouting(_ routing: LDACApplicationRouting) throws {
+        guard !isSelected, routing.isValid else { throw OutputError(String(localized: "The application routing settings are invalid.")) }
+        guard routing.isSelective else { handoffOutputUID = nil; return }
+        guard let uid = routing.outputDeviceUID, uid != Self.uid, let output = try Self.resolve(uid), try Self.isAliveOutput(output) else {
+            throw OutputError(String(localized: "Choose an available separate output for applications outside LDAC."))
+        }
+        let transport: UInt32 = try Self.read(output, selector: kAudioDevicePropertyTransportType, initial: 0)
+        let kind: AudioClassID = try Self.read(output, selector: kAudioObjectPropertyClass, initial: 0)
+        guard transport != kAudioDeviceTransportTypeBluetooth, transport != kAudioDeviceTransportTypeBluetoothLE,
+              transport != kAudioDeviceTransportTypeVirtual, kind != kAudioAggregateDeviceClassID else {
+            throw OutputError(String(localized: "Application routing needs a wired, USB, display or built-in output."))
+        }
+        handoffOutputUID = uid
     }
 
     private var handoffSelectors: [AudioObjectPropertySelector] {
@@ -135,6 +152,7 @@ final class LDACNativeOutput {
             savedDefaults = recovering.defaults
             controls = recovering.controls
             isSelected = recovering.selected
+            handoffOutputUID = recovering.handoffOutputUID
         } else {
             for selector in Self.defaultSelectors {
                 let output: AudioObjectID = try Self.read(Self.system, selector: selector, initial: 0)
@@ -250,7 +268,7 @@ final class LDACNativeOutput {
 
     var routeRecovery: LDACRouteRecovery {
         LDACRouteRecovery(address: address, model: model, sampleRate: LDACSampleRate(rawValue: Int(sampleRateHz))!,
-                          defaults: savedDefaults, controls: controls, selected: isSelected)
+                          defaults: savedDefaults, controls: controls, selected: isSelected, handoffOutputUID: handoffOutputUID)
     }
 
     func configure(volume: Int, range: ClosedRange<Int>, preservingUserChange: Bool = false) throws {
@@ -336,8 +354,15 @@ final class LDACNativeOutput {
                 throw OutputError("The Mac audio output changed before LDAC handoff. Retry LDAC.", userFacing: String(localized: "The Mac audio output changed before LDAC started. Try again."))
             }
         }
+        let selectedDevice: AudioObjectID
+        if let handoffOutputUID {
+            guard let output = try Self.resolve(handoffOutputUID), try Self.isAliveOutput(output) else {
+                throw OutputError(String(localized: "The separate application output is no longer available."))
+            }
+            selectedDevice = output
+        } else { selectedDevice = device }
         isSelected = true
-        for selector in handoffSelectors { try Self.write(Self.system, selector: selector, value: device) }
+        for selector in handoffSelectors { try Self.write(Self.system, selector: selector, value: selectedDevice) }
         try verifyRoute()
         record("selected", reason: "silent endpoint selected")
     }
@@ -390,7 +415,7 @@ final class LDACNativeOutput {
                         }
                         let current: AudioObjectID = try Self.read(Self.system, selector: selector, initial: 0)
                         let currentUID = try Self.readString(current, selector: kAudioDevicePropertyDeviceUID)
-                        guard LDACNativeVolume.shouldRestore(currentUID: currentUID, savedUID: savedUID) else {
+                        guard LDACNativeVolume.shouldRestore(currentUID: currentUID, savedUID: savedUID, ownedUID: handoffOutputUID ?? Self.uid) else {
                             record("route-preserved", reason: "selector=\(selector) currentUID=\(currentUID)")
                             break
                         }
@@ -460,7 +485,8 @@ final class LDACNativeOutput {
         if isSelected {
             for selector in handoffSelectors {
                 let current: AudioObjectID = try Self.read(Self.system, selector: selector, initial: 0)
-                guard current == device else { throw OutputError(String(localized: "The Mac audio output changed. LDAC stopped.")) }
+                let currentUID = try Self.readString(current, selector: kAudioDevicePropertyDeviceUID)
+                guard currentUID == (handoffOutputUID ?? Self.uid) else { throw OutputError(String(localized: "The Mac audio output changed. LDAC stopped.")) }
             }
         }
     }

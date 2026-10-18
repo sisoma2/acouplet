@@ -21,7 +21,14 @@ import CoreAudio
 enum LDACState: Equatable { case off, requested, waitingForDevice, connecting, stopping, failed(String) }
 __SUPPORT__
 enum LDACAudioCaptureAccess { case checking, unchecked }
-struct LDACConfiguration: Equatable { var value = 0 }
+__TYPES__
+struct LDACCallAudio {
+    enum Activity { case unknown, active, idle }
+    var activity: Activity = .idle
+    func configure(policy: LDACMicrophonePolicy, externalMicrophoneUID: String?) {}
+    func routeForCall() {}
+    func finishCall() -> Bool { true }
+}
 enum SonyBLEIdentity {
     static func normalizedAddress(_ value: String) -> String? { value }
 }
@@ -155,7 +162,8 @@ final class Controller: ObservableObject {
     var codecPreferences: [String: Bool] = [:]
     var automaticStartAttempts: [ObjectIdentifier: UInt64] = [:]
     let localBluetoothAddress: () -> String? = { IOBluetoothHostController.default()?.addressAsString() }
-    func synchronizeMicrophoneHandoff() -> Bool { true }
+    var isSuspendedForMicrophone = false
+    func checkMicrophone() -> Bool { synchronizeMicrophoneHandoff() }
     struct Helpers { var isAvailable = true }
     var helpers = Helpers()
     var driverState = LDACDriverInstaller.State.current
@@ -218,6 +226,10 @@ final class Controller: ObservableObject {
     var starts: [String] = []
     var restores: [String] = []
     var recoveryRecords: [String] = []
+    var healthAddress: String?
+    var transportHealth = LDACTransportHealth()
+    var runtimeStatus = LDACRuntimeStatus()
+    var callAudio: LDACCallAudio?
     var musicControlStatus: String { "simulated" }
     var defaults: UserDefaults?
     var discoveredSupport: [String: LDACCapabilityRecord] = [:]
@@ -299,6 +311,22 @@ enum LDACControllerCleanupCheck {
     @MainActor
     static func main() async {
         let address = "02:00:00:00:00:01"
+        for policy in [LDACMicrophonePolicy.headset, .external, .manual] {
+            let microphone = Controller()
+            microphone.requestedAddress = address
+            microphone.requestedConfiguration.microphonePolicy = policy
+            microphone.isSessionRunning = true
+            microphone.session = Session()
+            microphone.callAudio = LDACCallAudio(activity: .unknown)
+            precondition(!microphone.checkMicrophone())
+            precondition(microphone.session!.stops == (policy == .external ? [true] : []))
+            microphone.callAudio = LDACCallAudio(activity: .active)
+            precondition(!microphone.checkMicrophone())
+            precondition(microphone.isSuspendedForMicrophone && microphone.session!.stops == [true])
+            microphone.callAudio = LDACCallAudio(activity: .idle)
+            precondition(microphone.checkMicrophone() && !microphone.isSuspendedForMicrophone)
+        }
+        print("PASS actual microphone handoff suspends for headset input and unavailable separate microphones, then admits idle resume")
         let suite = "dev.baglayan.Acouplet.capability-check.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -395,7 +423,7 @@ enum LDACControllerCleanupCheck {
             LDACDriverInstaller.inspections = 0
             LDACDriverInstaller.installations = 0
             LDACDriverInstaller.state = .missing
-            admission.setEnabled(true, forAddress: address, configuration: LDACConfiguration(value: 1))
+            admission.setEnabled(true, forAddress: address, configuration: LDACConfiguration(quality: .quality))
             precondition(LDACDriverInstaller.inspections == 0, "Enable inspected driver for \(name)")
             precondition(admission.starts.isEmpty && admission.requestedAddress == nil && admission.targetAddress == nil)
             precondition(admission.requestedConfiguration == LDACConfiguration() && admission.state == .off)
@@ -818,7 +846,10 @@ enum LDACControllerCleanupCheck {
         print("PASS actual finder admission: active finding and unconfirmed Stop block LDAC; manual driver installation is independent of headphones and preserves busy/driver-state checks")
     }
 }
-'''.replace("__METHODS__", "\n".join(method(name) for name in ["support", "capabilityContext", "recordDiscoveredSupport", "checkSupportAgain", "needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "openDriverInstaller", "setEnabled", "stop", "suspend", "resumeIfReady", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
+'''.replace("__METHODS__", "\n".join(method(name) for name in ["synchronizeMicrophoneHandoff", "sampleRateUnavailableReason", "support", "capabilityContext", "recordDiscoveredSupport", "checkSupportAgain", "needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "openDriverInstaller", "setEnabled", "stop", "suspend", "resumeIfReady", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
+
+native_types = (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift").read_text()
+fixture = fixture.replace("__TYPES__", native_types[native_types.index("struct LDACFormat:"):native_types.index("enum LDACState:")])
 
 fixture = fixture.replace("__SUPPORT__", (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACSupport.swift").read_text())
 

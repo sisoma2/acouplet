@@ -125,7 +125,7 @@ def analyze(session_id, files):
     stream_start = stream_end = None
     target = None
     s = dict(
-        id=session_id[:8], rate=None, bitrate_kbps=None, drain_breaches=0, cascades=0,
+        id=session_id[:8], underruns=0, quality=None, pcm_reserve_ms=None, rate=None, bitrate_kbps=None, drain_breaches=0, cascades=0,
         pacing_breaches=0, pcm_skips=0, skipped_frames=0, pcm_failed=0, lost_percent=[],
         successful=None, connection_lost=0, queue_peak=None, queue_drops=None, max_drain=None,
         other_acl=[], other_a2dp=[], l2cap_in_stream=[], media=False)
@@ -147,6 +147,12 @@ def analyze(session_id, files):
                 match = re.search(r'--sample-rate (\d+)', text)
                 if match and s['rate'] is None:
                     s['rate'] = int(match.group(1))
+                quality = re.search(r'--quality (low|mid|high|auto)\b', text)
+                if quality:
+                    s['quality'] = quality.group(1)
+                reserve = re.search(r'--pcm-reserve-ms ([0-9]{2,3})\b', text)
+                if reserve and 50 <= int(reserve.group(1)) <= 500:
+                    s['pcm_reserve_ms'] = int(reserve.group(1))
             continue
         fields = kv(text)
         if text.split(' ', 2)[:2] in [['media', 'LIVE_SENT'], ['media', 'PCM_ENCODER_RESET'], ['media', 'LIVE_FORMAT']]:
@@ -167,6 +173,8 @@ def analyze(session_id, files):
             s['rate'], s['bitrate_kbps'] = rate, bitrate
             if not bitrate_observations or (rate, bitrate) != bitrate_observations[-1][1:]:
                 bitrate_observations.append((ts, rate, bitrate))
+        elif text.startswith('media PCM_UNDERRUN'):
+            s['underruns'] += 1
         elif text.startswith('media DRAIN_BREACH'):
             s['media'] = True
             s['drain_breaches'] += 1

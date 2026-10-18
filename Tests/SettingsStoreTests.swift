@@ -6,6 +6,55 @@ import XCTest
 final class SettingsStoreTests: XCTestCase {
     #if !ACOUPLET_PUBLIC_APIS_ONLY
     @MainActor
+    func testLDACProfilesMigrateGlobalSettingsAndKeepSuccessfulFixedChoices() throws {
+        let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let initial = SettingsStore(defaults: defaults)
+        initial.ldacConfiguration = LDACConfiguration(sampleRate: .hz44100, quality: .quality)
+        let settings = SettingsStore(defaults: defaults)
+        let first = "AA:BB:CC:DD:EE:01"
+        let second = "AA:BB:CC:DD:EE:02"
+        XCTAssertEqual(settings.ldacProfile(forAddress: first).configuration.quality, .quality)
+        XCTAssertFalse(settings.ldacProfile(forAddress: first).automaticallyEnable)
+        settings.selectLDACDevice(address: first)
+        settings.ldacConfiguration.sampleRate = .hz96000
+        settings.recordLDACSuccess(forAddress: first, configuration: settings.ldacConfiguration)
+        settings.ldacConfiguration.quality = .balanced
+        settings.recordLDACFailure(forAddress: first)
+        settings.recordLDACFailure(forAddress: first)
+        XCTAssertEqual(settings.ldacConfiguration(forAddress: first).quality, .balanced)
+        XCTAssertEqual(settings.ldacProfile(forAddress: first).consecutiveFailures, 2)
+        settings.selectLDACDevice(address: second)
+        XCTAssertEqual(settings.ldacConfiguration.sampleRate, .hz44100)
+        settings.applyLDACPreset(.video, forAddress: second)
+        XCTAssertEqual(settings.ldacConfiguration.bufferProfile, .video)
+        XCTAssertEqual(settings.ldacConfiguration.quality, .adaptive)
+        settings.updateLDACProfile(forAddress: second) { $0.automaticallyEnable = true }
+        let reopened = SettingsStore(defaults: defaults)
+        XCTAssertEqual(reopened.ldacConfiguration(forAddress: first).sampleRate, .hz96000)
+        XCTAssertEqual(reopened.ldacConfiguration(forAddress: second).bufferProfile, .video)
+        XCTAssertTrue(reopened.ldacProfile(forAddress: second).automaticallyEnable)
+        XCTAssertFalse(reopened.ldacProfile(forAddress: first).automaticallyEnable)
+        reopened.useLastSuccessfulLDACConfiguration(forAddress: first)
+        XCTAssertEqual(reopened.ldacConfiguration(forAddress: first).quality, .quality)
+        XCTAssertEqual(reopened.ldacProfile(forAddress: first).consecutiveFailures, 0)
+    }
+
+    @MainActor
+    func testNewDeviceProfileDoesNotInheritAnotherDevicesSettings() throws {
+        let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectLDACDevice(address: "AA:BB:CC:DD:EE:01")
+        settings.ldacConfiguration.sampleRate = .hz96000
+        settings.ldacConfiguration.microphonePolicy = .manual
+        settings.selectLDACDevice(address: "AA:BB:CC:DD:EE:02")
+        XCTAssertEqual(settings.ldacConfiguration, LDACConfiguration())
+    }
+
+    @MainActor
     func testPerDeviceLatencyCalibrationPersistsAndIsBounded() throws {
         let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

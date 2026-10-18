@@ -1,4 +1,6 @@
 #import <Foundation/Foundation.h>
+#import <AppKit/NSRunningApplication.h>
+#include <libproc.h>
 #import <CoreAudio/CoreAudio.h>
 #import <CoreAudio/CATapDescription.h>
 #import <CoreAudio/AudioHardwareTapping.h>
@@ -432,12 +434,83 @@ static BOOL SaveCapture(NSString *path, Capture *capture) {
 }
 #endif
 
+static BOOL BundleSelected(NSString *bundle, NSArray<NSString *> *selected) {
+    if (!bundle.length || [bundle hasPrefix:@"dev.baglayan.Acouplet"]) return NO;
+    for (NSString *identifier in selected)
+        if ([bundle isEqualToString:identifier] || [bundle hasPrefix:[identifier stringByAppendingString:@"."]]) return YES;
+    return NO;
+}
+
+static BOOL ProcessSelected(pid_t pid, NSString *bundle, NSArray<NSString *> *selected) {
+    if (BundleSelected(bundle, selected)) return YES;
+    for (NSUInteger depth = 0; pid > 1 && depth < 16; depth++) {
+        if (BundleSelected([NSRunningApplication runningApplicationWithProcessIdentifier:pid].bundleIdentifier, selected)) return YES;
+        struct proc_bsdinfo information = {0};
+        if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &information, sizeof(information)) != sizeof(information) ||
+            information.pbi_ppid == pid) break;
+        pid = information.pbi_ppid;
+    }
+    return NO;
+}
+
+static NSArray<NSNumber *> *SelectedAudioProcesses(NSArray<NSString *> *selected) {
+    AudioObjectPropertyAddress address = {kAudioHardwarePropertyProcessObjectList,
+        kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, NULL, &size) != noErr ||
+        size > 65536 || size % sizeof(AudioObjectID)) return nil;
+    if (!size) return @[];
+    NSMutableData *storage = [NSMutableData dataWithLength:size];
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, NULL, &size, storage.mutableBytes) != noErr ||
+        size > storage.length || size % sizeof(AudioObjectID)) return nil;
+    AudioObjectID *objects = storage.mutableBytes;
+    NSMutableArray<NSNumber *> *result = [NSMutableArray array];
+    for (UInt32 index = 0; index < size / sizeof(AudioObjectID); index++) {
+        address.mSelector = kAudioProcessPropertyPID;
+        pid_t pid = 0;
+        UInt32 valueSize = sizeof(pid);
+        OSStatus status = AudioObjectGetPropertyData(objects[index], &address, 0, NULL, &valueSize, &pid);
+        if (status == kAudioHardwareBadObjectError) continue;
+        if (status != noErr || valueSize != sizeof(pid) || pid <= 0) return nil;
+        if (pid == getpid()) continue;
+        address.mSelector = kAudioProcessPropertyBundleID;
+        CFStringRef bundle = NULL;
+        valueSize = sizeof(bundle);
+        status = AudioObjectGetPropertyData(objects[index], &address, 0, NULL, &valueSize, &bundle);
+        if (status == kAudioHardwareBadObjectError) continue;
+        if (status != noErr || valueSize != sizeof(bundle)) { if (bundle) CFRelease(bundle); return nil; }
+        NSString *identifier = CFBridgingRelease(bundle);
+        if (ProcessSelected(pid, identifier, selected)) [result addObject:@(objects[index])];
+    }
+    return [result sortedArrayUsingSelector:@selector(compare:)];
+}
+
+static int CheckApplicationRouting(void) {
+    NSArray<NSString *> *selected = @[@"com.apple.Music", @"com.apple.Safari"];
+    assert(BundleSelected(@"com.apple.Music", selected));
+    assert(BundleSelected(@"com.apple.Safari.helper", selected));
+    assert(!BundleSelected(@"com.apple.MusicOther", selected));
+    assert(!BundleSelected(@"dev.baglayan.Acouplet.ldac-audio", @[@"dev.baglayan.Acouplet"]));
+    assert(!BundleSelected(nil, selected));
+    CATapDescription *description = [[CATapDescription alloc] initWithProcesses:@[@11, @12] andDeviceUID:@"fixture-output" withStream:0];
+    description.muteBehavior = CATapMutedWhenTapped;
+    assert(!description.exclusive && description.processes.count == 2 && description.muteBehavior == CATapMutedWhenTapped);
+    description.processes = @[@21];
+    assert([description.processes isEqualToArray:@[@21]]);
+    description.processes = @[];
+    assert(!description.exclusive && !description.processes.count);
+    puts("APP_ROUTING_CHECK passed: explicit inclusion, helper bundle matching, self exclusion and process-list replacement; no taps or devices created.");
+    return 0;
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        if (argc == 2 && strcmp(argv[1], "--check-application-routing") == 0) return CheckApplicationRouting();
         if (argc == 2 && strcmp(argv[1], "--check-stream-ring") == 0) return CheckStreamRing();
         if (argc == 2 && strcmp(argv[1], "--check-stream-rates") == 0) return CheckStreamRates();
         int argumentCount = argc;
         NSString *deviceUID = nil;
+        NSArray<NSString *> *selectedBundles = nil;
         Float64 sampleRate = 48000;
         BOOL selectedRate = NO;
         while (argumentCount >= 3) {
@@ -449,6 +522,14 @@ int main(int argc, const char *argv[]) {
                     fprintf(stderr, "The output device UID must be nonempty and at most 1024 characters.\n");
                     return 2;
                 }
+            } else if (strcmp(option, "--include-bundles") == 0 && !selectedBundles) {
+                NSString *list = [NSString stringWithUTF8String:value];
+                selectedBundles = [list componentsSeparatedByString:@","];
+                NSRegularExpression *syntax = [NSRegularExpression regularExpressionWithPattern:@"^[A-Za-z0-9_.-]+$" options:0 error:NULL];
+                if (!list.length || selectedBundles.count > 32 || [NSSet setWithArray:selectedBundles].count != selectedBundles.count) return 2;
+                for (NSString *bundle in selectedBundles)
+                    if (bundle.length > 255 || [bundle hasPrefix:@"dev.baglayan.Acouplet"] ||
+                        ![syntax firstMatchInString:bundle options:0 range:NSMakeRange(0, bundle.length)]) return 2;
             } else if (strcmp(option, "--sample-rate") == 0 && !selectedRate) {
                 char *end = NULL;
                 long rate = strtol(value, &end, 10);
@@ -473,6 +554,7 @@ int main(int argc, const char *argv[]) {
             fprintf(stderr, "Usage: %s --stream PCM_FD DURATION_SECONDS [--device-uid UID] [--sample-rate N] | --check-permission [--device-uid UID] [--sample-rate N]\n", argv[0]);
             return 2;
         }
+        if (selectedBundles && !deviceUID) return 2;
         int pcmFD = -1;
         double duration = 30;
         if (streaming) {
@@ -531,6 +613,7 @@ int main(int argc, const char *argv[]) {
             BOOL tapListening = NO, aggregateListening = NO;
             AudioObjectPropertyListenerBlock formatListener = nil;
             dispatch_queue_t formatQueue = nil;
+            dispatch_source_t routingTimer = nil;
             Capture capture = {0};
             atomic_init(&capture.failed, 0);
             capture.streaming = streaming;
@@ -563,18 +646,27 @@ int main(int argc, const char *argv[]) {
                     if (!Status(AudioObjectGetPropertyData(selectedDevice, &deviceAddress, 0, NULL,
                         &selectedSize, &nativeRate), "READ_CAPTURE_DEVICE_RATE")) break;
                     printf("CAPTURE_DEVICE_RATE actual=%.9g requested=%.9g\n", nativeRate, sampleRate);
-                    if (nativeRate != sampleRate) {
+                    if (!selectedBundles && nativeRate != sampleRate) {
                         fprintf(stderr, "The selected output device has not committed the requested sample rate.\n");
                         break;
                     }
                 }
-                CATapDescription *description = deviceUID
-                    ? [[CATapDescription alloc] initExcludingProcesses:@[] andDeviceUID:deviceUID withStream:0]
+                NSArray<NSNumber *> *selectedProcesses = selectedBundles ? SelectedAudioProcesses(selectedBundles) : nil;
+                if (selectedBundles && !selectedProcesses) {
+                    fprintf(stderr, "Selected audio processes could not be resolved.\n");
+                    break;
+                }
+                CATapDescription *description = selectedBundles
+                    ? [[CATapDescription alloc] initWithProcesses:selectedProcesses andDeviceUID:deviceUID withStream:0]
+                    : deviceUID ? [[CATapDescription alloc] initExcludingProcesses:@[] andDeviceUID:deviceUID withStream:0]
                     : [[CATapDescription alloc] initStereoGlobalTapButExcludeProcesses:@[]];
                 description.name = streaming ? @"Acouplet Live System Audio" : @"Acouplet Unmuted System Audio";
                 description.privateTap = YES;
                 description.muteBehavior = streaming ? CATapMutedWhenTapped : CATapUnmuted;
-                if (@available(macOS 26.0, *)) description.bundleIDs = @[identifier];
+                if (@available(macOS 26.0, *)) {
+                    description.bundleIDs = selectedBundles ?: @[identifier];
+                    description.processRestoreEnabled = selectedBundles != nil;
+                }
                 printf("START pid=%d excludedBundle=%s duration=%.9g muteBehavior=%s streaming=%d\n",
                        NSProcessInfo.processInfo.processIdentifier, identifier.UTF8String, duration,
                        streaming ? "mutedWhenTapped" : "unmuted", streaming);
@@ -702,7 +794,9 @@ int main(int argc, const char *argv[]) {
                 size = sizeof(ownProcess);
                 if (!Status(AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, sizeof(ownPID),
                                                        &ownPID, &size, &ownProcess), "READ_OWN_PROCESS")) break;
-                if (ownProcess != kAudioObjectUnknown) {
+                if (selectedBundles) {
+                    printf("APP_ROUTING selectedBundles=%lu matchedProcesses=%lu fallbackOutput=1\n", selectedBundles.count, selectedProcesses.count);
+                } else if (ownProcess != kAudioObjectUnknown) {
                     description.processes = @[@(ownProcess)];
                     address.mSelector = kAudioTapPropertyDescription;
                     CATapDescription *updatedDescription = description;
@@ -716,6 +810,30 @@ int main(int argc, const char *argv[]) {
                         fprintf(stderr, "No audio process object for this helper; refusing to start without self exclusion.\n");
                         break;
                     }
+                }
+                if (selectedBundles) {
+                    Capture *routingState = &capture;
+                    routingTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, formatQueue);
+                    if (!routingTimer) break;
+                    dispatch_source_set_timer(routingTimer, dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
+                        500 * NSEC_PER_MSEC, 50 * NSEC_PER_MSEC);
+                    __block NSUInteger failedRoutingReads = 0;
+                    dispatch_source_set_event_handler(routingTimer, ^{
+                        NSArray<NSNumber *> *processes = SelectedAudioProcesses(selectedBundles);
+                        if (!processes) {
+                            if (++failedRoutingReads >= 3) atomic_store(&routingState->failed, 6);
+                            return;
+                        }
+                        failedRoutingReads = 0;
+                        if ([description.processes isEqualToArray:processes]) return;
+                        description.processes = processes;
+                        AudioObjectPropertyAddress update = {kAudioTapPropertyDescription, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+                        CATapDescription *value = description;
+                        if (!Status(AudioObjectSetPropertyData(tap, &update, 0, NULL, sizeof(value), &value), "UPDATE_APP_ROUTING"))
+                            atomic_store(&routingState->failed, 6);
+                        else printf("APP_ROUTING_UPDATE matchedProcesses=%lu\n", processes.count);
+                    });
+                    dispatch_resume(routingTimer);
                 }
                 printf("BEFORE_START_AUDIO monotonic=%.9f\n", MonotonicTime());
                 if (!Status(AudioDeviceStart(aggregate, io), "START_AUDIO")) break;
@@ -755,6 +873,7 @@ int main(int argc, const char *argv[]) {
 #endif
             } while (NO);
             printf("BEFORE_AUDIO_CLEANUP interrupted=%d error=%d\n", interrupted, atomic_load(&capture.failed));
+            if (routingTimer) dispatch_source_cancel(routingTimer);
             if (tapListening) {
                 AudioObjectPropertyAddress address = {kAudioTapPropertyFormat, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
                 BOOL removed = Status(AudioObjectRemovePropertyListenerBlock(tap, &address, formatQueue, formatListener), "UNLISTEN_TAP_FORMAT");

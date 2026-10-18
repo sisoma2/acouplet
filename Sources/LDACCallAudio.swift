@@ -1,4 +1,5 @@
 #if !ACOUPLET_PUBLIC_APIS_ONLY
+import AppKit
 import Combine
 import CoreAudio
 import Foundation
@@ -15,6 +16,7 @@ final class LDACCallAudio: ObservableObject {
         var defaultOutputUID: () throws -> String?
         var headsetOutputUID: (String) throws -> String?
         var selectOutput: (String) throws -> Void
+        var microphoneActivity: (() throws -> [LDACMicrophoneActivity])? = nil
 
         static var live: Access {
             Access(microphoneIsActive: LDACCallHardware.microphoneIsActive,
@@ -24,12 +26,19 @@ final class LDACCallAudio: ObservableObject {
                    defaultOutputUID: { try LDACCallHardware.defaultUID(selector: kAudioHardwarePropertyDefaultOutputDevice) },
                    headsetOutputUID: { try LDACCallHardware.headsetUID(address: $0, scope: kAudioObjectPropertyScopeOutput) },
                    selectOutput: { try LDACCallHardware.select(uid: $0, selector: kAudioHardwarePropertyDefaultOutputDevice,
-                                                              scope: kAudioObjectPropertyScopeOutput) })
+                                                              scope: kAudioObjectPropertyScopeOutput) },
+                   microphoneActivity: LDACCallHardware.microphoneActivity)
         }
     }
 
     @Published private(set) var activity: Activity = .unknown
     @Published private(set) var issue: String?
+    @Published private(set) var microphoneActivities: [LDACMicrophoneActivity] = []
+    private(set) var policy: LDACMicrophonePolicy = .headset
+    private(set) var externalMicrophoneUID: String?
+    private(set) var manualHandoffRequested = false
+    private var savedExternalInputUID: String?
+    private var appliedExternalInputUID: String?
     private let access: Access
     private let now: () -> TimeInterval
     private let pollsAutomatically: Bool
@@ -52,12 +61,34 @@ final class LDACCallAudio: ObservableObject {
         self.now = now
     }
 
+    func configure(policy: LDACMicrophonePolicy, externalMicrophoneUID: String?) {
+        self.policy = policy
+        self.externalMicrophoneUID = externalMicrophoneUID
+    }
+
+    func setManualHandoff(_ requested: Bool) {
+        manualHandoffRequested = requested
+        refresh()
+    }
+
+    private func restoreExternalInput() {
+        if let savedExternalInputUID, let appliedExternalInputUID,
+           (try? access.defaultInputUID()) == appliedExternalInputUID {
+            try? access.selectInput(savedExternalInputUID)
+        }
+        savedExternalInputUID = nil
+        appliedExternalInputUID = nil
+    }
+
     func monitor(address: String?) {
         guard self.address != address else { return }
         pollTask?.cancel()
         pollTask = nil
         if activity == .idle { _ = finishCall() }
+        restoreExternalInput()
         self.address = address
+        manualHandoffRequested = false
+        microphoneActivities = []
         wantsHeadsetInput = false
         inputSelected = false
         savedInputUID = nil
@@ -70,6 +101,19 @@ final class LDACCallAudio: ObservableObject {
         setIssue(nil)
         activity = .unknown
         guard address != nil else { return }
+        if policy == .external, let uid = externalMicrophoneUID {
+            do {
+                let previous = try access.defaultInputUID()
+                if previous != uid {
+                    try access.selectInput(uid)
+                    savedExternalInputUID = previous
+                    appliedExternalInputUID = uid
+                }
+            } catch {
+                setIssue(String(localized: "The selected separate microphone is unavailable. LDAC will wait."))
+                return
+            }
+        }
         refresh()
         guard pollsAutomatically else { return }
         pollTask = Task { [weak self] in
@@ -86,7 +130,24 @@ final class LDACCallAudio: ObservableObject {
         guard address != nil else { return }
         let active: Bool
         do {
-            active = try access.microphoneIsActive()
+            if let observe = access.microphoneActivity {
+                let observations = try observe()
+                if microphoneActivities != observations { microphoneActivities = observations }
+                switch policy {
+                case .headset: active = !observations.isEmpty
+                case .external:
+                    if observations.contains(where: \.isBluetooth) { active = true }
+                    else {
+                        guard let externalMicrophoneUID, try access.defaultInputUID() == externalMicrophoneUID else {
+                            throw LDACMicrophoneError()
+                        }
+                        active = observations.contains { $0.inputUID != externalMicrophoneUID }
+                    }
+                case .manual: active = manualHandoffRequested || observations.contains(where: \.isBluetooth)
+                }
+            } else {
+                active = try access.microphoneIsActive() || manualHandoffRequested
+            }
         } catch {
             idleSince = nil
             setIssue(String(localized: "Microphone activity could not be checked. LDAC will wait until audio monitoring is available."))
@@ -166,12 +227,19 @@ final class LDACCallAudio: ObservableObject {
     }
 }
 
+private struct LDACMicrophoneError: Error {}
+
 enum LDACCallHardware {
     static let system = AudioObjectID(kAudioObjectSystemObject)
 
     static func microphoneIsActive() throws -> Bool {
+        try !microphoneActivity().isEmpty
+    }
+
+    static func microphoneActivity() throws -> [LDACMicrophoneActivity] {
         let processes = try objects(system, selector: kAudioHardwarePropertyProcessObjectList)
         var incomplete = false
+        var result: [LDACMicrophoneActivity] = []
         for process in processes {
             do {
                 let running: UInt32 = try read(process, selector: kAudioProcessPropertyIsRunningInput, initial: 0)
@@ -179,14 +247,39 @@ enum LDACCallHardware {
                 let pid: pid_t = try read(process, selector: kAudioProcessPropertyPID, initial: 0)
                 let bundleID = try string(process, selector: kAudioProcessPropertyBundleID)
                 guard !isAcouplet(pid: pid, bundleID: bundleID) else { continue }
-                let inputs = try objects(process, selector: kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeInput)
-                guard !inputs.isEmpty else { throw HardwareError() }
-                if try containsMicrophone(inputs, channels: { try channelCount($0, scope: kAudioObjectPropertyScopeInput) },
-                                          subdevices: microphoneSubdevices) { return true }
+                var pending = try objects(process, selector: kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeInput)
+                guard !pending.isEmpty else { throw HardwareError() }
+                var visited = Set<AudioObjectID>()
+                while let device = pending.popLast() {
+                    guard visited.insert(device).inserted else { continue }
+                    if let children = try microphoneSubdevices(device) {
+                        pending.append(contentsOf: children)
+                    } else if try channelCount(device, scope: kAudioObjectPropertyScopeInput) > 0 {
+                        let transport: UInt32 = try read(device, selector: kAudioDevicePropertyTransportType, initial: 0)
+                        result.append(.init(processID: pid,
+                            processName: NSRunningApplication(processIdentifier: pid)?.localizedName ?? bundleID ?? String(localized: "Unknown application"),
+                            bundleID: bundleID, inputUID: try string(device, selector: kAudioDevicePropertyDeviceUID),
+                            inputName: try string(device, selector: kAudioObjectPropertyName) ?? String(localized: "Unknown microphone"),
+                            isBluetooth: transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE))
+                    }
+                }
             } catch { incomplete = true }
         }
         guard !incomplete else { throw HardwareError() }
-        return false
+        return result.sorted { $0.processID == $1.processID ? ($0.inputUID ?? "") < ($1.inputUID ?? "") : $0.processID < $1.processID }
+    }
+
+    static func audioDevices(scope: AudioObjectPropertyScope) throws -> [LDACAudioDevice] {
+        try objects(system, selector: kAudioHardwarePropertyDevices).compactMap { device in
+            guard try channelCount(device, scope: scope) > 0,
+                  let uid = try string(device, selector: kAudioDevicePropertyDeviceUID), uid != LDACNativeOutput.uid else { return nil }
+            let alive: UInt32 = try read(device, selector: kAudioDevicePropertyDeviceIsAlive, initial: 0)
+            let transport: UInt32 = try read(device, selector: kAudioDevicePropertyTransportType, initial: 0)
+            let kind: AudioClassID = try read(device, selector: kAudioObjectPropertyClass, initial: 0)
+            guard alive == 1, kind != kAudioAggregateDeviceClassID, transport != kAudioDeviceTransportTypeVirtual else { return nil }
+            return LDACAudioDevice(id: uid, name: try string(device, selector: kAudioObjectPropertyName) ?? uid,
+                isBluetooth: transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE)
+        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     static func isAcouplet(pid: pid_t, bundleID: String?) -> Bool {

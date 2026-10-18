@@ -20,6 +20,7 @@ final class AppEnvironment {
     private var cancellables = Set<AnyCancellable>()
     private var equalizerObservation: AnyCancellable?
     #if !ACOUPLET_PUBLIC_APIS_ONLY
+    private var ldacSuccessTask: Task<Void, Never>?
     private var noiseModeObservers: [ObjectIdentifier: [AnyCancellable]] = [:]
     #endif
 
@@ -36,6 +37,7 @@ final class AppEnvironment {
                               isDriverInspectionEnabled: { [weak settings] in settings?.experimentalLDACEnabled == true },
                               preferredConfiguration: { [weak settings] address in
             guard let settings, settings.experimentalLDACEnabled else { return nil }
+            guard settings.ldacProfile(forAddress: address).automaticallyEnable else { return nil }
             return settings.ldacConfiguration(forAddress: address)
         })
         notifications = SonyNotificationService(settings: settings, devices: devices,
@@ -59,6 +61,27 @@ final class AppEnvironment {
         }
         #endif
         #if !ACOUPLET_PUBLIC_APIS_ONLY
+        settings.$ldacDeviceProfiles.dropFirst()
+            .sink { [weak ldac] _ in
+                Task { @MainActor [weak ldac] in ldac?.refreshPreferredCodec(resetAttempts: true) }
+            }.store(in: &cancellables)
+        ldac.$state.combineLatest(ldac.$targetAddress)
+            .map { state, address -> String? in if case .active = state { address } else { nil } }
+            .removeDuplicates()
+            .sink { [weak self] address in
+                self?.ldacSuccessTask?.cancel()
+                guard let self, let address else { return }
+                let configuration = self.ldac.currentConfiguration
+                self.ldacSuccessTask = Task { [weak self] in
+                    do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                    guard let self, self.ldac.targetAddress == address, case .active = self.ldac.state else { return }
+                    self.settings.recordLDACSuccess(forAddress: address, configuration: configuration)
+                }
+            }.store(in: &cancellables)
+        ldac.$state.sink { [weak ldac, weak settings] state in
+            guard case .failed = state, let address = ldac?.targetAddress else { return }
+            settings?.recordLDACFailure(forAddress: address)
+        }.store(in: &cancellables)
         settings.$experimentalLDACEnabled
             .removeDuplicates()
             .sink { [weak ldac] enabled in
@@ -105,6 +128,9 @@ final class AppEnvironment {
                     controller.earbudFinder?.dismiss()
                 }
                 guard let address, let controller = devices?.controller(for: address) else { return }
+                #if !ACOUPLET_PUBLIC_APIS_ONLY
+                settings?.selectLDACDevice(address: address)
+                #endif
                 self?.equalizerObservation = controller.$equalizer
                     .map(\.settings)
                     .removeDuplicates()

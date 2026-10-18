@@ -41,10 +41,183 @@ enum LDACQuality: String, CaseIterable, Codable, Sendable {
     }
 }
 
+enum LDACMicrophonePolicy: String, Codable, CaseIterable, Sendable {
+    case headset, external, manual
+
+    var displayName: String {
+        switch self {
+        case .headset: String(localized: "Automatic headset call audio")
+        case .external: String(localized: "Keep LDAC with a separate microphone")
+        case .manual: String(localized: "Manual call handoff")
+        }
+    }
+}
+
+enum LDACBufferProfile: String, Codable, CaseIterable, Sendable {
+    case music, video, custom
+
+    var displayName: String {
+        switch self {
+        case .music: String(localized: "Music · 250 ms")
+        case .video: String(localized: "Video · 100 ms (experimental)")
+        case .custom: String(localized: "Custom")
+        }
+    }
+
+    func reserveMilliseconds(custom: Int) -> Int {
+        switch self {
+        case .music: 250
+        case .video: 100
+        case .custom: min(500, max(50, custom))
+        }
+    }
+}
+
+struct LDACApplicationRouting: Codable, Equatable, Sendable {
+    var enabled = false
+    var bundleIDs: [String] = []
+    var outputDeviceUID: String? = nil
+    var isSelective: Bool { enabled }
+
+    var isValid: Bool {
+        bundleIDs.count <= 32 && bundleIDs.reduce(0, { $0 + $1.utf8.count }) <= 4096 && Set(bundleIDs).count == bundleIDs.count && bundleIDs.allSatisfy {
+            !$0.isEmpty && $0.utf8.count <= 255 && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_") }
+                && !$0.hasPrefix("dev.baglayan.Acouplet")
+        } && (!isSelective || !bundleIDs.isEmpty && outputDeviceUID.map { !$0.isEmpty && $0.utf8.count <= 1024 } == true)
+    }
+}
+
+struct LDACDeviceProfile: Codable, Equatable, Sendable {
+    var configuration: LDACConfiguration
+    var automaticallyEnable = false
+    var lastSuccessfulConfiguration: LDACConfiguration? = nil
+    var consecutiveFailures = 0
+}
+
+struct LDACMicrophoneActivity: Equatable, Sendable {
+    let processID: Int32
+    let processName: String
+    let bundleID: String?
+    let inputUID: String?
+    let inputName: String
+    let isBluetooth: Bool
+}
+
+struct LDACAudioDevice: Equatable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let isBluetooth: Bool
+}
+
+struct LDACRuntimeStatus: Codable, Equatable, Sendable {
+    var logAccessVerified = false
+    var ownershipObservationsVerified = false
+    var message: String? = nil
+
+    static func supports(major: Int, minor: Int) -> Bool {
+        (major == 15 && minor >= 4) || (16...27).contains(major)
+    }
+}
+
+struct LDACTransportHealth: Codable, Equatable, Sendable {
+    var underruns = 0
+    var skippedFrames: UInt64 = 0
+    var queuedMilliseconds = 0.0
+    var peakQueuedMilliseconds = 0.0
+    var bufferedFrames: UInt64 = 0
+    var stalls = 0
+    var bitrateTransitions = 0
+    var encoderResets = 0
+    var lastReason: String? = nil
+    var lastUpdated: Foundation.Date? = nil
+
+    mutating func observe(_ line: String, at now: Foundation.Date = Foundation.Date()) -> Bool {
+        let words = line.split(separator: " ")
+        guard let event = words.first else { return false }
+        let fields = Dictionary(words.dropFirst().compactMap { word -> (String, String)? in
+            let parts = word.split(separator: "=", maxSplits: 1)
+            return parts.count == 2 ? (String(parts[0]), String(parts[1])) : nil
+        }, uniquingKeysWith: { _, last in last })
+        func count(_ key: String) -> UInt64? {
+            guard let value = fields[key], let number = UInt64(value), number <= 1_000_000_000_000 else { return nil }
+            return number
+        }
+        func milliseconds(_ key: String) -> Double? {
+            guard let value = fields[key], let number = Double(value), number.isFinite, (0...60000).contains(number) else { return nil }
+            return number
+        }
+        switch event {
+        case "LIVE_PROGRESS":
+            guard let skipped = count("skippedFrames"), let buffered = count("bufferedFrames") else { return false }
+            skippedFrames = max(skippedFrames, skipped)
+            bufferedFrames = buffered
+        case "QUEUE_STATS":
+            guard let peak = milliseconds("peakMs") else { return false }
+            peakQueuedMilliseconds = max(peakQueuedMilliseconds, peak)
+            if let queued = milliseconds("queuedMs") { queuedMilliseconds = queued }
+            if let skipped = count("totalSkippedFrames") { skippedFrames = max(skippedFrames, skipped) }
+        case "PCM_SKIP", "PCM_RECOVERY":
+            if let skipped = count("totalSkippedFrames") { skippedFrames = max(skippedFrames, skipped) }
+        case "PCM_UNDERRUN": underruns = min(1_000_000, underruns + 1)
+        case "PCM_ENCODER_RESET": encoderResets = min(1_000_000, encoderResets + 1)
+        case "DRAIN_BREACH":
+            if fields["first"] == "1" { stalls = min(1_000_000, stalls + 1) }
+        case "DRAIN_LIMIT", "PCM_FAILED", "ENCODER_FAILED": lastReason = String(event)
+        default: return false
+        }
+        lastUpdated = now
+        return true
+    }
+}
+
+struct LDACDiagnosticReport: Codable, Sendable {
+    let appVersion: String
+    let appBuild: String
+    let macOS: String
+    let deviceModel: String
+    let firmware: String?
+    let driverState: String
+    let bundledDriverRevision: Int?
+    let installedDriverRevision: Int?
+    let loadedDriverRevision: Int?
+    let sampleRate: Int
+    let quality: String
+    let pcmReserveMilliseconds: Int
+    let microphonePolicy: String
+    let selectedApplicationCount: Int
+    let health: LDACTransportHealth
+    let runtime: LDACRuntimeStatus
+
+    static func redacted(_ text: String) -> String {
+        var result = String(text.prefix(2048))
+        for pattern in ["(?i)(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}",
+                        "(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                        "/Users/[^/\\s]+", "(?i)(?:uid|address|pid)=[^ \\n]+"] {
+            result = result.replacingOccurrences(of: pattern, with: "[redacted]", options: .regularExpression)
+        }
+        return result
+    }
+}
+
 struct LDACConfiguration: Equatable, Codable, Sendable {
     var sampleRate: LDACSampleRate = .hz48000
     var quality: LDACQuality = .connection
     var latencyOffsetMilliseconds: Int = 0
+    var microphonePolicy: LDACMicrophonePolicy = .headset
+    var externalMicrophoneUID: String? = nil
+    var bufferProfile: LDACBufferProfile = .music
+    var customReserveMilliseconds = 250
+    var routing = LDACApplicationRouting()
+
+    var pcmReserveMilliseconds: Int { bufferProfile.reserveMilliseconds(custom: customReserveMilliseconds) }
+    var pcmReserveFrames: Int { sampleRate.rawValue * pcmReserveMilliseconds / 1000 }
+    var mediaArguments: [String] { helperArguments + ["--pcm-reserve-ms", String(pcmReserveMilliseconds)] }
+
+    var isValid: Bool {
+        routing.isValid && (50...500).contains(customReserveMilliseconds) && (-500...500).contains(latencyOffsetMilliseconds)
+            && (externalMicrophoneUID?.utf8.count ?? 0) <= 1024
+            && (try? JSONEncoder().encode(self).count).map { $0 <= 6000 } == true
+    }
 
     init(sampleRate: LDACSampleRate = .hz48000, quality: LDACQuality = .connection, latencyOffsetMilliseconds: Int = 0) {
         self.sampleRate = sampleRate
@@ -52,13 +225,21 @@ struct LDACConfiguration: Equatable, Codable, Sendable {
         self.latencyOffsetMilliseconds = min(500, max(-500, latencyOffsetMilliseconds))
     }
 
-    private enum CodingKeys: String, CodingKey { case sampleRate, quality, latencyOffsetMilliseconds }
+    private enum CodingKeys: String, CodingKey {
+        case sampleRate, quality, latencyOffsetMilliseconds, microphonePolicy, externalMicrophoneUID, bufferProfile, customReserveMilliseconds, routing
+    }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         self.init(sampleRate: try values.decode(LDACSampleRate.self, forKey: .sampleRate),
             quality: try values.decode(LDACQuality.self, forKey: .quality),
             latencyOffsetMilliseconds: try values.decodeIfPresent(Int.self, forKey: .latencyOffsetMilliseconds) ?? 0)
+        microphonePolicy = try values.decodeIfPresent(LDACMicrophonePolicy.self, forKey: .microphonePolicy) ?? .headset
+        externalMicrophoneUID = try values.decodeIfPresent(String.self, forKey: .externalMicrophoneUID)
+        bufferProfile = try values.decodeIfPresent(LDACBufferProfile.self, forKey: .bufferProfile) ?? .music
+        customReserveMilliseconds = min(500, max(50, try values.decodeIfPresent(Int.self, forKey: .customReserveMilliseconds) ?? 250))
+        routing = try values.decodeIfPresent(LDACApplicationRouting.self, forKey: .routing) ?? .init()
+        guard isValid else { throw DecodingError.dataCorruptedError(forKey: .routing, in: values, debugDescription: "Invalid application routing") }
     }
 
     var bitrateKbps: Int {
@@ -85,7 +266,7 @@ struct LDACPipelineLatency: Equatable, Sendable {
 
     init(configuration: LDACConfiguration) {
         rate = configuration.sampleRate.rawValue
-        reserveFrames = rate / 4
+        reserveFrames = configuration.pcmReserveFrames
         frameBytes = (3 - configuration.quality.encoderMode) * 110
         offsetMilliseconds = configuration.latencyOffsetMilliseconds
     }
@@ -124,6 +305,15 @@ enum LDACAudioCaptureAccess: Equatable, Codable, Sendable {
     case checking
     case ready
     case permissionRequired
+
+    var displayName: String {
+        switch self {
+        case .unchecked: String(localized: "Not checked")
+        case .checking: String(localized: "Checking permission…")
+        case .ready: String(localized: "Verified")
+        case .permissionRequired: String(localized: "Permission required")
+        }
+    }
 
     static var permissionGuidance: String {
         String(localized: "Allow system audio recording for Acouplet and Acouplet Audio in System Settings, then retry LDAC.")
@@ -194,6 +384,9 @@ final class LDACNativeSession: @unchecked Sendable {
         case active(LDACFormat)
         case formatChanged(LDACFormat)
         case latencyFrames(UInt32)
+        case health(LDACTransportHealth)
+        case compatibility(LDACRuntimeStatus)
+        case capabilities(UInt8, UInt8)
         case gainApplied(Double)
         case ldacEndpoint(Bool)
         case audioCaptureAccess(LDACAudioCaptureAccess)
@@ -218,6 +411,9 @@ final class LDACNativeSession: @unchecked Sendable {
     private let helpers: Helpers
     private let configuration: LDACConfiguration
     private var pipelineLatency: LDACPipelineLatency
+    private var transportHealth = LDACTransportHealth()
+    private var runtimeStatus = LDACRuntimeStatus()
+    private var nextHealthUpdate = DispatchTime(uptimeNanoseconds: 0)
     private let outputDeviceUID: String?
     private let priority: LDACPriorityControl?
     private let receive: @MainActor @Sendable (Event) -> Void
@@ -432,6 +628,13 @@ final class LDACNativeSession: @unchecked Sendable {
                 if priority == nil {
                     record("PRIORITY_SKIPPED disabledByDefaults=\(LDACPlaybackPriority.isDisabled() ? 1 : 0) key=\(LDACPlaybackPriority.disabledKey)")
                 }
+                let operatingSystem = ProcessInfo.processInfo.operatingSystemVersion
+                guard LDACRuntimeStatus.supports(major: operatingSystem.majorVersion, minor: operatingSystem.minorVersion) else {
+                    let message = String(localized: "This macOS version has not been qualified for LDAC Bluetooth ownership checks.")
+                    runtimeStatus.message = message
+                    emit(.compatibility(runtimeStatus))
+                    throw LDACSessionError(message)
+                }
                 try launch("preflight", executable: helpers.capture, arguments: ["--check-permission"] + captureDeviceArguments)
                 deadline = DispatchTime.now() + 90
             }
@@ -489,7 +692,10 @@ final class LDACNativeSession: @unchecked Sendable {
     }
 
     private var captureDeviceArguments: [String] {
-        ["--sample-rate", String(configuration.sampleRate.rawValue)] + (outputDeviceUID.map { ["--device-uid", $0] } ?? [])
+        let routing = configuration.routing
+        let uid = routing.isSelective ? routing.outputDeviceUID : outputDeviceUID
+        return ["--sample-rate", String(configuration.sampleRate.rawValue)] + (uid.map { ["--device-uid", $0] } ?? [])
+            + (routing.isSelective ? ["--include-bundles", routing.bundleIDs.joined(separator: ",")] : [])
     }
 
     private var shouldStop: Bool {
@@ -544,6 +750,8 @@ final class LDACNativeSession: @unchecked Sendable {
             }
         } else if source == "daemon" {
             if line.contains("Must be admin to run 'stream' command") {
+                runtimeStatus.message = String(localized: "LDAC requires a macOS administrator account.")
+                emit(.compatibility(runtimeStatus))
                 failForUser(String(localized: "LDAC requires a macOS administrator account."))
                 return
             }
@@ -560,10 +768,8 @@ final class LDACNativeSession: @unchecked Sendable {
             }
             if !loggerReady && (line.hasPrefix("Filtering the log data") || line.hasPrefix("Timestamp")) {
                 loggerReady = true
-                if !shouldStop {
-                    try launch("disconnect", executable: helpers.connection, arguments: ["--address", address, "--disconnect"])
-                    deadline = DispatchTime.now() + 45
-                }
+                runtimeStatus.logAccessVerified = true
+                emit(.compatibility(runtimeStatus))
             }
             if connected, !ownedACLEnded, children["restore-disconnect"] == nil,
                LDACChannelGate.captures("ACL (?:dis)?connected: \(LDACChannelGate.addressPattern(address)),", line) != nil {
@@ -650,8 +856,12 @@ final class LDACNativeSession: @unchecked Sendable {
                LDACChannelGate.captures("^NO_PLAYBACK realCID=0000 owned=(?:0x0|\\(nil\\)) openExpired=0 openError=(-?[0-9]+)$", line) != nil {
                 failStartup("Bluetooth could not open the LDAC audio connection. Try LDAC again.")
             } else if line.hasPrefix("LDAC SEID=") {
+                if !sawLDACEndpoint { emit(.ldacEndpoint(true)) }
                 sawLDACEndpoint = true
-                emit(.ldacEndpoint(true))
+                if let values = LDACChannelGate.captures("^LDAC SEID=[0-9]+ rates=([0-9a-f]{2}) modes=([0-9a-f]{2}) supportsStereo=[01]$", line),
+                   let rates = UInt8(values[0], radix: 16), let modes = UInt8(values[1], radix: 16) {
+                    emit(.capabilities(rates, modes))
+                }
             } else if line == "LDAC_UNAVAILABLE rate=\(configuration.sampleRate.rawValue) channels=2" && !shouldStop {
                 // Unavailable at the requested rate is not the same as no endpoint: only the second rules LDAC out.
                 if !sawLDACEndpoint { emit(.ldacEndpoint(false)) }
@@ -662,7 +872,7 @@ final class LDACNativeSession: @unchecked Sendable {
                 guard pipe(&descriptors) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
                 pcmRead = descriptors[0]
                 pcmWrite = descriptors[1]
-                try launch("media", executable: helpers.media, arguments: ["--media", "--pcm-fd", "3", "--address", address] + configuration.helperArguments, pcm: pcmRead)
+                try launch("media", executable: helpers.media, arguments: ["--media", "--pcm-fd", "3", "--address", address] + configuration.mediaArguments, pcm: pcmRead)
                 Darwin.close(pcmRead)
                 pcmRead = -1
             } else if line.hasPrefix("OPEN_ACCEPTED") && !shouldStop {
@@ -688,6 +898,10 @@ final class LDACNativeSession: @unchecked Sendable {
                 waitingSignalingClosed = true
             }
         } else if source == "media" {
+            if transportHealth.observe(line), DispatchTime.now() >= nextHealthUpdate {
+                emit(.health(transportHealth))
+                nextHealthUpdate = DispatchTime.now() + 1
+            }
             if line == "PCM_STOP_READY started=0", mediaStopSent, !started, shouldStop { mediaStopReady = true }
             if line == "MEDIA_PREPARED" { mediaPrepared = true }
             if line.hasPrefix("READY ") {
@@ -703,7 +917,7 @@ final class LDACNativeSession: @unchecked Sendable {
                 pipelineLatency.mtu = mtu
                 emit(.latencyFrames(pipelineLatency.frames))
             } else if line.hasPrefix("PCM_READY ") {
-                let prefill = configuration.sampleRate.rawValue / 4
+                let prefill = configuration.pcmReserveFrames
                 let capacity = (configuration.sampleRate.rawValue + 127) / 128 * 128
                 guard !pcmReady,
                       let values = LDACChannelGate.captures("^PCM_READY frames=\(prefill) rate=\(configuration.sampleRate.rawValue) channels=2 format=F32(?: bufferedFrames=([0-9]+))?$", line),
@@ -713,7 +927,7 @@ final class LDACNativeSession: @unchecked Sendable {
                 pcmReady = true
             } else if line.hasPrefix("LIVE_BEGIN ") {
                 if let values = LDACChannelGate.captures("\\breserveFrames=([0-9]+)$", line),
-                   let frames = Int(values[0]), (configuration.sampleRate.rawValue / 4...(configuration.sampleRate.rawValue + 127) / 128 * 128).contains(frames) {
+                   let frames = Int(values[0]), (configuration.pcmReserveFrames...(configuration.sampleRate.rawValue + 127) / 128 * 128).contains(frames) {
                     pipelineLatency.reserveFrames = frames
                     emit(.latencyFrames(pipelineLatency.frames))
                 }
@@ -726,6 +940,8 @@ final class LDACNativeSession: @unchecked Sendable {
                     throw LDACSessionError("Live LDAC transmission was reported outside its owned channel lifetime.")
                 }
                 active = true
+                runtimeStatus.ownershipObservationsVerified = true
+                emit(.compatibility(runtimeStatus))
                 deadline = .distantFuture
                 if !shouldStop { emit(.active(configuration.format)) }
             } else if line.hasPrefix("LIVE_FORMAT ") {
@@ -736,6 +952,9 @@ final class LDACNativeSession: @unchecked Sendable {
                       let bitrate = Int(values[0]), let frameBytes = Int(values[1]),
                       (49...330).contains(frameBytes), bitrate == frameBytes * 8 * rate / frameSamples / 1000 else {
                     throw LDACSessionError(String(localized: "LDAC reported an invalid audio format."))
+                }
+                if pipelineLatency.frameBytes != frameBytes {
+                    transportHealth.bitrateTransitions = min(1_000_000, transportHealth.bitrateTransitions + 1)
                 }
                 pipelineLatency.frameBytes = frameBytes
                 if !shouldStop { emit(.latencyFrames(pipelineLatency.frames)) }
@@ -856,19 +1075,22 @@ final class LDACNativeSession: @unchecked Sendable {
             deadline = DispatchTime.now() + 10
         }
         if preflightCompleted, children["daemon"] == nil, !shouldStop {
-            lock.lock()
-            let allowed = handoffAllowed || outputDeviceUID == nil
-            lock.unlock()
-            if !allowed {
-                if !handoffRequested { handoffRequested = true; emit(.handoffReady) }
-                if DispatchTime.now() >= deadline { throw LDACSessionError("The silent LDAC output could not be selected before Bluetooth handoff.") }
-                return
-            }
             try launch("daemon", executable: helpers.logger, arguments: [
-                "stream", "--style", "syslog", "--level", "info", "--predicate",
-                Self.daemonPredicate
+                "stream", "--style", "syslog", "--level", "info", "--predicate", Self.daemonPredicate
             ])
             deadline = DispatchTime.now() + 5
+        }
+        if loggerReady, children["disconnect"] == nil, !shouldStop {
+            let allowed = lock.withLock { handoffAllowed || outputDeviceUID == nil }
+            if !allowed {
+                if !handoffRequested { handoffRequested = true; emit(.handoffReady) }
+                if DispatchTime.now() >= deadline {
+                    throw LDACSessionError("The silent LDAC output could not be selected before Bluetooth handoff.")
+                }
+                return
+            }
+            try launch("disconnect", executable: helpers.connection, arguments: ["--address", address, "--disconnect"])
+            deadline = DispatchTime.now() + 45
         }
         if children["daemon"]?.outputEnded == true && !daemonLost {
             daemonLost = true
@@ -1335,6 +1557,7 @@ final class LDACNativeSession: @unchecked Sendable {
         } else {
             publicMessage = capturePermissionFailure ?? publicFailureMessage ?? String(localized: "The connection to the headphones was lost.")
         }
+        emit(.health(transportHealth))
         emit(.finished(Completion(message: publicMessage, canRetry: safe,
                                   requiresAttention: requiresAttention && !cancelledStartup,
                                   targetDisconnected: (originalConnectionEnded || restoreDisconnected || ownedACLEnded) && !nativeAudioRestored,

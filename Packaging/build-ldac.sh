@@ -57,7 +57,7 @@ for ldac_language in en tr; do
 done
 "$ldac_clang" $ldac_arch_flags -isysroot "$ldac_sdk" -mmacosx-version-min=15.4 -O2 -fobjc-arc -fblocks \
     -DACOUPLET_AUDIO_HELPER_BUNDLE_ID='"dev.baglayan.Acouplet.ldac-audio"' -DACOUPLET_AUDIO_HELPER_STREAM_ONLY=1 \
-    -framework Foundation -framework CoreFoundation -framework CoreAudio -framework AudioToolbox \
+    -framework Foundation -framework AppKit -framework CoreFoundation -framework CoreAudio -framework AudioToolbox \
     "$ldac_source/SystemAudioTapRunLoopProbe.m" -o "$ldac_audio/Contents/MacOS/AcoupletAudio"
 if [ "${CODE_SIGNING_ALLOWED:-NO}" != NO ]; then
     /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" --options runtime --timestamp=none "$ldac_audio"

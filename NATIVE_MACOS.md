@@ -144,3 +144,132 @@ as partial. No bitrate is inferred for time before the first available observati
 `Packaging/check-ldac-session-stats.py` replays synthetic promotions, demotions,
 malformed events, encoder resets, rotations and partial logs. These checks and the
 native property/parser checks run through `Packaging/check-all.py`.
+
+## LDAC device profiles and call policies
+
+General > Experimental Features > LDAC device profile stores the rate, quality,
+latency calibration, buffer reserve, microphone policy and application selection
+for each Bluetooth device. Existing global rate/quality settings and per-device
+latency offsets supply the migration fallback. Automatic activation is off for a
+new profile. Enabling it still requires the headphones to be the selected Mac
+output, verified local source ownership and a current driver. Manual Off persists
+its suppression across reconnects; another multipoint source taking ownership
+also suppresses automatic activation until the user explicitly enables LDAC.
+
+A configuration becomes the last successful configuration after 30 seconds of
+active playback. After two failed attempts, Settings offers an explicit restore
+button. A fixed quality choice is never replaced automatically. Music and Video
+presets select 48 kHz adaptive quality with 250 ms and 100 ms reserves respectively.
+Custom preserves explicit settings and permits a 50–500 ms reserve. Video and
+Custom remain experimental: offline checks validate frame scaling and protocol
+readiness, not audible resilience. Neither a smaller sender reserve nor a manual
+offset removes receiver buffering.
+
+The default microphone policy restores normal headset call audio for microphone
+activity. Separate microphone mode selects a chosen built-in or USB input and keeps
+LDAC only when that input is appropriate; headset microphone use still requires
+handoff. Manual mode exposes explicit pause/resume controls while preserving headset
+handoff if a headset input is used. The menu identifies the process and microphone
+currently in use. Input changes made by the user are preserved during restoration.
+Qualify microphone availability, app restarts and echo cancellation in actual call
+applications before relying on separate-microphone mode. LDAC provides no microphone
+return channel.
+
+## Application routing and diagnostics
+
+Application selection requires a separate wired, USB, display or built-in output.
+During handoff the owner selects that output for ordinary applications. A private,
+muted-when-tapped process inclusion tap captures only selected applications there;
+the selected mix is converted to the negotiated LDAC rate. Excluded applications
+remain audible on the separate output. Selected applications must use System Default
+output; application-specific hardware choices are not overridden. An enabled empty
+selection is invalid and never becomes a global tap.
+
+The capture helper resolves audio process objects from selected bundle IDs, helper
+bundle prefixes and process ancestry. It updates the inclusion list every 500 ms,
+including application and browser helper restarts; macOS 26+ also supplies native
+bundle restoration. Three consecutive failed inventory reads stop capture rather
+than broadening it. The helper never includes its own audio process. Shutdown
+quiesces the routing updater before destroying the tap, which unmutes selected
+applications. Route recovery includes the owned separate output so both normal
+Stop and owner death preserve later manual route choices. Hardware scenarios must
+verify browsers, permission denial, process churn and excluded-app audibility.
+
+The transport health panel reports PCM underruns, skipped frames, local transport
+stalls, queue duration/peak and bitrate or encoder transitions. Owner messages are
+bounded and health publication is throttled to at most once per second during
+playback, with a final snapshot at completion. Socket drain and queue observations
+are local observations; they do not measure receiver delivery or radio packet loss.
+Export LDAC report writes a user-selected JSON file containing versions, the model,
+firmware, driver revisions, configuration scalars and structured health. It excludes
+recorded audio, raw signaling, process IDs, selected application IDs and device UIDs;
+free-form recovery reasons redact addresses, UUIDs, process IDs and user paths.
+
+Setup and compatibility combines bundled/installed/loaded driver revisions, restart
+state, capture access, controller readiness, Sound Quality, advertised stereo rates,
+model-specific multipoint restrictions and runtime ownership checks. Reading this
+view is passive. Explicit support rediscovery uses the existing guarded playback
+sequence and can interrupt ordinary audio. Bluetooth log access must be established
+before selecting the handoff output; unique signaling/media ownership evidence is
+still required before transmission. Unknown future OS versions fail preflight.
+
+Standard-account playback remains a research milestone. Removing log access or
+running an always-root playback owner is not implemented as a workaround. A future
+replacement must demonstrate callback-derived ACL identity and unique channel
+ownership across stale handles, reconnects, competing sources and abrupt exits;
+until that evidence exists the current administrator/log guards stay in place.
+
+## Hardware qualification matrix
+
+Prepare a fresh opt-in matrix for each model, firmware and macOS build:
+
+```sh
+python3 Packaging/qualify-ldac.py prepare /private/tmp/ldac-hardware.json \
+  --model WH-1000XM5 --firmware YOUR_FIRMWARE --minutes 10
+```
+
+The 48 scenarios cover all sixteen rate/quality combinations with both Music and
+Video buffers, plus sleep/wake, headset power cycles, abrupt owner exit, competing
+sources, built-in/USB/headset microphones, manual call handoff, explicit output
+changes, manual Off, application restarts, browser helpers, excluded applications,
+permission denial, WH-XM4 multipoint restrictions and video synchronization. Do not
+run destructive scenario steps during a call or while other work needs audio.
+The recorder does not operate Bluetooth or audio; a tester performs each scenario
+explicitly and records audible quality, echo behavior and final output/input routes.
+
+After a scenario, stop LDAC and record its session directory:
+
+```sh
+python3 Packaging/qualify-ldac.py record /private/tmp/ldac-hardware.json --hardware \
+  --case music-48000-low --session '/path/to/LDAC Sessions/SESSION_UUID' \
+  --result pass --recovery-seconds 0 --routes-restored yes \
+  --notes 'Ten minutes of listening; no audible defects; original input/output restored.'
+```
+
+The recorder retains observed duration, underruns, transport stalls, skipped frames,
+bitrate timeline, recovery time and route outcome. Sustained-playback passes require
+a matching rate, quality and reserve, the full requested duration and no aborted
+session. Capture the original and final routes in the notes, including intentional
+manual changes; use `manual-choice-preserved` for that route outcome. A pass is a
+manual listening observation, not an automatic sound-quality certification. Keep
+WH-1000XM4 and newer models independent, and repeat on each supported macOS build.
+The matrix and deterministic replay checks are included in the offline test runner;
+no hardware scenarios execute automatically.
+
+## Roadmap validation on macOS 26.7.1
+
+The implementation passed 72 focused XCTest cases covering LDAC support, call
+policies, settings and the HUD timeout regression, plus app/helper builds,
+English/Turkish localization, bundle validation and native offline self-checks.
+All 20 packaging/driver suites and the LDAC fixture suites passed, including
+controller mutations, session closure,
+owner lifecycle/exit, physical fallback routing and restoration, and all
+rate/quality/buffer latency combinations. The hardware matrix recorder also accepts
+permission-denied scenarios without media and rejects a pass with unrestored routes.
+
+The full XCTest run reported 1,224 passes and 10 failures: four Intents crashes,
+five preference-pane failures in tests requiring macOS 27, and one HUD subprocess
+timeout test that passed when rerun separately. Those tests and their production
+components were unchanged by the LDAC roadmap implementation. The full suite is
+therefore not green on this macOS 26.7.1 machine. No hardware playback, video sync,
+microphone echo or RF qualification is claimed by these checks.

@@ -76,6 +76,91 @@ final class LDACSupportTests: XCTestCase {
     }
 
     #if !ACOUPLET_PUBLIC_APIS_ONLY
+    func testBufferProfilesScaleLatencyAndPreserveConfigurationDefaults() throws {
+        for rate in LDACSampleRate.allCases {
+            for quality in LDACQuality.allCases {
+                for profile in LDACBufferProfile.allCases {
+                    var configuration = LDACConfiguration(sampleRate: rate, quality: quality)
+                    configuration.bufferProfile = profile
+                    configuration.customReserveMilliseconds = 400
+                    let milliseconds = profile == .music ? 250 : profile == .video ? 100 : 400
+                    XCTAssertEqual(configuration.pcmReserveFrames, rate.rawValue * milliseconds / 1000)
+                    XCTAssertEqual(LDACPipelineLatency(configuration: configuration).reserveFrames, configuration.pcmReserveFrames)
+                    XCTAssertEqual(configuration.mediaArguments.suffix(2), ["--pcm-reserve-ms", String(milliseconds)])
+                    XCTAssertEqual(try JSONDecoder().decode(LDACConfiguration.self, from: JSONEncoder().encode(configuration)), configuration)
+                }
+            }
+        }
+        XCTAssertEqual(LDACBufferProfile.custom.reserveMilliseconds(custom: -1), 50)
+        XCTAssertEqual(LDACBufferProfile.custom.reserveMilliseconds(custom: 900), 500)
+        let configuration = try JSONDecoder().decode(LDACConfiguration.self, from: Data(#"{"sampleRate":48000,"quality":"low"}"#.utf8))
+        XCTAssertEqual(configuration.microphonePolicy, .headset)
+        XCTAssertEqual(configuration.bufferProfile, .music)
+        XCTAssertFalse(configuration.routing.isSelective)
+    }
+
+    func testApplicationRoutingCannotFallBackToSystemCaptureWhenSelectionIsEmpty() throws {
+        var routing = LDACApplicationRouting()
+        XCTAssertTrue(routing.isValid)
+        routing.enabled = true
+        XCTAssertFalse(routing.isValid)
+        routing.outputDeviceUID = "built-in-output"
+        XCTAssertFalse(routing.isValid)
+        routing.bundleIDs = ["com.apple.Music", "com.apple.Safari"]
+        XCTAssertTrue(routing.isValid)
+        routing.bundleIDs.append("com.apple.Music")
+        XCTAssertFalse(routing.isValid)
+        routing.bundleIDs = ["dev.baglayan.Acouplet.ldac-audio"]
+        XCTAssertFalse(routing.isValid)
+        routing.bundleIDs = ["com.test.\ninvalid"]
+        XCTAssertFalse(routing.isValid)
+        routing.bundleIDs = (0..<33).map { "com.test.application\($0)" }
+        XCTAssertFalse(routing.isValid)
+        var configuration = LDACConfiguration()
+        configuration.routing = routing
+        XCTAssertThrowsError(try JSONDecoder().decode(LDACConfiguration.self, from: JSONEncoder().encode(configuration)))
+    }
+
+    func testTransportHealthRejectsMalformedMetricsAndExportsRedactedIdentifiers() {
+        var health = LDACTransportHealth()
+        XCTAssertTrue(health.observe("LIVE_PROGRESS skippedFrames=128 bufferedFrames=12000"))
+        XCTAssertTrue(health.observe("QUEUE_STATS peakMs=40 queuedMs=12 totalSkippedFrames=256"))
+        XCTAssertTrue(health.observe("DRAIN_BREACH first=1"))
+        XCTAssertTrue(health.observe("DRAIN_BREACH first=0"))
+        XCTAssertTrue(health.observe("PCM_UNDERRUN bufferedFrames=0"))
+        XCTAssertEqual(health.skippedFrames, 256)
+        XCTAssertEqual(health.queuedMilliseconds, 12)
+        XCTAssertEqual(health.peakQueuedMilliseconds, 40)
+        XCTAssertEqual(health.stalls, 1)
+        XCTAssertEqual(health.underruns, 1)
+        let previous = health
+        for malformed in ["LIVE_PROGRESS skippedFrames=-1 bufferedFrames=0", "QUEUE_STATS peakMs=nan queuedMs=inf",
+                          "LIVE_PROGRESS skippedFrames=18446744073709551615 bufferedFrames=0", "QUEUE_STATS peakMs=999999999"] {
+            XCTAssertFalse(health.observe(malformed))
+            XCTAssertEqual(health, previous)
+        }
+        let redacted = LDACDiagnosticReport.redacted("address=AA:BB:CC:DD:EE:FF pid=123 uid=secret /Users/sarah/data 12345678-1234-1234-1234-123456789abc")
+        for secret in ["AA:BB", "pid=123", "uid=secret", "sarah", "12345678-1234"] { XCTAssertFalse(redacted.contains(secret)) }
+        XCTAssertTrue(LDACRuntimeStatus.supports(major: 15, minor: 4))
+        XCTAssertFalse(LDACRuntimeStatus.supports(major: 15, minor: 3))
+        XCTAssertTrue(LDACRuntimeStatus.supports(major: 27, minor: 2))
+        XCTAssertFalse(LDACRuntimeStatus.supports(major: 28, minor: 0))
+    }
+
+    func testAdvertisedRatesAndChannelMasksAreUsedForAdmission() throws {
+        let context = LDACCapabilityContext()
+        let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = LDACSupportStore(defaults: defaults)
+        store.recordCapabilities(rates: 0x10, channels: 1, forAddress: "AA-BB-CC-DD-EE-01", context: context)
+        let record = try XCTUnwrap(store.all["AA:BB:CC:DD:EE:01"])
+        XCTAssertEqual(record.supports(sampleRate: 48000), true)
+        XCTAssertEqual(record.supports(sampleRate: 44100), false)
+        store.recordCapabilities(rates: 0x20, channels: 1, forAddress: "AA-BB-CC-DD-EE-01", context: context)
+        XCTAssertEqual(store.all["AA:BB:CC:DD:EE:01"]?.supports(sampleRate: 44100), true)
+    }
+
     func testPipelineLatencyAcrossEveryRateAndQuality() throws {
         for rate in LDACSampleRate.allCases {
             for quality in LDACQuality.allCases {

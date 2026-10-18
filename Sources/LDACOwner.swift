@@ -7,6 +7,7 @@ private enum LDACOwnerCommand: Codable, Sendable {
     case claim(UUID, String, String, LDACSampleRate)
     case cancelStart
     case configure(Int, ClosedRange<Int>, Bool)
+    case routing(LDACApplicationRouting)
     case priority
     case handoff
     case validate
@@ -282,6 +283,7 @@ final class LDACOwnerOutput {
         try await request(.configure(volume, range, preservingUserChange))
     }
 
+    func configureRouting(_ routing: LDACApplicationRouting) async throws { try await request(.routing(routing)) }
     func priorityControl() async throws { try await request(.priority) }
     func selectForHandoff() async throws { try await request(.handoff) }
     func validateForRecovery() async throws { try await request(.validate) }
@@ -507,12 +509,13 @@ enum LDACOwnerWorker {
                     return
                 case .cancelStart: startCancelled = true; claimTask?.cancel()
                 case let .configure(volume, range, preserve): try output?.configure(volume: volume, range: range, preservingUserChange: preserve)
+                case let .routing(routing): try output?.configureRouting(routing)
                 case .priority: priority = try LDACPlaybackPriority.control { try output?.priorityControl() }
                 case .handoff:
                     if let output {
                         let state = output.routeRecovery
                         send(.recovery(.init(address: state.address, model: state.model, sampleRate: state.sampleRate,
-                            defaults: state.defaults, controls: state.controls, selected: true)))
+                            defaults: state.defaults, controls: state.controls, selected: true, handoffOutputUID: state.handoffOutputUID)))
                         try output.selectForHandoff()
                     }
                 case .validate: try output?.validateForRecovery()

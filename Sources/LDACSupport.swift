@@ -31,6 +31,21 @@ struct LDACCapabilityRecord: Codable, Equatable, Sendable {
     let supported: Bool
     let observedAt: Date
     let context: LDACCapabilityContext
+    var rateMask: UInt8? = nil
+    var channelMask: UInt8? = nil
+
+    func supports(sampleRate: Int) -> Bool? {
+        guard let rateMask, let channelMask else { return nil }
+        let bit: UInt8
+        switch sampleRate {
+        case 44100: bit = 0x20
+        case 48000: bit = 0x10
+        case 88200: bit = 0x08
+        case 96000: bit = 0x04
+        default: return false
+        }
+        return rateMask & bit != 0 && channelMask & 1 != 0
+    }
 
     func observation(in current: LDACCapabilityContext, now: Date = Date()) -> Bool? {
         guard context == current, now >= observedAt,
@@ -64,6 +79,17 @@ struct LDACSupportStore {
     func record(_ supported: Bool, forAddress address: String, context: LDACCapabilityContext = .init(), now: Date = Date()) {
         var values = all
         values[normalized(address)] = LDACCapabilityRecord(supported: supported, observedAt: now, context: context)
+        persist(values)
+    }
+
+    func recordCapabilities(rates: UInt8, channels: UInt8, forAddress address: String, context: LDACCapabilityContext) {
+        var values = all
+        let key = normalized(address)
+        let previous = values[key]
+        let matching = previous?.context == context
+        values[key] = LDACCapabilityRecord(supported: true, observedAt: Date(), context: context,
+            rateMask: (matching ? previous?.rateMask ?? 0 : 0) | (channels & 1 != 0 ? rates : 0),
+            channelMask: (matching ? previous?.channelMask ?? 0 : 0) | channels)
         persist(values)
     }
 

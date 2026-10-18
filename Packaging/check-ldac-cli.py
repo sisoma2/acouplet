@@ -37,7 +37,7 @@ for binary, markers in [
     contents = binary.read_bytes()
     for marker in markers:
         assert marker not in contents, (binary.name, marker)
-for argument in ['--check-stream-ring', '--check-stream-rates']:
+for argument in ['--check-stream-ring', '--check-stream-rates', '--check-application-routing']:
     subprocess.run([str(audio), argument], check=True, timeout=15)
 
 print('LDAC helpers reject missing addresses and probe modes before device access; production artifacts exclude probe paths; offline self-checks passed, the sender thread reaches real-time scheduling under a utility clamp.')

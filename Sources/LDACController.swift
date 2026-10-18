@@ -3,6 +3,7 @@ import AppKit
 import Combine
 import Foundation
 import OSLog
+import UniformTypeIdentifiers
 @preconcurrency import IOBluetooth
 
 @MainActor
@@ -14,6 +15,10 @@ final class LDACController: ObservableObject {
     @Published private(set) var isAwaitingAutomaticRetry = false
     @Published private(set) var isSuspendedForMicrophone = false
     @Published private(set) var audioCaptureAccess: LDACAudioCaptureAccess = .unchecked
+    @Published private(set) var transportHealth = LDACTransportHealth()
+    private var healthAddress: String?
+    @Published private(set) var runtimeStatus = LDACRuntimeStatus()
+    @Published private(set) var diagnosticExportError: String?
     @Published private(set) var driverState: LDACDriverInstaller.State
     @Published private(set) var discoveredSupport: [String: LDACCapabilityRecord]
     @Published private(set) var driverInstallationError: String?
@@ -46,6 +51,15 @@ final class LDACController: ObservableObject {
     private let callAudio: LDACCallAudio?
     var microphoneHandoffIssue: String? { callAudio?.issue }
     private var requestedConfiguration = LDACConfiguration()
+    var currentConfiguration: LDACConfiguration { requestedConfiguration }
+    var microphoneActivities: [LDACMicrophoneActivity] { callAudio?.microphoneActivities ?? [] }
+    var manualCallHandoffRequested: Bool { callAudio?.manualHandoffRequested == true }
+
+    func setManualCallHandoff(_ enabled: Bool) {
+        callAudio?.setManualHandoff(enabled)
+        _ = synchronizeMicrophoneHandoff()
+        resumeIfReady()
+    }
     private var nativeOutput: LDACOwnerOutput?
     private var outputID: UUID?
     private var headphones: SonyHeadphonesController? {
@@ -288,6 +302,49 @@ final class LDACController: ObservableObject {
             endpointMayBeHidden: mode == .stableConnection || mode == .lowLatency || headphones?.ldacRequiresMultipointOff == true)
     }
 
+    func advertisedSampleRates(forAddress address: String) -> Set<Int> {
+        guard let record = discoveredSupport[address], record.observation(in: capabilityContext(forAddress: address)) == true else { return [] }
+        return Set(LDACSampleRate.allCases.filter { record.supports(sampleRate: $0.rawValue) == true }.map(\.rawValue))
+    }
+
+    func sampleRateUnavailableReason(_ rate: LDACSampleRate, forAddress address: String) -> String? {
+        guard let record = discoveredSupport[address], record.observation(in: capabilityContext(forAddress: address)) == true,
+              record.supports(sampleRate: rate.rawValue) == false else { return nil }
+        return String(localized: "The headphones did not advertise stereo LDAC at this sample rate.")
+    }
+
+    func exportDiagnostics(forAddress address: String, configuration: LDACConfiguration? = nil) {
+        guard let headphones = devices?.controller(for: address) else { return }
+        diagnosticExportError = nil
+        let driver = LDACDriverInstaller.snapshot(bundle: bundle)
+        let configuration = configuration ?? requestedConfiguration
+        var health = healthAddress == address ? transportHealth : LDACTransportHealth()
+        health.lastReason = health.lastReason.map(LDACDiagnosticReport.redacted)
+        var runtime = healthAddress == address ? runtimeStatus : LDACRuntimeStatus()
+        runtime.message = runtime.message.map(LDACDiagnosticReport.redacted)
+        let report = LDACDiagnosticReport(appVersion: bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+            appBuild: bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+            macOS: ProcessInfo.processInfo.operatingSystemVersionString, deviceModel: headphones.deviceModel.name,
+            firmware: headphones.firmwareVersion, driverState: LDACDiagnosticReport.redacted(String(describing: driverState)), bundledDriverRevision: driver.bundled,
+            installedDriverRevision: driver.installed, loadedDriverRevision: driver.loaded,
+            sampleRate: configuration.sampleRate.rawValue, quality: configuration.quality.rawValue,
+            pcmReserveMilliseconds: configuration.pcmReserveMilliseconds,
+            microphonePolicy: configuration.microphonePolicy.rawValue,
+            selectedApplicationCount: configuration.routing.bundleIDs.count, health: health, runtime: runtime)
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "Acouplet-LDAC-report.json"
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                encoder.dateEncodingStrategy = .iso8601
+                try encoder.encode(report).write(to: url, options: .atomic)
+            } catch { self?.diagnosticExportError = error.localizedDescription }
+        }
+    }
+
     func checkSupportAgain(forAddress address: String, configuration: LDACConfiguration) {
         guard let address = SonyBLEIdentity.normalizedAddress(address), !isSessionRunning,
               requestedAddress == nil, deviceUnavailableReason(forAddress: address) == nil else { return }
@@ -345,6 +402,16 @@ final class LDACController: ObservableObject {
             guard support(forAddress: address).allowsStart(requested: true) else { return }
             guard deviceUnavailableReason(forAddress: address) == nil else { return }
             if let configuration { requestedConfiguration = configuration }
+            if let reason = sampleRateUnavailableReason(requestedConfiguration.sampleRate, forAddress: address) {
+                targetAddress = address
+                state = .failed(reason)
+                return
+            }
+            guard requestedConfiguration.isValid else {
+                targetAddress = address
+                state = .failed(String(localized: "The application routing settings are invalid."))
+                return
+            }
             if !isSessionRunning {
                 refreshDriverState()
                 guard driverState == .current else {
@@ -365,6 +432,7 @@ final class LDACController: ObservableObject {
                 multipointConflictAddress = address
                 return
             }
+            callAudio?.configure(policy: requestedConfiguration.microphonePolicy, externalMicrophoneUID: requestedConfiguration.externalMicrophoneUID)
             requestedAddress = address
             recoveryAttempt = 0
             cancelAutomaticRetry()
@@ -550,6 +618,9 @@ final class LDACController: ObservableObject {
     }
 
     private func startWhenMicrophoneIsIdle(_ address: String) {
+        transportHealth = LDACTransportHealth()
+        healthAddress = address
+        runtimeStatus = LDACRuntimeStatus()
         targetAddress = address
         resumeOutputUID = audioRoute?.route?.uid
         if synchronizeMicrophoneHandoff() { start(address) }
@@ -560,6 +631,10 @@ final class LDACController: ObservableObject {
         guard requestedAddress != nil, let callAudio else { return true }
         switch callAudio.activity {
         case .unknown:
+            if requestedConfiguration.microphonePolicy == .external, isSessionRunning, !isSuspendedForMicrophone {
+                isSuspendedForMicrophone = true
+                suspend(restoreAudio: true, reason: "the selected separate microphone could not be verified")
+            }
             return false
         case .active:
             if !isSuspendedForMicrophone {
@@ -682,6 +757,7 @@ final class LDACController: ObservableObject {
                     throw ControlError(String(localized: "The headphone connection changed. Try LDAC again."))
                 }
                 try await output.claim(model: headphones.deviceModel.name, targetAddress: address, sampleRate: self.requestedConfiguration.sampleRate)
+                if self.requestedConfiguration.routing.isSelective { try await output.configureRouting(self.requestedConfiguration.routing) }
                 try await output.priorityControl()
                 try Task.checkCancellation()
                 let previousReadback = headphones.musicVolumeReadbackID
@@ -956,6 +1032,12 @@ final class LDACController: ObservableObject {
                     if case .active = self.state { self.state = .active(format) }
                 }
             case .latencyFrames: break
+            case let .health(health): self.transportHealth = health
+            case let .compatibility(status): self.runtimeStatus = status
+            case let .capabilities(rates, channels):
+                let store = LDACSupportStore(defaults: self.defaults)
+                store.recordCapabilities(rates: rates, channels: channels, forAddress: address, context: self.capabilityContext(forAddress: address))
+                if let record = store.all[address] { self.discoveredSupport[address] = record }
             case let .ldacEndpoint(supported):
                 self.recordDiscoveredSupport(supported, address: address)
             case let .gainApplied(gain):
@@ -1252,16 +1334,18 @@ final class LDACController: ObservableObject {
         session?.recoverConnection(reason: message)
     }
 
-    /// A source switch requested in Acouplet, or a connection-mode change, ends LDAC with a notice; stopping restores
-    /// ordinary audio (D5). Any other move of the selected source is another multipoint device playing, which is
-    /// usually brief (a phone notification): LDAC suspends with ordinary audio and resumes once the Mac is the source.
     private func stopForChange(_ reason: String) {
         if reason != "connection-mode", let selected = headphones?.multipoint.selectedSource?.address,
            headphones?.requestedSourceSwitchAddress != selected {
-            recordRecovery("source-suspended", reason: reason)
-            suspend(restoreAudio: true, reason: "another headphone music source is active")
+            if let address = requestedAddress ?? targetAddress {
+                codecPreferences[address] = false
+                defaults?.set(codecPreferences, forKey: "ldac.codecPreferences")
+            }
+            recordRecovery("source-takeover", reason: reason)
+            stop(restoreAudio: true, reason: "another headphone music source is active")
             return
         }
+        transportHealth.lastReason = LDACDiagnosticReport.redacted(reason)
         recordRecovery("source-changed", reason: reason)
         fail(reason == "connection-mode"
              ? String(localized: "The headphones left Sound Quality mode. LDAC stopped and ordinary Bluetooth audio was restored.")
@@ -1358,6 +1442,7 @@ final class LDACController: ObservableObject {
     }
 
     private func fail(_ message: String) {
+        transportHealth.lastReason = LDACDiagnosticReport.redacted(message)
         guard state != .stopping else { return }
         record("failed", reason: "\(message); \(musicControlStatus)")
         volumeError = message
@@ -1534,6 +1619,7 @@ final class LDACController: ObservableObject {
     /// messages, never addresses, so the log can say which binding condition failed; the control status that
     /// contains the source address stays private.
     private func recordRecovery(_ event: String, reason: String) {
+        transportHealth.lastReason = LDACDiagnosticReport.redacted(reason)
         Self.logger.notice("LDAC controller \(event, privacy: .public); target=\(self.targetAddress ?? "none", privacy: .private(mask: .hash)) session=\(self.sessionID.uuidString, privacy: .public) reason=\(reason, privacy: .public) status=\(self.musicControlStatus, privacy: .private)")
     }
 

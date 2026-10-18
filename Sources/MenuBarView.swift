@@ -322,6 +322,8 @@ struct MenuBarView: View {
                     Picker("Sample Rate", selection: $settings.ldacConfiguration.sampleRate) {
                         ForEach(LDACSampleRate.allCases, id: \.self) { rate in
                             Text(rate.displayName).tag(rate)
+                                .disabled(ldac.sampleRateUnavailableReason(rate, forAddress: headphones.address) != nil)
+                                .help(ldac.sampleRateUnavailableReason(rate, forAddress: headphones.address) ?? "")
                         }
                     }
                     Picker("Playback Quality", selection: $settings.ldacConfiguration.quality) {
@@ -381,6 +383,20 @@ struct MenuBarView: View {
             if ldac.targetAddress == headphones.address, ldac.isSuspendedForMicrophone {
                 Text("In calling apps, choose Same as System for the microphone and speaker.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            if ldac.targetAddress == headphones.address {
+                if !ldac.microphoneActivities.isEmpty {
+                    ForEach(Array(ldac.microphoneActivities.enumerated()), id: \.offset) { _, activity in
+                        Text("Microphone: \(activity.processName) · \(activity.inputName)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if ldac.currentConfiguration.microphonePolicy == .manual {
+                    Button(ldac.manualCallHandoffRequested ? String(localized: "Resume LDAC") : String(localized: "Pause for headset call")) {
+                        ldac.setManualCallHandoff(!ldac.manualCallHandoffRequested)
+                    }
+                }
+                if ldac.isSessionRunning || ldac.transportHealth.lastUpdated != nil { LDACTransportHealthView(compact: true) }
             }
             if ldac.targetAddress == headphones.address, let issue = ldac.microphoneHandoffIssue {
                 Text(issue).font(.caption).foregroundStyle(.primary)

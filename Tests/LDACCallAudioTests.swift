@@ -29,6 +29,64 @@ final class LDACCallAudioTests: XCTestCase {
         XCTAssertFalse(try usesMicrophone(5))
     }
 
+    func testSeparateMicrophoneKeepsLDACButHeadsetActivityRequiresHandoff() {
+        let hardware = Hardware()
+        hardware.observations = []
+        let audio = hardware.audio()
+        audio.configure(policy: .external, externalMicrophoneUID: "usb-input")
+        audio.monitor(address: address)
+        XCTAssertEqual(hardware.input, "usb-input")
+        hardware.observations = [.init(processID: 123, processName: "Call", bundleID: "com.test.call", inputUID: "usb-input", inputName: "USB", isBluetooth: false)]
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .idle)
+        XCTAssertEqual(audio.microphoneActivities.count, 1)
+        hardware.observations = [.init(processID: 124, processName: "Restarted call", bundleID: "com.test.call", inputUID: "headset-input", inputName: "Headset", isBluetooth: true)]
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .active)
+        hardware.observations = []
+        audio.refresh()
+        hardware.time = 4
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .idle)
+        audio.monitor(address: nil)
+        XCTAssertEqual(hardware.input, "built-in-input")
+    }
+
+    func testSeparateMicrophoneDoesNotReplaceManualInputChangesOrClaimUnknownActivityIsSafe() {
+        let hardware = Hardware()
+        hardware.observations = []
+        let audio = hardware.audio()
+        audio.configure(policy: .external, externalMicrophoneUID: "usb-input")
+        audio.monitor(address: address)
+        hardware.input = "another-input"
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .unknown)
+        audio.monitor(address: nil)
+        XCTAssertEqual(hardware.input, "another-input")
+    }
+
+    func testManualHandoffRespondsToExplicitChoiceAndHeadsetMicrophone() {
+        let hardware = Hardware()
+        hardware.observations = [.init(processID: 10, processName: "Call", bundleID: "com.test.call", inputUID: "built-in-input", inputName: "Mac", isBluetooth: false)]
+        let audio = hardware.audio()
+        audio.configure(policy: .manual, externalMicrophoneUID: nil)
+        audio.monitor(address: address)
+        XCTAssertEqual(audio.activity, .idle)
+        audio.setManualHandoff(true)
+        XCTAssertEqual(audio.activity, .active)
+        audio.routeForCall()
+        XCTAssertEqual(hardware.input, "headset-input")
+        audio.setManualHandoff(false)
+        hardware.time = 4
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .idle)
+        XCTAssertTrue(audio.finishCall())
+        XCTAssertEqual(hardware.input, "built-in-input")
+        hardware.observations = [.init(processID: 11, processName: "Call", bundleID: "com.test.call", inputUID: "headset-input", inputName: "Headset", isBluetooth: true)]
+        audio.refresh()
+        XCTAssertEqual(audio.activity, .active)
+    }
+
     func testMicrophoneReleaseMustStayIdleForThreeSeconds() {
         let hardware = Hardware()
         let audio = hardware.audio()
@@ -303,6 +361,7 @@ final class LDACCallAudioTests: XCTestCase {
     @MainActor
     private final class Hardware {
         var active = false
+        var observations: [LDACMicrophoneActivity]?
         var available = true
         var unreadable = false
         var rejectWrites = false
@@ -323,7 +382,7 @@ final class LDACCallAudioTests: XCTestCase {
                 if self.rejectWrites { throw Failure() }
                 self.output = $0
                 self.selections.append($0)
-            }), pollsAutomatically: false, now: { self.time })
+            }, microphoneActivity: observations == nil ? nil : { self.observations ?? [] }), pollsAutomatically: false, now: { self.time })
         }
 
         struct Failure: Error {}

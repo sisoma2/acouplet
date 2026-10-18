@@ -69,6 +69,7 @@ final class LDACNativeOutput {
     var model = ""
     var controls = LDACNativeVolume(scalar: 0.4, muted: false)
     var expected = LDACNativeVolume(scalar: 0.4, muted: true)
+    var handoffOutputUID: String?
     var savedDefaults: [UInt32: String] = [:]
     var ready = false
     var restoring = false
@@ -115,6 +116,9 @@ final class LDACNativeOutput {
     func updateLatency(frames: UInt32) throws {
         precondition(frames <= 384000)
         SwiftRecord("latency \(frames)")
+    }
+    func configureRouting(_ routing: LDACApplicationRouting) throws {
+        handoffOutputUID = routing.outputDeviceUID
     }
     func validateForRecovery() throws {}
     func prepareForReconnect() throws -> LDACPriorityControl { try priorityControl() }

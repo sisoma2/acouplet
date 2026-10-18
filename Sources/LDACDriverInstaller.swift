@@ -126,6 +126,17 @@ enum LDACDriverInstaller {
         return .current
     }
 
+    struct Snapshot: Equatable, Sendable {
+        var bundled: Int?
+        var installed: Int?
+        var loaded: Int?
+    }
+
+    static func snapshot(bundle: Bundle = .main) -> Snapshot {
+        Snapshot(bundled: try? revision(at: bundle.bundleURL.appendingPathComponent("Contents/Helpers/AcoupletLDACOutput.driver")),
+            installed: try? revision(at: installedURL), loaded: try? LDACNativeOutput.driverRevision())
+    }
+
     static func openInstaller(bundle: Bundle = .main) async throws {
         try await openPackage(named: "Acouplet LDAC Output.pkg", bundle: bundle)
     }

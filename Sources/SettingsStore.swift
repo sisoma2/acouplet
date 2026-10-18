@@ -58,11 +58,25 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(experimentalLDACEnabled, forKey: Keys.experimentalLDACEnabled) }
     }
     #if !ACOUPLET_PUBLIC_APIS_ONLY
+    @Published private(set) var ldacDeviceProfiles: [String: LDACDeviceProfile] {
+        didSet { persist(ldacDeviceProfiles, forKey: "preferences.ldacDeviceProfiles") }
+    }
+    private var selectedLDACAddress: String?
+    private var isLoadingLDACProfile = false
     @Published var ldacLatencyOffsets: [String: Int] {
         didSet { persist(ldacLatencyOffsets, forKey: "preferences.ldacLatencyOffsets") }
     }
     @Published var ldacConfiguration: LDACConfiguration {
-        didSet { persist(ldacConfiguration, forKey: Keys.ldacConfiguration) }
+        didSet {
+            guard !isLoadingLDACProfile else { return }
+            if let selectedLDACAddress {
+                var profile = ldacProfile(forAddress: selectedLDACAddress)
+                profile.configuration = ldacConfiguration
+                ldacDeviceProfiles[selectedLDACAddress] = profile
+            } else {
+                persist(ldacConfiguration, forKey: Keys.ldacConfiguration)
+            }
+        }
     }
     #endif
     @Published private(set) var launchAtLogin: Bool
@@ -127,6 +141,7 @@ final class SettingsStore: ObservableObject {
             ? true
             : defaults.bool(forKey: Keys.experimentalLDACEnabled)
         #if !ACOUPLET_PUBLIC_APIS_ONLY
+        ldacDeviceProfiles = Self.decode([String: LDACDeviceProfile].self, from: defaults.data(forKey: "preferences.ldacDeviceProfiles")) ?? [:]
         ldacLatencyOffsets = Self.decode([String: Int].self, from: defaults.data(forKey: "preferences.ldacLatencyOffsets")) ?? [:]
         ldacConfiguration = Self.decode(LDACConfiguration.self, from: defaults.data(forKey: Keys.ldacConfiguration)) ?? LDACConfiguration()
         #endif
@@ -144,16 +159,75 @@ final class SettingsStore: ObservableObject {
     }
 
     #if !ACOUPLET_PUBLIC_APIS_ONLY
-    func ldacConfiguration(forAddress address: String) -> LDACConfiguration {
-        var configuration = ldacConfiguration
+    func ldacProfile(forAddress address: String) -> LDACDeviceProfile {
         let key = address.replacingOccurrences(of: "-", with: ":").uppercased()
-        configuration.latencyOffsetMilliseconds = min(500, max(-500, ldacLatencyOffsets[key] ?? 0))
-        return configuration
+        if let profile = ldacDeviceProfiles[key] { return profile }
+        var configuration = Self.decode(LDACConfiguration.self, from: defaults.data(forKey: Keys.ldacConfiguration)) ?? LDACConfiguration()
+        configuration.latencyOffsetMilliseconds = min(500, max(-500, ldacLatencyOffsets[key] ?? configuration.latencyOffsetMilliseconds))
+        return LDACDeviceProfile(configuration: configuration)
+    }
+
+    func ldacConfiguration(forAddress address: String) -> LDACConfiguration {
+        ldacProfile(forAddress: address).configuration
+    }
+
+    func selectLDACDevice(address: String) {
+        let key = address.replacingOccurrences(of: "-", with: ":").uppercased()
+        guard !key.isEmpty, key != selectedLDACAddress else { return }
+        let profile = ldacProfile(forAddress: key)
+        selectedLDACAddress = key
+        ldacDeviceProfiles[key] = profile
+        isLoadingLDACProfile = true
+        ldacConfiguration = profile.configuration
+        isLoadingLDACProfile = false
     }
 
     func setLDACLatencyOffset(_ offset: Int, forAddress address: String) {
+        updateLDACProfile(forAddress: address) { $0.configuration.latencyOffsetMilliseconds = min(500, max(-500, offset)) }
+    }
+
+    func updateLDACProfile(forAddress address: String, update: (inout LDACDeviceProfile) -> Void) {
         let key = address.replacingOccurrences(of: "-", with: ":").uppercased()
-        ldacLatencyOffsets[key] = min(500, max(-500, offset))
+        guard !key.isEmpty else { return }
+        var profile = ldacProfile(forAddress: key)
+        update(&profile)
+        ldacDeviceProfiles[key] = profile
+        if selectedLDACAddress == key {
+            isLoadingLDACProfile = true
+            ldacConfiguration = profile.configuration
+            isLoadingLDACProfile = false
+        }
+    }
+
+    func recordLDACSuccess(forAddress address: String, configuration: LDACConfiguration) {
+        updateLDACProfile(forAddress: address) {
+            $0.lastSuccessfulConfiguration = configuration
+            $0.consecutiveFailures = 0
+        }
+    }
+
+    func recordLDACFailure(forAddress address: String) {
+        updateLDACProfile(forAddress: address) { $0.consecutiveFailures = min(100, $0.consecutiveFailures + 1) }
+    }
+
+    func useLastSuccessfulLDACConfiguration(forAddress address: String) {
+        updateLDACProfile(forAddress: address) {
+            if let configuration = $0.lastSuccessfulConfiguration {
+                $0.configuration = configuration
+                $0.consecutiveFailures = 0
+            }
+        }
+    }
+
+    func applyLDACPreset(_ preset: LDACBufferProfile, forAddress address: String) {
+        updateLDACProfile(forAddress: address) {
+            if preset == .custom { $0.configuration.customReserveMilliseconds = $0.configuration.pcmReserveMilliseconds }
+            $0.configuration.bufferProfile = preset
+            if preset != .custom {
+                $0.configuration.sampleRate = .hz48000
+                $0.configuration.quality = .adaptive
+            }
+        }
     }
     #endif
 

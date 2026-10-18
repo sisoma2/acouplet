@@ -269,6 +269,7 @@ final class LDACNativeOutput {
     var isSelected = true
     var controls = LDACNativeVolume(scalar: 0, muted: true)
 __SELECTORS__
+    var handoffOutputUID: String?
     var savedDefaults: [UInt32: String] = [kAudioHardwarePropertyDefaultOutputDevice: LDACNativeOutput.targetUID, kAudioHardwarePropertyDefaultSystemOutputDevice: LDACNativeOutput.targetUID]
     var listeners: [(UInt32, AudioObjectPropertyAddress, () -> Void)] = []
     var renewTask: Task<Void, Never>?
@@ -350,6 +351,7 @@ __SELECTORS__
             value = Optional(Unmanaged.passRetained(priorityReply as CFDictionary as CFTypeRef)) as Any
         } else if object == system { defaultReads += 1; value = current[selector]! }
         else if selector == kAudioDevicePropertyTransportType { value = transports[object]! }
+        else if selector == kAudioObjectPropertyClass { value = UInt32(0) }
         else if selector == kAudioDevicePropertyVolumeScalar { value = volumes[object]! }
         else if selector == kAudioDevicePropertyMute { value = mutes[object]! }
         else if selector == kAudioDevicePropertyNominalSampleRate { value = Float64(48000) }
@@ -603,6 +605,35 @@ enum Check {
         precondition(preservedRoute == nil && Output.writes.isEmpty && Output.muteWrites.isEmpty)
         precondition(Output.current[Output.defaultSelectors[0]] == 8 && Output.current[Output.defaultSelectors[1]] == 7)
         print("PASS independent system-sound routing, shared routing and later music-route supersession")
+
+        for changed in [false, true] {
+            Output.reset()
+            Output.current = [Output.defaultSelectors[0]: 6, Output.defaultSelectors[1]: 7]
+            Output.available = [Output.uid: 5, Output.targetUID: 6, "speakers": 7, "user-output": 8]
+            let output = Output()
+            output.isSelected = false
+            try! await output.claim(model: "Sony", targetAddress: Output.targetUID)
+            var routing = LDACApplicationRouting()
+            routing.enabled = true
+            routing.bundleIDs = ["com.example.music"]
+            routing.outputDeviceUID = Output.targetUID
+            do {
+                try output.configureRouting(routing)
+                preconditionFailure("A Bluetooth fallback was admitted for application routing")
+            } catch {}
+            routing.outputDeviceUID = "speakers"
+            try! output.configureRouting(routing)
+            try! output.selectForHandoff()
+            precondition(Output.current[Output.defaultSelectors[0]] == 7)
+            try! output.validateForRecovery()
+            let recovery = try! JSONDecoder().decode(LDACRouteRecovery.self, from: JSONEncoder().encode(output.routeRecovery))
+            precondition(recovery.handoffOutputUID == "speakers")
+            if changed { Output.current[Output.defaultSelectors[0]] = 8 }
+            let result = await output.restoreAndRelease()
+            precondition(result == nil && Output.current[Output.defaultSelectors[0]] == (changed ? 8 : 6))
+            precondition(Output.current[Output.defaultSelectors[1]] == 7)
+        }
+        print("PASS selected-application routing uses a physical fallback, rejects Bluetooth, persists ownership and preserves a later manual route")
 
         for changed in [false, true] {
             Output.reset()

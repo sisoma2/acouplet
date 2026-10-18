@@ -505,6 +505,12 @@ static BOOL SelectProfile(uint32_t sampleRate, NSString *quality, LDACProfile *p
     return YES;
 }
 
+static BOOL SelectPCMReserve(uint32_t milliseconds, LDACProfile *profile) {
+    if (milliseconds < 50 || milliseconds > 500) return NO;
+    profile->prefillBytes = ((uint64_t)profile->sampleRate * milliseconds / 1000) * 8;
+    return profile->prefillBytes > 0 && profile->prefillBytes <= profile->capacityBytes;
+}
+
 // Real-time scheduling for the sender thread. The L3 samples of 15 Oct 2026 showed the helper
 // clamped to priority 20 (the base of the utility QoS, inherited from a LaunchAgent without a
 // ProcessType) and the stalls spent runnable without a CPU. A thread under the time-constraint
@@ -991,6 +997,20 @@ static BOOL SelfTest(void) {
     BOOL passed = RecoveryChecks() && ContinuousPCMChecks() && PreparedPCMChecks() && PreparedPCMStopChecks() && RealtimeChecks() && BreachStreakChecks() && LiveQueueChecks() &&
         ConvertPCM((const uint8_t *)input, 0.5, output);
     passed &= output[0] == 0.5 && output[1] == -0.5 && output[255] == 0;
+    const uint32_t reserveRates[] = {44100, 48000, 88200, 96000};
+    const uint32_t reserves[] = {50, 100, 250, 500};
+    for (NSUInteger rate = 0; rate < 4; rate++) {
+        for (NSString *quality in @[@"low", @"mid", @"high", @"auto"]) {
+            LDACProfile profile;
+            passed &= SelectProfile(reserveRates[rate], quality, &profile);
+            for (NSUInteger reserve = 0; reserve < 4; reserve++) {
+                passed &= SelectPCMReserve(reserves[reserve], &profile) &&
+                    profile.prefillBytes == (uint64_t)reserveRates[rate] * reserves[reserve] / 1000 * 8;
+            }
+            passed &= !SelectPCMReserve(49, &profile) && !SelectPCMReserve(501, &profile);
+        }
+    }
+
     const float invalid[] = {NAN, INFINITY, -INFINITY};
     for (NSUInteger sample = 0; sample < 3; sample++) {
         for (NSUInteger position = 0; position < 256; position += 255) {
@@ -1711,10 +1731,10 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
             if (sendq->unsentSamples > statsPeakSamples) statsPeakSamples = sendq->unsentSamples;
             if (now >= nextStats) {
                 uint64_t skipped = probe.pcmSkippedBytes / 8 - statsSkippedBase;
-                if (statsRetained || skipped)
-                    printf("QUEUE_STATS retained=%lu peakPackets=%lu peakMs=%.1f skippedFrames=%llu maxDrain=%.4f capMs=%.1f\n",
-                           statsRetained, statsPeakPackets, 1000.0 * statsPeakSamples / profile.sampleRate, skipped, statsMaxDrain,
-                           1000.0 * capSamples / profile.sampleRate);
+                printf("QUEUE_STATS retained=%lu peakPackets=%lu peakMs=%.1f skippedFrames=%llu maxDrain=%.4f capMs=%.1f queuedMs=%.1f totalSkippedFrames=%llu\n",
+                       statsRetained, statsPeakPackets, 1000.0 * statsPeakSamples / profile.sampleRate, skipped, statsMaxDrain,
+                       1000.0 * capSamples / profile.sampleRate, 1000.0 * sendq->unsentSamples / profile.sampleRate,
+                       probe.pcmSkippedBytes / 8);
                 statsRetained = 0; statsPeakPackets = 0; statsPeakSamples = 0; statsMaxDrain = 0;
                 statsSkippedBase = probe.pcmSkippedBytes / 8;
                 nextStats = now + 5;
@@ -1761,6 +1781,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                 adaptiveSourceReady &= probe.pcmBytes >= requiredBytes;
                 BOOL underflowBreached = NO;
                 BOOL sourceWait = probe.pcmBytes < requiredBytes;
+                if (sourceWait) printf("PCM_UNDERRUN bufferedFrames=%lu\n", probe.pcmBytes / 8);
                 double waitStart = MonotonicTime();
                 double blockDue = PacketDue(paceStart, sourceSamples + inputFrames + probe.pcmSkippedBytes / 8, profile);
                 double waitDue = continuous ? blockDue : due;
@@ -2029,6 +2050,8 @@ int main(int argc, const char *argv[]) {
         }
         uint32_t pcmDescriptor = 0;
         uint32_t sampleRate = 48000;
+        uint32_t reserveMilliseconds = 250;
+        BOOL reserveSeen = NO;
         NSString *quality = @"low";
         NSString *address = nil;
         BOOL pcmSeen = NO, addressSeen = NO, rateSeen = NO, qualitySeen = NO;
@@ -2045,18 +2068,21 @@ int main(int argc, const char *argv[]) {
             } else if (!strcmp(argv[index], "--sample-rate") && !rateSeen && index + 1 < argc) {
                 argumentsValid = ParseUnsigned([NSString stringWithUTF8String:argv[++index]], &sampleRate);
                 rateSeen = YES;
+            } else if (!strcmp(argv[index], "--pcm-reserve-ms") && !reserveSeen && index + 1 < argc) {
+                argumentsValid = ParseUnsigned([NSString stringWithUTF8String:argv[++index]], &reserveMilliseconds);
+                reserveSeen = YES;
             } else if (!strcmp(argv[index], "--quality") && !qualitySeen && index + 1 < argc) {
                 quality = [NSString stringWithUTF8String:argv[++index]];
                 qualitySeen = YES;
             } else argumentsValid = NO;
         }
         LDACProfile profile;
-        argumentsValid = argumentsValid && pcmSeen && addressSeen && SelectProfile(sampleRate, quality, &profile);
+        argumentsValid = argumentsValid && pcmSeen && addressSeen && SelectProfile(sampleRate, quality, &profile) && SelectPCMReserve(reserveMilliseconds, &profile);
         if (!argumentsValid) {
 #if ACOUPLET_LDAC_PROBE_ONLY
-            fprintf(stderr, "Usage: %s --media --pcm-fd FD --address ADDRESS [--sample-rate 44100|48000|88200|96000] [--quality auto|low|mid|high]; stdin: open, start live GAIN SECONDS (0=continuous, 1..60), gain VALUE, stop, close, transport-closed\n"
+            fprintf(stderr, "Usage: %s --media --pcm-fd FD --address ADDRESS [--sample-rate 44100|48000|88200|96000] [--quality auto|low|mid|high] [--pcm-reserve-ms 50..500]; stdin: open, start live GAIN SECONDS (0=continuous, 1..60), gain VALUE, stop, close, transport-closed\n"
 #else
-            fprintf(stderr, "Usage: %s --media --pcm-fd FD --address ADDRESS [--sample-rate 44100|48000|88200|96000] [--quality auto|low|mid|high]; stdin: open, start live GAIN 0, gain VALUE, stop, close, transport-closed\n"
+            fprintf(stderr, "Usage: %s --media --pcm-fd FD --address ADDRESS [--sample-rate 44100|48000|88200|96000] [--quality auto|low|mid|high] [--pcm-reserve-ms 50..500]; stdin: open, start live GAIN 0, gain VALUE, stop, close, transport-closed\n"
 #endif
                     "       %s --self-test\n", argv[0], argv[0]);
             return 2;

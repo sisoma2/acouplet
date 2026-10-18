@@ -1,6 +1,1128 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Bitrate changes: %lld · encoder resets: %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bitrate changes: %lld · encoder resets: %lld"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bit hızı değişimleri: %lld · kodlayıcı sıfırlamaları: %lld"
+          }
+        }
+      }
+    },
+    "Queued audio: %@ ms · peak: %@ ms": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queued audio: %@ ms · peak: %@ ms"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kuyruktaki ses: %@ ms · tepe: %@ ms"
+          }
+        }
+      }
+    },
+    "Skipped frames: %llu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skipped frames: %llu"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atlanan kareler: %llu"
+          }
+        }
+      }
+    },
+    "Underruns: %lld · stalls: %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Underruns: %lld · stalls: %lld"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Boşalmalar: %lld · duraklamalar: %lld"
+          }
+        }
+      }
+    },
+    "Microphone: %@ · %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone: %@ · %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon: %@ · %@"
+          }
+        }
+      }
+    },
+    "PCM reserve: %lld ms": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PCM reserve: %lld ms"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PCM rezervi: %lld ms"
+          }
+        }
+      }
+    },
+    "Permission required": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permission required"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İzin gerekli"
+          }
+        }
+      }
+    },
+    "LDAC transport health": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC transport health"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC aktarım durumu"
+          }
+        }
+      }
+    },
+    "LDAC setup and compatibility": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC setup and compatibility"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC kurulumu ve uyumluluğu"
+          }
+        }
+      }
+    },
+    "LDAC device profile": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC device profile"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC aygıt profili"
+          }
+        }
+      }
+    },
+    "Your fixed quality choice is kept until you choose to restore these settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your fixed quality choice is kept until you choose to restore these settings."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu ayarları geri yüklemeyi seçene kadar sabit kalite seçiminiz korunur."
+          }
+        }
+      }
+    },
+    "Video · 100 ms (experimental)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video · 100 ms (experimental)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video · 100 ms (deneysel)"
+          }
+        }
+      }
+    },
+    "Verified": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verified"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Doğrulandı"
+          }
+        }
+      }
+    },
+    "Use last successful LDAC settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use last successful LDAC settings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Son başarılı LDAC ayarlarını kullan"
+          }
+        }
+      }
+    },
+    "Unknown microphone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown microphone"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bilinmeyen mikrofon"
+          }
+        }
+      }
+    },
+    "Unknown application": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown application"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bilinmeyen uygulama"
+          }
+        }
+      }
+    },
+    "This model requires multipoint off for LDAC. Other models are checked independently.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This model requires multipoint off for LDAC. Other models are checked independently."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu modelde LDAC için çoklu bağlantı kapalı olmalıdır. Diğer modeller ayrı denetlenir."
+          }
+        }
+      }
+    },
+    "This macOS version has not been qualified for LDAC Bluetooth ownership checks.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This macOS version has not been qualified for LDAC Bluetooth ownership checks."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu macOS sürümü LDAC Bluetooth sahiplik denetimleri için doğrulanmadı."
+          }
+        }
+      }
+    },
+    "The separate application output is no longer available.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The separate application output is no longer available."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ayrı uygulama çıkışı artık kullanılamıyor."
+          }
+        }
+      }
+    },
+    "The selected separate microphone is unavailable. LDAC will wait.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected separate microphone is unavailable. LDAC will wait."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen ayrı mikrofon kullanılamıyor. LDAC bekleyecek."
+          }
+        }
+      }
+    },
+    "The headphones did not advertise stereo LDAC at this sample rate.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The headphones did not advertise stereo LDAC at this sample rate."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kulaklıklar bu örnekleme hızında stereo LDAC desteği duyurmadı."
+          }
+        }
+      }
+    },
+    "The application routing settings are invalid.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The application routing settings are invalid."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama yönlendirme ayarları geçersiz."
+          }
+        }
+      }
+    },
+    "System audio access": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio access"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem sesi erişimi"
+          }
+        }
+      }
+    },
+    "Sound Quality mode": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sound Quality mode"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ses Kalitesi modu"
+          }
+        }
+      }
+    },
+    "Separate microphone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Separate microphone"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ayrı mikrofon"
+          }
+        }
+      }
+    },
+    "Selected apps play through LDAC. Other apps stay audible on this output. Selected apps must use System Default output.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected apps play through LDAC. Other apps stay audible on this output. Selected apps must use System Default output."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili uygulamalar LDAC üzerinden çalar. Diğer uygulamalar bu çıkıştan duyulur. Seçili uygulamalar Sistem Varsayılanı çıkışını kullanmalıdır."
+          }
+        }
+      }
+    },
+    "Route selected applications through LDAC": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Route selected applications through LDAC"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili uygulamaları LDAC üzerinden yönlendir"
+          }
+        }
+      }
+    },
+    "Resume LDAC": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resume LDAC"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC'ı sürdür"
+          }
+        }
+      }
+    },
+    "Refresh audio devices and applications": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh audio devices and applications"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ses aygıtlarını ve uygulamaları yenile"
+          }
+        }
+      }
+    },
+    "Playback preset": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Playback preset"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çalma ön ayarı"
+          }
+        }
+      }
+    },
+    "Pause for headset call": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause for headset call"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kulaklık araması için duraklat"
+          }
+        }
+      }
+    },
+    "Passive checks do not interrupt playback. Checking LDAC support starts playback and can disconnect ordinary audio.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passive checks do not interrupt playback. Checking LDAC support starts playback and can disconnect ordinary audio."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pasif denetimler çalmayı kesmez. LDAC desteğini denetlemek çalmayı başlatır ve normal sesi kesebilir."
+          }
+        }
+      }
+    },
+    "Output for other applications": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Output for other applications"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diğer uygulamaların çıkışı"
+          }
+        }
+      }
+    },
+    "Not ready": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not ready"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hazır değil"
+          }
+        }
+      }
+    },
+    "Not loaded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not loaded"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Etkin değil"
+          }
+        }
+      }
+    },
+    "Not installed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not installed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yüklü değil"
+          }
+        }
+      }
+    },
+    "Not checked": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not checked"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Denetlenmedi"
+          }
+        }
+      }
+    },
+    "Music · 250 ms": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Music · 250 ms"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Müzik · 250 ms"
+          }
+        }
+      }
+    },
+    "Music keeps the established reserve. Video and custom reserves need hardware qualification; smaller buffers may underrun.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Music keeps the established reserve. Video and custom reserves need hardware qualification; smaller buffers may underrun."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Müzik mevcut rezervi korur. Video ve özel rezervler donanım doğrulaması gerektirir; küçük arabellekler boşalabilir."
+          }
+        }
+      }
+    },
+    "Microphone policy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone policy"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon ilkesi"
+          }
+        }
+      }
+    },
+    "Manual call handoff": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manual call handoff"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elle arama devri"
+          }
+        }
+      }
+    },
+    "Local transport observations; receiver delivery and radio packet loss are not measured.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local transport observations; receiver delivery and radio packet loss are not measured."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yerel aktarım gözlemleri; alıcıya teslim ve radyo paket kaybı ölçülmez."
+          }
+        }
+      }
+    },
+    "Loaded driver": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loaded driver"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Etkin sürücü"
+          }
+        }
+      }
+    },
+    "LDAC continues only while the selected separate microphone is used. Headset microphone use still requires call audio. Check echo behavior in your calling app.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC continues only while the selected separate microphone is used. Headset microphone use still requires call audio. Check echo behavior in your calling app."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC yalnızca seçilen ayrı mikrofon kullanılırken sürer. Kulaklık mikrofonu hâlâ arama sesi gerektirir. Arama uygulamanızda yankı davranışını denetleyin."
+          }
+        }
+      }
+    },
+    "Keep LDAC with a separate microphone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep LDAC with a separate microphone"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ayrı mikrofonla LDAC'ı koru"
+          }
+        }
+      }
+    },
+    "Installed driver": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installed driver"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yüklü sürücü"
+          }
+        }
+      }
+    },
+    "Export LDAC report…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export LDAC report…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC raporunu dışa aktar…"
+          }
+        }
+      }
+    },
+    "Enabled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enabled"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Etkin"
+          }
+        }
+      }
+    },
+    "Custom": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Özel"
+          }
+        }
+      }
+    },
+    "Choose at least one application before starting LDAC.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose at least one application before starting LDAC."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC'ı başlatmadan önce en az bir uygulama seçin."
+          }
+        }
+      }
+    },
+    "Choose an available separate output for applications outside LDAC.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose an available separate output for applications outside LDAC."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC dışındaki uygulamalar için kullanılabilir ayrı bir çıkış seçin."
+          }
+        }
+      }
+    },
+    "Choose a separate output": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a separate output"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ayrı bir çıkış seçin"
+          }
+        }
+      }
+    },
+    "Choose a microphone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a microphone"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon seçin"
+          }
+        }
+      }
+    },
+    "Checked during startup": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checked during startup"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başlangıçta denetlenir"
+          }
+        }
+      }
+    },
+    "Checked during connection": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checked during connection"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bağlantı sırasında denetlenir"
+          }
+        }
+      }
+    },
+    "Checked before audio handoff": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checked before audio handoff"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ses devrinden önce denetlenir"
+          }
+        }
+      }
+    },
+    "Bundled driver": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bundled driver"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulamadaki sürücü"
+          }
+        }
+      }
+    },
+    "Buffer profile": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Buffer profile"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arabellek profili"
+          }
+        }
+      }
+    },
+    "Bluetooth ownership observations": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth ownership observations"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth sahiplik gözlemleri"
+          }
+        }
+      }
+    },
+    "Bluetooth log access": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth log access"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth günlük erişimi"
+          }
+        }
+      }
+    },
+    "Automatically enable LDAC for these headphones": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatically enable LDAC for these headphones"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu kulaklıklar için LDAC'ı otomatik etkinleştir"
+          }
+        }
+      }
+    },
+    "Automatic headset call audio": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic headset call audio"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik kulaklık arama sesi"
+          }
+        }
+      }
+    },
+    "Automatic activation follows the selected Mac output. Turning LDAC off or another source taking over suppresses it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic activation follows the selected Mac output. Turning LDAC off or another source taking over suppresses it."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik etkinleştirme seçili Mac çıkışını izler. LDAC kapatıldığında veya başka bir kaynak devraldığında durur."
+          }
+        }
+      }
+    },
+    "Audio devices could not be listed. Refresh to try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio devices could not be listed. Refresh to try again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ses aygıtları listelenemedi. Yeniden denemek için yenileyin."
+          }
+        }
+      }
+    },
+    "Application routing needs a wired, USB, display or built-in output.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application routing needs a wired, USB, display or built-in output."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama yönlendirmesi kablolu, USB, ekran veya yerleşik bir çıkış gerektirir."
+          }
+        }
+      }
+    },
+    "Advertised": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Advertised"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Duyuruldu"
+          }
+        }
+      }
+    },
     "Checks support by starting LDAC playback.": {
       "extractionState": "manual",
       "localizations": {

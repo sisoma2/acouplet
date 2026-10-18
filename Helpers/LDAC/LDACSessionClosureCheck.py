@@ -76,8 +76,9 @@ final class SessionEvents {
     var values: [LDACNativeSession.Event] = []
 
     var names: [String] {
-        values.map {
-            switch $0 {
+        values.compactMap { event -> String? in
+            switch event {
+            case .health, .compatibility, .capabilities: nil
             case .connectionLost: "connectionLost"
             case .failed: "failed"
             case .active: "active"
@@ -446,8 +447,13 @@ extension LDACNativeSession {
     static func presentationLatencyCheck() async throws {
         for rate in LDACSampleRate.allCases {
             for quality in LDACQuality.allCases {
+              for profile in LDACBufferProfile.allCases {
                 let events = SessionEvents()
-                let configuration = LDACConfiguration(sampleRate: rate, quality: quality, latencyOffsetMilliseconds: 100)
+                var configuration = LDACConfiguration(sampleRate: rate, quality: quality, latencyOffsetMilliseconds: 100)
+                configuration.bufferProfile = profile
+                configuration.customReserveMilliseconds = 75
+                try require(configuration.mediaArguments.suffix(2) == ["--pcm-reserve-ms", String(configuration.pcmReserveMilliseconds)],
+                    "The media helper omitted the selected PCM reserve")
                 let session = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01",
                     helpers: Helpers(bundle: .main), gain: 0, configuration: configuration, receive: { events.values.append($0) })
                 var expected = LDACPipelineLatency(configuration: configuration)
@@ -477,13 +483,39 @@ extension LDACNativeSession {
                     return nil
                 }
                 try require(observed == values, "Session latency omitted reserve, accumulated receiver delay or accepted malformed reports")
+              }
             }
         }
-        print("PASS actual session latency propagation for all rates and qualities: reserve, receiver replacement, calibration, adaptive packet duration and malformed reports")
+        print("PASS actual session latency propagation for all rates, qualities and buffer profiles: reserve, receiver replacement, calibration, adaptive packet duration and malformed reports")
     }
 
     @MainActor
     static func loggerAuthorizationCheck() async throws {
+        let preflightEvents = SessionEvents()
+        let preflight = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01",
+            helpers: Helpers(bundle: .main), gain: 0, outputDeviceUID: "fixture-output",
+            receive: { preflightEvents.values.append($0) })
+        var routing = LDACApplicationRouting()
+        routing.enabled = true
+        routing.bundleIDs = ["com.example.music"]
+        routing.outputDeviceUID = "fixture-speakers"
+        var selectiveConfiguration = LDACConfiguration()
+        selectiveConfiguration.routing = routing
+        let selective = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01",
+            helpers: Helpers(bundle: .main), gain: 0, outputDeviceUID: "fixture-output",
+            configuration: selectiveConfiguration, receive: { _ in })
+        try require(selective.captureDeviceArguments.suffix(4) == ["--device-uid", "fixture-speakers", "--include-bundles", "com.example.music"],
+            "Selected applications did not use the physical fallback capture device")
+        try preflight.advance()
+        for _ in 0..<100 { await Task.yield() }
+        try require(!preflight.handoffRequested && preflight.children["disconnect"] == nil,
+            "The output was taken over before Bluetooth logging was verified")
+        try preflight.handle("daemon", line: "Filtering the log data using fixture")
+        try preflight.advance()
+        for _ in 0..<100 { await Task.yield() }
+        try require(preflight.runtimeStatus.logAccessVerified && preflight.handoffRequested && preflight.children["disconnect"] == nil,
+            "Verified logging did not wait for explicit output handoff before disconnecting")
+        print("PASS runtime preflight verifies Bluetooth logging before output handoff and selected applications capture from the physical fallback")
         for source in ["daemon", "probe", "media"] {
             let events = SessionEvents()
             let session = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01",
@@ -1110,7 +1142,7 @@ with tempfile.TemporaryDirectory(prefix="acouplet-ldac-session-closure-") as dir
     directory = pathlib.Path(directory)
     swift = directory / "Check.swift"
     binary = directory / "check"
-    timed_source = source.replace("DispatchTime.now()", "SessionClock.shared.monotonic").replace("Date()", "SessionClock.shared.wallTime")
+    timed_source = source.replace("DispatchTime.now()", "SessionClock.shared.monotonic").replace("Date()", "SessionClock.shared.wallTime").replace("Foundation.SessionClock", "SessionClock")
     timed_source = timed_source.replace("        guard fcntl(incoming[1]", "        PipeSetupCheck.descriptors = incoming + outgoing\n        guard fcntl(incoming[1]")
     timed_source = timed_source.replace("fcntl(", "PipeSetupCheck.configure(")
     timed_source = timed_source.replace("        let result = posix_spawn(", "        PipeSetupCheck.spawnAttempts += 1\n        let result = posix_spawn(")

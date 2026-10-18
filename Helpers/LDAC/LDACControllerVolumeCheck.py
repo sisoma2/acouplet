@@ -36,9 +36,14 @@ enum Generation { case v1, v2 }
 enum Model { case unknown, wfXM3, whCH720N, whXM4, wfXM5; var name: String { "fixture" } }
 struct LDACFormat: Equatable { var value = 1 }
 enum LDACState: Equatable { case off, requested, waitingForDevice, connecting, active(LDACFormat), stopping, failed(String) }
-enum LDACSupport { case supported, unsupported, unknown; func allowsStart(requested: Bool) -> Bool { requested && self != .unsupported } }
+__SUPPORT__
 enum LDACAudioCaptureAccess { case unchecked, checking, ready, permissionRequired }
-struct LDACConfiguration { var sampleRate = 48000 }
+__FEATURES__
+struct LDACConfiguration: Codable, Equatable, Sendable {
+    var sampleRate = 48000
+    var routing = LDACApplicationRouting()
+    var isValid: Bool { routing.isValid }
+}
 struct LDACPriorityControl {}
 struct LDACPriorityCleanupError: Error {}
 struct LDACOwnerTimeoutError: Error {}
@@ -223,6 +228,7 @@ __TRANSFER_CONTROLS__
         }
         if !preservingUserChange { _ = controls.update(volume: volume, range: range) }
     }
+    func configureRouting(_ routing: LDACApplicationRouting) async throws {}
     func validateForRecovery() async throws {}
     func prepareForReconnect() async throws { recoveryPreparations += 1 }
     func selectForHandoff() async throws { selected = true }
@@ -241,6 +247,7 @@ final class LDACNativeSession {
     enum Event {
         case handoffReady, connecting, active(LDACFormat), formatChanged(LDACFormat), latencyFrames(UInt32), gainApplied(Double), ldacEndpoint(Bool)
         case audioCaptureAccess(LDACAudioCaptureAccess), failed(String), connectionLost(String), finished(Completion)
+        case health(LDACTransportHealth), compatibility(LDACRuntimeStatus), capabilities(UInt8, UInt8)
     }
     let id: UUID
     let address: String
@@ -335,6 +342,13 @@ final class Controller: ObservableObject {
     let helpers = LDACNativeSession.Helpers()
     var devices: SonyDeviceCoordinator? = SonyDeviceCoordinator()
     func observeControls(_ headphones: SonyHeadphonesController, devices: SonyDeviceCoordinator) {}
+    var healthAddress: String?
+    var transportHealth = LDACTransportHealth()
+    var runtimeStatus = LDACRuntimeStatus()
+    var defaults: UserDefaults?
+    var codecPreferences: [String: Bool] = [:]
+    var discoveredSupport: [String: LDACCapabilityRecord] = [:]
+    func capabilityContext(forAddress address: String) -> LDACCapabilityContext { .init() }
     var events: [String] = []
     func record(_ event: String, reason: String) { events.append(event) }
     func recordRecovery(_ event: String, reason: String) { recoveryEvents.append("\(event) \(reason)") }
@@ -623,10 +637,13 @@ enum Check {
                          "A real \(change) change did not stop LDAC and restore ordinary audio")
             changedRaw.emit(.finished(.init(message: nil)))
             try await waitUntil { !changed.isSessionRunning }
-            guard case let .failed(notice) = changed.state,
-                  notice.contains(change == "source" ? "audio source" : "Sound Quality") else {
-                preconditionFailure("A real \(change) change gave no notice: \(changed.state)")
+            let hasNotice: Bool
+            if case let .failed(notice) = changed.state {
+                hasNotice = notice.contains(change == "source" ? "audio source" : "Sound Quality")
+            } else {
+                hasNotice = false
             }
+            precondition(hasNotice, "A real \(change) change did not stop LDAC and restore ordinary audio")
             for _ in 0..<10 { changed.resumeIfReady() }
             precondition(changed.session == nil, "LDAC resumed after a real \(change) change")
         }
@@ -799,21 +816,19 @@ enum Check {
             sourceDevice.localSource = false
             if !controlsFresh { sourceDevice.volumeFresh = false }
             otherSource.controlsChanged()
-            precondition(otherSource.requestedAddress == sourceDevice.address && sourceRaw.stops == 1,
-                         "Another multipoint source playing stopped LDAC instead of suspending it")
+            precondition(otherSource.requestedAddress == nil && sourceRaw.stops == 1 &&
+                         otherSource.codecPreferences[sourceDevice.address] == false,
+                         "Another multipoint source did not suppress automatic LDAC activation")
             precondition(sourceRaw.audioRestorations == [true], "Phone playback left ordinary Mac Bluetooth audio disconnected")
             sourceRaw.emit(.finished(.init(message: nil)))
-            try await waitUntil { otherSource.state == .waitingForDevice }
-            for _ in 0..<10 { otherSource.resumeIfReady() }
-            precondition(otherSource.session == nil, "LDAC took over another multipoint source")
+            try await waitUntil { otherSource.state == .off }
+            precondition(otherSource.codecPreferences[sourceDevice.address] == false)
             sourceDevice.multipoint.selectedSource = .init(address: "02:00:00:00:00:02")
             sourceDevice.localSource = true
-            sourceDevice.volumeFresh = true
             otherSource.resumeIfReady()
-            try await waitUntil { otherSource.session != nil }
-            try await stop(otherSource)
+            precondition(otherSource.session == nil && otherSource.requestedAddress == nil)
         }
-        print("PASS actual completion routing: manual Off never reconnects absent headphones; another multipoint source playing suspends LDAC with ordinary audio and resumes once the Mac is the source again")
+        print("PASS actual completion routing: manual Off never reconnects absent headphones; another multipoint source restores ordinary audio and suppresses automatic LDAC until explicit activation")
         print("PASS scope: production controller methods and volume mapping; fake transport, confirmations, observations and native output; no hardware or installation")
     }
 }
@@ -829,6 +844,9 @@ fixture = fixture.replace("precondition(", "check(")
 transfer_start = output_source.index("    nonisolated static func canTransferControls(")
 transfer_end = output_source.index("\n    func claim(", transfer_start)
 fixture = fixture.replace("__TRANSFER_CONTROLS__", output_source[transfer_start:transfer_end])
+native_types = (root / "Sources/LDACNativeSession.swift").read_text()
+fixture = fixture.replace("__FEATURES__", native_types[native_types.index("enum LDACMicrophonePolicy:"):native_types.index("struct LDACConfiguration:")])
+fixture = fixture.replace("__SUPPORT__", (root / "Sources/LDACSupport.swift").read_text())
 fixture = fixture.replace("__VOLUME__", volume).replace("__METHODS__", "\n".join(member(name) for name in names))
 
 def run_fixture(contents, failure=None):
@@ -870,9 +888,9 @@ mutations = [
      "let output = self.nativeOutput {", "A Mac-side volume change configured the Mac output it came from"),
     ("late configure tolerance", "                        catch is LDACOwnerTimeoutError {",
      "                        catch let error as LDACOwnerTimeoutError where false {", "A late owner reply to configure stopped LDAC"),
-    ("multipoint suspension", "           headphones?.requestedSourceSwitchAddress != selected {",
+    ("multipoint automatic suppression", "           headphones?.requestedSourceSwitchAddress != selected {",
      "           headphones?.requestedSourceSwitchAddress != selected, false {",
-     "Another multipoint source playing stopped LDAC instead of suspending it"),
+     "Another multipoint source did not suppress automatic LDAC activation"),
     ("requested-switch stop", "           headphones?.requestedSourceSwitchAddress != selected {",
      "           true {", "A real source change did not stop LDAC and restore ordinary audio"),
     ("binding hold", "            holdBinding(reason, transition: transition)\n            return",
