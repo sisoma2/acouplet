@@ -89,7 +89,7 @@ def make_bundle(path, legacy=False, state='owned'):
     (path / 'Contents/Info.plist').write_bytes(plistlib.dumps({
         'CFBundleIdentifier': 'unrelated' if state == 'foreign' else legacy_identifier if legacy else identifier,
         'CFBundleExecutable': 'unrelated' if state == 'executable-foreign' else executable,
-        'AcoupletLDACDriverRevision': 5 if state == 'old-revision' else 6,
+        'AcoupletLDACDriverRevision': 6 if state == 'old-revision' else 7,
     }))
     (path / 'signature.json').write_text(json.dumps({
         'team': 'ZZZZZ99999' if state == 'wrong-team' else team, 'valid': state != 'bad-signature'}))

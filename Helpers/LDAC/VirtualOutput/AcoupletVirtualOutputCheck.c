@@ -808,6 +808,22 @@ static void CheckIdentity(CFStringRef icon, UInt32 terminal) {
     assert(!(*driver)->HasProperty(driver, kObjectID_Stream_Output, owner, &property));
 }
 
+static void CheckStartupLatency(void) {
+    UInt32 scopes[] = {kAudioObjectPropertyScopeInput, kAudioObjectPropertyScopeOutput,
+        kAudioObjectPropertyScopeGlobal};
+    for (UInt32 i = 0; i < sizeof(scopes) / sizeof(scopes[0]); ++i) {
+        AudioObjectPropertyAddress property = Property(kAudioDevicePropertyLatency, scopes[i]);
+        assert((*driver)->HasProperty(driver, kObjectID_Device, owner, &property));
+        Boolean settable = true;
+        assert((*driver)->IsPropertySettable(driver, kObjectID_Device, owner, &property, &settable) == noErr && !settable);
+        UInt32 size = 0;
+        assert((*driver)->GetPropertyDataSize(driver, kObjectID_Device, owner, &property, 0, NULL, &size) == noErr && size == sizeof(UInt32));
+        UInt32 frames = UINT32_MAX;
+        Get(kObjectID_Device, owner, kAudioDevicePropertyLatency, scopes[i], sizeof(frames), &frames);
+        assert(frames == 0);
+    }
+}
+
 static void CheckLatency(pid_t client, Float64 rate) {
     UInt32 frames = (UInt32)(rate / 4);
     CFNumberRef value = CFNumberCreate(NULL, kCFNumberSInt32Type, &frames);
@@ -826,6 +842,10 @@ static void CheckLatency(pid_t client, Float64 rate) {
     Get(kObjectID_Stream_Output, client, kAudioStreamPropertyLatency,
         kAudioObjectPropertyScopeGlobal, sizeof(streamLatency), &streamLatency);
     assert(streamLatency == 0);
+    UInt32 inputLatency = UINT32_MAX;
+    Get(kObjectID_Device, client, kAudioDevicePropertyLatency,
+        kAudioObjectPropertyScopeInput, sizeof(inputLatency), &inputLatency);
+    assert(inputLatency == 0);
     assert(Set(kObjectID_Device, client == owner ? owner + 1 : owner, kAcoupletLatency,
         kAudioObjectPropertyScopeGlobal, sizeof(value), &value) == kAudioDevicePermissionsError);
     assert(Set(kObjectID_Device, client, kAcoupletLatency, kAudioObjectPropertyScopeGlobal,
@@ -856,7 +876,7 @@ static void CheckRevision(void) {
     Get(kObjectID_Device, owner, kAcoupletRevision, kAudioObjectPropertyScopeGlobal, sizeof(revision), &revision);
     SInt32 value = 0;
     assert(revision && CFGetTypeID(revision) == CFNumberGetTypeID());
-    assert(CFNumberGetValue(revision, kCFNumberSInt32Type, &value) && value == kAcoupletDriverRevision && value == 6);
+    assert(CFNumberGetValue(revision, kCFNumberSInt32Type, &value) && value == kAcoupletDriverRevision && value == 7);
     assert((*driver)->SetPropertyData(driver, kObjectID_Device, owner, &property, 0, NULL,
         sizeof(revision), &revision) != noErr);
     CFRelease(revision);
@@ -888,6 +908,7 @@ int main(int argc, const char *argv[]) {
         AcoupletRequestAvailability();
     });
     owner = getpid();
+    CheckStartupLatency();
     assert(!AcoupletClientAuthorized(0) && !AcoupletClientAuthorized(-1));
     assert(!AcoupletClientAuthorized(owner));
     assert(RequestLease(owner, true) == kAudioDevicePermissionsError);

@@ -17,7 +17,7 @@
 #endif
 
 enum { kAcoupletLease = 'xmls', kAcoupletModel = 'xmnm', kAcoupletPriority = 'xmpr', kAcoupletRevision = 'xmvr', kAcoupletLatency = 'xmlt' };
-static const SInt32 kAcoupletDriverRevision = 6;
+static const SInt32 kAcoupletDriverRevision = 7;
 static UInt32 gPipelineLatencyFrames;
 static UInt32 gNotifiedLatencyFrames;
 static UInt64 gLeaseDeadline;
@@ -745,7 +745,8 @@ static Boolean AcoupletHasProperty(AudioServerPlugInDriverRef driver, AudioObjec
     AudioObjectPropertyAddress controlProperty;
     if (Acouplet(object, property, &controlProperty)) return true;
     if (object == kObjectID_Device && property->mSelector == kAudioDevicePropertyLatency)
-        return (property->mScope == kAudioObjectPropertyScopeGlobal || property->mScope == kAudioObjectPropertyScopeOutput) &&
+        return (property->mScope == kAudioObjectPropertyScopeGlobal || property->mScope == kAudioObjectPropertyScopeOutput ||
+            property->mScope == kAudioObjectPropertyScopeInput) &&
             property->mElement == kAudioObjectPropertyElementMain;
     if (property->mSelector == kAudioDevicePropertyIcon)
         return object == kObjectID_Device && property->mScope == kAudioObjectPropertyScopeGlobal &&

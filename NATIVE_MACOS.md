@@ -120,10 +120,12 @@ Legacy Boolean observations are ignored because their age and context are unknow
 An advertised LDAC endpoint with an unsupported requested sample rate remains a
 sample-rate failure, rather than a negative codec observation.
 
-Driver revision 6 reports the pipeline estimate in device latency frames at the
+Driver revision 7 reports the pipeline estimate in device latency frames at the
 negotiated sample rate; stream latency remains zero so Core Audio's device plus
-stream sum counts the pipeline once. The estimate includes the initial 250 ms PCM
-reserve (replaced by the actual sender reserve at startup), one encoder frame,
+stream sum counts the pipeline once. Input latency remains readable as zero during
+Core Audio device registration, including before a playback lease is acquired.
+The estimate includes the initial 250 ms PCM reserve (replaced by the actual sender
+reserve at startup), one encoder frame,
 and the encoder's packet assembly duration. The transport queue capacity is a
 congestion limit, not another fixed delay, and is not added to the reserve.
 Negotiated AVDTP receiver delay reports from 0 to 2 seconds replace the previous
