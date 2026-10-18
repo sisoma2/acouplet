@@ -276,6 +276,7 @@ final class LDACNativeSession {
 
 @MainActor
 final class Controller: ObservableObject {
+    var automaticStartAttempts: [ObjectIdentifier: UInt64] = [:]
     let localBluetoothAddress: () -> String? = { IOBluetoothHostController.default()?.addressAsString() }
     func synchronizeMicrophoneHandoff() -> Bool { true }
     var state = LDACState.off

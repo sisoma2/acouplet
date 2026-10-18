@@ -152,6 +152,8 @@ final class Session {
 
 @MainActor
 final class Controller: ObservableObject {
+    var codecPreferences: [String: Bool] = [:]
+    var automaticStartAttempts: [ObjectIdentifier: UInt64] = [:]
     let localBluetoothAddress: () -> String? = { IOBluetoothHostController.default()?.addressAsString() }
     func synchronizeMicrophoneHandoff() -> Bool { true }
     struct Helpers { var isAvailable = true }

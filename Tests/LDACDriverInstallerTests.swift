@@ -1,4 +1,5 @@
 import Combine
+import CoreAudio
 import XCTest
 @testable import Acouplet
 
@@ -125,6 +126,193 @@ final class LDACDriverInstallerTests: XCTestCase {
                 }
             }
         }
+    }
+}
+
+@MainActor
+final class LDACDefaultCodecTests: XCTestCase {
+    private let address = "02:53:4F:4E:59:01"
+
+    func testStartsLDACForTheSelectedSonyOutputWithoutAManualRequest() async throws {
+        let (ldac, headphones, route) = try prepared()
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+        XCTAssertEqual(ldac.simulatedRequestedAddress, address)
+        route.simulateRoute(sonyOutput)
+        ldac.refreshPreferredCodec()
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+    }
+
+    func testWaitsForTheMatchingBluetoothOutput() async throws {
+        let (ldac, headphones, route) = try prepared()
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        for output in [nil, output(uid: "built-in-output", transport: kAudioDeviceTransportTypeBuiltIn),
+                       output(uid: "02:53:4F:4E:59:02", transport: kAudioDeviceTransportTypeBluetooth),
+                       output(uid: address, transport: kAudioDeviceTransportTypeUSB)] {
+            route.simulateRoute(output)
+            await drainTasks()
+            XCTAssertEqual(ldac.simulatedStarts, [])
+        }
+        route.simulateRoute(sonyOutput)
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+    }
+
+    func testWaitsForTheDriverWithoutOpeningTheInstaller() async throws {
+        var driver = LDACDriverInstaller.State.missing
+        let (ldac, headphones, _) = try prepared(inspectDriver: { _ in driver })
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        for state in [LDACDriverInstaller.State.missing, .outdated, .restartRequired, .unavailable("test")] {
+            driver = state
+            ldac.refreshDriverStateInBackground()
+            await drainTasks()
+            XCTAssertEqual(ldac.simulatedStarts, [])
+            XCTAssertFalse(ldac.isOpeningDriverInstaller)
+        }
+        driver = .current
+        ldac.refreshDriverStateInBackground()
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+    }
+
+    func testHidingLDACControlsDisablesAutomaticStartup() async throws {
+        var enabled = false
+        let (ldac, headphones, _) = try prepared(preferredConfiguration: { _ in enabled ? LDACConfiguration() : nil })
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [])
+        enabled = true
+        ldac.refreshPreferredCodec()
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+    }
+
+    func testAnotherAudioSourceBlocksAutomaticStartup() async throws {
+        let (ldac, headphones, _) = try prepared(localBluetoothAddress: { "02:00:00:00:00:02" })
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [])
+    }
+
+    func testDeviceOptOutPersistsAcrossRelaunchAndManualEnableOverridesIt() async throws {
+        let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let (first, firstHeadphones, _) = try prepared(defaults: defaults)
+        defer { first.stop(); firstHeadphones.simulateControlLoss() }
+        first.setEnabled(false, forAddress: address.replacingOccurrences(of: ":", with: "-").lowercased())
+        await drainTasks()
+        XCTAssertEqual(first.simulatedStarts, [])
+
+        let (relaunched, headphones, _) = try prepared(defaults: defaults)
+        defer { relaunched.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        XCTAssertEqual(relaunched.simulatedStarts, [])
+        relaunched.setEnabled(true, forAddress: address)
+        XCTAssertEqual(relaunched.simulatedStarts, [address])
+        XCTAssertEqual(defaults.dictionary(forKey: "ldac.codecPreferences")?[address] as? Bool, true)
+    }
+
+    func testUnavailableModelsAndLostControlsDoNotStartLDAC() async throws {
+        for model in [SonyDeviceModel.wfXM3, .whCH720N] {
+            let (ldac, headphones, _) = try prepared(model: model)
+            defer { ldac.stop(); headphones.simulateControlLoss() }
+            await drainTasks()
+            XCTAssertEqual(ldac.simulatedStarts, [])
+        }
+        let (ldac, headphones, _) = try prepared()
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        headphones.simulateControlLoss()
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [])
+    }
+
+    func testAnOptOutForAnotherSonyDeviceDoesNotChangeTheDefault() async throws {
+        let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["02:53:4F:4E:59:02": false], forKey: "ldac.codecPreferences")
+        let (ldac, headphones, _) = try prepared(defaults: defaults)
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+    }
+
+    func testSleepingAndTerminatingBlockAutomaticStartup() async throws {
+        for terminating in [false, true] {
+            let (ldac, headphones, _) = try prepared(prepareDevices: { devices in
+                if terminating { devices.beginTermination() }
+                else { devices.isSystemSleeping = true }
+            })
+            defer { ldac.stop(); headphones.simulateControlLoss() }
+            await drainTasks()
+            XCTAssertEqual(ldac.simulatedStarts, [])
+        }
+    }
+
+    func testStopDoesNotImmediatelyStartTheDefaultCodecAgain() async throws {
+        let (ldac, headphones, route) = try prepared()
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+        ldac.stop()
+        for _ in 0..<100 where ldac.isSessionRunning { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertFalse(ldac.isSessionRunning)
+        route.simulateRoute(sonyOutput)
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+        ldac.refreshPreferredCodec(resetAttempts: true)
+        XCTAssertEqual(ldac.simulatedStarts, [address, address])
+    }
+
+    func testPendingDefaultCodecTasksAllowEnvironmentSettingsToBeReleased() async throws {
+        let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let headphones = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        var environment: AppEnvironment? = AppEnvironment(settings: SettingsStore(defaults: defaults), headphones: headphones,
+                                                         audioRoute: MacAudioRouteObserver(startAutomatically: false))
+        weak var settings = environment?.settings
+        let ldac = try XCTUnwrap(environment?.ldac)
+        environment = nil
+        await drainTasks()
+        XCTAssertNil(settings)
+        ldac.refreshDriverStateInBackground()
+        ldac.refreshPreferredCodec(resetAttempts: true)
+    }
+
+    private var sonyOutput: MacAudioRoute { output(uid: address, transport: kAudioDeviceTransportTypeBluetooth) }
+
+    private func output(uid: String, transport: UInt32) -> MacAudioRoute {
+        MacAudioRoute(deviceID: 1, name: nil, uid: uid, transport: MacAudioTransport(rawValue: transport),
+                      outputChannels: 2, nominalSampleRate: 48000)
+    }
+
+    private func drainTasks() async {
+        for _ in 0..<40 { await Task.yield() }
+    }
+
+    private func prepared(defaults: UserDefaults? = nil, model: SonyDeviceModel = .wfXM5,
+                          inspectDriver: @escaping (Bundle) -> LDACDriverInstaller.State = { _ in .current },
+                          preferredConfiguration: @escaping (String) -> LDACConfiguration? = { _ in LDACConfiguration() },
+                          localBluetoothAddress: @escaping () -> String? = { "02:00:00:00:00:01" },
+                          prepareDevices: (SonyDeviceCoordinator) -> Void = { _ in }) throws -> (LDACController, SonyHeadphonesController, MacAudioRouteObserver) {
+        let devices = SonyDeviceCoordinator(fallbackController: SonyHeadphonesController(startAutomatically: false, simulated: true)) { device in
+            let headphones = SonyHeadphonesController(startAutomatically: false, simulatedReady: true,
+                pinnedAddress: device.address, advertisedName: device.name)
+            headphones.simulateDeviceConnection(named: device.name, simulatedAddress: device.address, galleryModel: model)
+            return headphones
+        }
+        devices.reconcileConnectedDevices([try XCTUnwrap(SonyConnectedDevice(address: address, name: model.name, model: model))])
+        prepareDevices(devices)
+        let headphones = try XCTUnwrap(devices.controller(for: address))
+        let route = MacAudioRouteObserver(startAutomatically: false)
+        route.simulateRoute(sonyOutput)
+        let ldac = LDACController(devices: devices, audioRoute: route, defaults: defaults, inspectDriver: inspectDriver,
+                                  preferredConfiguration: preferredConfiguration, localBluetoothAddress: localBluetoothAddress)
+        ldac.simulateHelpers()
+        return (ldac, headphones, route)
     }
 }
 

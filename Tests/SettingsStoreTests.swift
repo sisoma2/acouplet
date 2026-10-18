@@ -228,12 +228,12 @@ final class SettingsStoreTests: XCTestCase {
     #endif
 
     @MainActor
-    func testLDACDefaultsOffAndExplicitPreferencePersists() throws {
+    func testLDACDefaultsOnAndExplicitPreferencePersists() throws {
         let suiteName = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let settings = SettingsStore(defaults: defaults)
-        XCTAssertFalse(settings.experimentalLDACEnabled)
+        XCTAssertTrue(settings.experimentalLDACEnabled)
         XCTAssertNil(defaults.object(forKey: "preferences.experimentalLDACEnabled"))
         settings.experimentalLDACEnabled = true
         XCTAssertTrue(SettingsStore(defaults: defaults).experimentalLDACEnabled)
@@ -279,7 +279,7 @@ final class SettingsStoreTests: XCTestCase {
         let upgraded = SettingsStore(defaults: defaults)
         upgraded.enableLaunchAtLoginByDefault()
         XCTAssertFalse(upgraded.launchAtLogin)
-        XCTAssertFalse(upgraded.experimentalLDACEnabled)
+        XCTAssertTrue(upgraded.experimentalLDACEnabled)
         let restored = SettingsStore(defaults: defaults)
         restored.enableLaunchAtLoginByDefault()
         XCTAssertFalse(restored.launchAtLogin)
@@ -293,7 +293,7 @@ final class SettingsStoreTests: XCTestCase {
         #else
         XCTAssertTrue(fresh.launchAtLogin)
         #endif
-        XCTAssertFalse(fresh.experimentalLDACEnabled)
+        XCTAssertTrue(fresh.experimentalLDACEnabled)
     }
 
     @MainActor

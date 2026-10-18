@@ -1,3 +1,4 @@
+import CoreAudio
 import XCTest
 @testable import Acouplet
 
@@ -2051,6 +2052,35 @@ final class SonyLegacyMultipointTests: XCTestCase {
         XCTAssertFalse(ldac.isSessionRunning)
         guard case .failed = ldac.state else { return XCTFail("A failed multipoint change must not start LDAC") }
         XCTAssertEqual(ldac.targetAddress, address)
+    }
+
+    func testDefaultLDACAsksBeforeChangingMultipointAndRemembersKeepingIt() async throws {
+        let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let (coordinator, headphones) = try preparedXM4(multipointEnabled: true)
+        defer { headphones.simulateControlLoss() }
+        let route = MacAudioRouteObserver(startAutomatically: false)
+        route.simulateRoute(MacAudioRoute(deviceID: 1, name: nil, uid: address,
+                                         transport: MacAudioTransport(rawValue: kAudioDeviceTransportTypeBluetooth),
+                                         outputChannels: 2, nominalSampleRate: 48000))
+        let ldac = LDACController(devices: coordinator, audioRoute: route, defaults: defaults, inspectDriver: { _ in .current },
+                                  preferredConfiguration: { _ in LDACConfiguration() })
+        ldac.simulateHelpers()
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(ldac.multipointConflictAddress, address)
+        XCTAssertNil(headphones.multipointTransition)
+        XCTAssertFalse(ldac.isSessionRunning)
+        ldac.resolveMultipointConflict(turnOffMultipoint: false)
+        XCTAssertEqual(headphones.systemFeatures.multipoint?.enabled, true)
+
+        let relaunched = LDACController(devices: coordinator, audioRoute: route, defaults: defaults, inspectDriver: { _ in .current },
+                                        preferredConfiguration: { _ in LDACConfiguration() })
+        relaunched.simulateHelpers()
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertNil(relaunched.multipointConflictAddress)
+        XCTAssertEqual(relaunched.simulatedStarts, [])
+        XCTAssertNil(headphones.multipointTransition)
     }
 
     func testWHXM4ListsDevicesReadOnlyWhenMultipointAnnouncesFunction38() throws {

@@ -123,7 +123,9 @@ final class SettingsStore: ObservableObject {
         showBatteryInMenuBar = defaults.bool(forKey: Keys.showBatteryInMenuBar)
         lowBatteryNotificationsEnabled = defaults.bool(forKey: Keys.lowBatteryNotificationsEnabled)
         firmwareNotificationsEnabled = defaults.bool(forKey: Keys.firmwareNotificationsEnabled)
-        experimentalLDACEnabled = defaults.bool(forKey: Keys.experimentalLDACEnabled)
+        experimentalLDACEnabled = defaults.object(forKey: Keys.experimentalLDACEnabled) == nil
+            ? true
+            : defaults.bool(forKey: Keys.experimentalLDACEnabled)
         #if !ACOUPLET_PUBLIC_APIS_ONLY
         ldacLatencyOffsets = Self.decode([String: Int].self, from: defaults.data(forKey: "preferences.ldacLatencyOffsets")) ?? [:]
         ldacConfiguration = Self.decode(LDACConfiguration.self, from: defaults.data(forKey: Keys.ldacConfiguration)) ?? LDACConfiguration()

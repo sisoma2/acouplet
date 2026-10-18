@@ -29,6 +29,9 @@ final class LDACController: ObservableObject {
     }
     private let inspectDriver: ((Bundle) -> LDACDriverInstaller.State)?
     private let isDriverInspectionEnabled: () -> Bool
+    private let preferredConfiguration: (String) -> LDACConfiguration?
+    private var codecPreferences: [String: Bool]
+    private var automaticStartAttempts: [ObjectIdentifier: UInt64] = [:]
     private var driverInspectionTask: Task<Void, Never>?
     private let isClassicConnected: (String) -> Bool
     private let localBluetoothAddress: () -> String?
@@ -101,6 +104,7 @@ final class LDACController: ObservableObject {
          inspectDriver: ((Bundle) -> LDACDriverInstaller.State)? = nil,
          callAudio: LDACCallAudio? = nil,
          isDriverInspectionEnabled: @escaping () -> Bool = { true },
+         preferredConfiguration: @escaping (String) -> LDACConfiguration? = { _ in nil },
          localBluetoothAddress: @escaping () -> String? = { IOBluetoothHostController.default()?.addressAsString() },
          isClassicConnected: @escaping (String) -> Bool = { IOBluetoothDevice(addressString: $0)?.isClassicConnected() == true }) {
         self.bundle = bundle
@@ -109,6 +113,8 @@ final class LDACController: ObservableObject {
         self.inspectDriver = inspectDriver
         self.callAudio = callAudio ?? (inspectDriver == nil ? LDACCallAudio() : nil)
         self.isDriverInspectionEnabled = isDriverInspectionEnabled
+        self.preferredConfiguration = preferredConfiguration
+        codecPreferences = defaults?.dictionary(forKey: "ldac.codecPreferences") as? [String: Bool] ?? [:]
         self.isClassicConnected = isClassicConnected
         self.localBluetoothAddress = localBluetoothAddress
         driverState = inspectDriver?(bundle) ?? .unavailable("")
@@ -125,6 +131,7 @@ final class LDACController: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.objectWillChange.send()
                     self?.resumeIfReady()
+                    self?.refreshPreferredCodec()
                 }
             }.store(in: &availabilityObservations)
         }
@@ -136,6 +143,7 @@ final class LDACController: ObservableObject {
                 self?.refreshDriverStateInBackground()
             }.store(in: &availabilityObservations)
         if inspectDriver == nil { refreshDriverStateInBackground() }
+        Task { @MainActor [weak self] in self?.refreshPreferredCodec() }
     }
 
     var needsStopBeforeTermination: Bool { isSessionRunning || !preferenceRestoreTasks.isEmpty }
@@ -199,11 +207,12 @@ final class LDACController: ObservableObject {
 
     func refreshDriverStateInBackground() {
         guard isDriverInspectionEnabled(), !isSessionRunning else { return }
-        guard inspectDriver == nil else { refreshDriverState(); return }
+        guard inspectDriver == nil else { refreshDriverState(); refreshPreferredCodec(); return }
         guard driverInspectionTask == nil else { return }
         driverInspectionTask = Task {
             await refreshDriverStateAsync()
             driverInspectionTask = nil
+            refreshPreferredCodec()
         }
     }
 
@@ -305,8 +314,31 @@ final class LDACController: ObservableObject {
             && preferenceRestoreTasks[address] == nil
     }
 
+    func refreshPreferredCodec(resetAttempts: Bool = false) {
+        if resetAttempts { automaticStartAttempts.removeAll() }
+        guard state == .off, !isSessionRunning, requestedAddress == nil,
+              cleanupTask == nil, recoveryTask == nil,
+              multipointConflictAddress == nil, multipointShutdownAddress == nil,
+              let devices, !devices.isSystemSleeping, !devices.isTerminating,
+              let address = devices.selectedAddress, codecPreferences[address] != false,
+              let configuration = preferredConfiguration(address),
+              let headphones = devices.controller(for: address), headphones.isDeviceConnected,
+              automaticStartAttempts[ObjectIdentifier(headphones)] != headphones.notificationSession,
+              canEnable(forAddress: address), driverState == .current,
+              let route = audioRoute?.route, let uid = route.uid, let transport = route.transport,
+              LDACNativeOutput.canTransferControls(uid: uid, transport: transport.rawValue, address: address),
+              headphones.pendingControlTransition == nil,
+              headphones.hasCurrentMusicSourceContext(for: localBluetoothAddress()) else { return }
+        setEnabled(true, forAddress: address, configuration: configuration)
+    }
+
     func setEnabled(_ enabled: Bool, forAddress address: String, configuration: LDACConfiguration? = nil) {
         guard let address = SonyBLEIdentity.normalizedAddress(address) else { return }
+        codecPreferences[address] = enabled
+        defaults?.set(codecPreferences, forKey: "ldac.codecPreferences")
+        if let headphones = devices?.controller(for: address) {
+            automaticStartAttempts[ObjectIdentifier(headphones)] = headphones.notificationSession
+        }
         if enabled {
             guard requestedAddress != address else { return }
             guard preferenceRestoreTasks[address] == nil else { return }
@@ -353,7 +385,10 @@ final class LDACController: ObservableObject {
         let configuration = multipointConflictConfiguration
         multipointConflictAddress = nil
         multipointConflictConfiguration = nil
-        guard turnOffMultipoint else { return }
+        guard turnOffMultipoint else {
+            setEnabled(false, forAddress: address)
+            return
+        }
         let failure = String(localized: "Multipoint could not be turned off. LDAC did not start.")
         guard let headphones = devices?.controller(for: address), headphones.ldacRequiresMultipointOff else {
             setEnabled(true, forAddress: address, configuration: configuration)
@@ -393,6 +428,9 @@ final class LDACController: ObservableObject {
     }
 
     func stop(restoreAudio: Bool = true, reason: String = "app requested stop", completion: (@MainActor () -> Void)? = nil) {
+        if let address = requestedAddress ?? targetAddress, let headphones = devices?.controller(for: address) {
+            automaticStartAttempts[ObjectIdentifier(headphones)] = headphones.notificationSession
+        }
         requestedAddress = nil
         suspensionRequested = false
         if let completion {
@@ -1477,6 +1515,9 @@ final class LDACController: ObservableObject {
                     if retry { self.scheduleRecovery(next) }
                 } else { self.startWhenMicrophoneIsIdle(next) }
             } else {
+                if let address = self.targetAddress, let headphones = self.devices?.controller(for: address) {
+                    self.automaticStartAttempts[ObjectIdentifier(headphones)] = headphones.notificationSession
+                }
                 self.targetAddress = nil
                 self.state = .off
             }

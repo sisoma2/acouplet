@@ -33,7 +33,11 @@ final class AppEnvironment {
         self.audioRoute = audioRoute
         #if !ACOUPLET_PUBLIC_APIS_ONLY
         ldac = LDACController(devices: devices, audioRoute: audioRoute, defaults: settings.defaults,
-                              isDriverInspectionEnabled: { [unowned settings] in settings.experimentalLDACEnabled })
+                              isDriverInspectionEnabled: { [weak settings] in settings?.experimentalLDACEnabled == true },
+                              preferredConfiguration: { [weak settings] address in
+            guard let settings, settings.experimentalLDACEnabled else { return nil }
+            return settings.ldacConfiguration(forAddress: address)
+        })
         notifications = SonyNotificationService(settings: settings, devices: devices,
                                                 presentLowBattery: { [weak devices, noiseModeHUD] warning, _ in
             guard let headphones = devices?.controller(for: warning.deviceID) else { return false }
@@ -59,6 +63,12 @@ final class AppEnvironment {
             .removeDuplicates()
             .sink { [weak ldac] enabled in
                 if !enabled { ldac?.stop(reason: "experimental LDAC preference disabled") }
+                else {
+                    Task { @MainActor [weak ldac] in
+                        ldac?.refreshDriverStateInBackground()
+                        ldac?.refreshPreferredCodec(resetAttempts: true)
+                    }
+                }
             }
             .store(in: &cancellables)
         settings.$reconnectAutomatically.combineLatest(ldac.$targetAddress, ldac.$isSessionRunning, ldac.$state)
