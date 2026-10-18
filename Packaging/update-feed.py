@@ -18,7 +18,7 @@ PUBLIC_METADATA = ['version', 'build', 'initializeFeed', 'sdkVersion', 'architec
 
 
 def run(arguments, input=None, capture=False):
-    result = subprocess.run(list(map(str, arguments)), input=input, capture_output=capture, text=True)
+    result = subprocess.run(list(map(str, arguments)), check=False, input=input, capture_output=capture, text=True)
     if result.returncode:
         raise RuntimeError('Release operation failed: ' + Path(arguments[0]).name)
     return result.stdout if capture else None
@@ -165,9 +165,9 @@ def feed(root, *, app, archive, notes, history, account):
     signature = run([SPARKLE / 'sign_update', '--account', account, '-p', checksums], capture=True).strip()
     verify_file(root, public_key, checksums, signature, checksums.stat().st_size)
     (artifact / 'SHA256SUMS.ed25519').write_text(signature + '\n')
-    with tarfile.open(artifact / 'update-history.tar.gz', 'w:gz') as history:
+    with tarfile.open(artifact / 'update-history.tar.gz', 'w:gz') as history_archive:
         for path in sorted(updates.iterdir()):
-            history.add(path, arcname=path.name, recursive=False)
+            history_archive.add(path, arcname=path.name, recursive=False)
     with tarfile.open(artifact / 'website-updates.tar.gz', 'w:gz') as website:
         for path in sorted(updates.iterdir()):
             if path.suffix in ['.xml', '.md', '.html', '.txt']:

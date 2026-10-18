@@ -35,7 +35,7 @@ recovery_target = f'{domain}/{recovery_label}'
 
 
 def ctl(*arguments):
-    return subprocess.run(['/bin/launchctl', *arguments], capture_output=True, text=True, timeout=20)
+    return subprocess.run(['/bin/launchctl', *arguments], check=False, capture_output=True, text=True, timeout=20)
 
 
 def wait_for(predicate):
@@ -282,7 +282,7 @@ struct MigrationCheck {
         assert len(orchestration_log.read_text().splitlines()) == 1
         invalid_token = str(uuid.uuid4()).upper()
         failure_environment = {**os.environ, 'XPC_SERVICE_NAME': helper_label, 'ACOUPLET_MIGRATION_TOKEN': invalid_token}
-        result = subprocess.run([str(binary), '--migrate-background-service'], env=failure_environment,
+        result = subprocess.run([str(binary), '--migrate-background-service'], check=False, env=failure_environment,
                                 capture_output=True, text=True, timeout=3)
         assert result.returncode == 1 and 'Background service migration failed:' in result.stderr, result
         helper_plist.write_bytes(plistlib.dumps({'Label': helper_label, 'RunAtLoad': True, 'LaunchOnlyOnce': True,

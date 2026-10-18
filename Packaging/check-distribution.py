@@ -19,7 +19,7 @@ sparkle = runpy.run_path(str(Path(__file__).with_name('check-sparkle-bundle.py')
 
 def command(args):
     try:
-        result = subprocess.run(args, capture_output=True, timeout=30)
+        result = subprocess.run(args, check=False, capture_output=True, timeout=30)
         return result.returncode, result.stdout, result.stderr
     except subprocess.TimeoutExpired:
         return -1, b'', b'Check timed out; result is unverified.'

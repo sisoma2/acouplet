@@ -120,7 +120,7 @@ with tempfile.TemporaryDirectory(prefix='acouplet-artwork-check-') as directory:
     subprocess.run(['/bin/sh', '-c', phase['shellScript']], env=environment, check=True)
     assert {p.stem for p in staged.glob('*.imageset')} == set(artwork.mini_icons)
     environment.update(ACOUPLET_NO_SONY_ARTWORK='NO', ACOUPLET_SONY_ARTWORK_DIR='')
-    assert subprocess.run(['/bin/sh', '-c', phase['shellScript']], env=environment, capture_output=True).returncode != 0
+    assert subprocess.run(['/bin/sh', '-c', phase['shellScript']], check=False, env=environment, capture_output=True).returncode != 0
     protocol = (root / 'Sources/SonyProtocol.swift').read_text()
     model = protocol.split('enum SonyDeviceModel:', 1)[1].split('\nstruct SonyProtocolInfo:', 1)[0]
     color = protocol.split('struct SonyDeviceColor:', 1)[1].split('\nstruct SonyDeviceInformation:', 1)[0]

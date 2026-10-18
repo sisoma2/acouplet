@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from check_runner import CheckCases
+from check_stubs import StubExecutable
 
 packaging = Path(__file__).parent
 checker = runpy.run_path(str(packaging / 'check-distribution.py'))
@@ -251,6 +252,7 @@ elif name == 'python3':
     else: sys.exit(subprocess.call(['/usr/bin/python3', *args]))
 else: raise AssertionError(name)
 '''
+stub_executable = StubExecutable(stub_source)
 
 
 def check_release(mode='success', notarize=False, signing=None, succeeds=True, appearance='pearl'):
@@ -262,8 +264,7 @@ def check_release(mode='success', notarize=False, signing=None, succeeds=True, a
         source = (packaging / 'direct.sh').read_text()
         for name in ('package.sh', 'build-ldac-output-installer.sh', 'create-dmg.sh', 'codesign', 'ditto', 'hdiutil', 'xcrun', 'spctl', 'python3', 'swift'):
             stub = (scripts if name in ('package.sh', 'build-ldac-output-installer.sh', 'create-dmg.sh') else stubs) / name
-            stub.write_text(stub_source)
-            stub.chmod(0o755)
+            stub_executable.link(stub)
             source = source.replace(('/usr/sbin/' if name == 'spctl' else '/usr/bin/') + name, str(stub))
         source = source.replace('/bin/sh "$repo_root/Packaging/build-ldac-output-installer.sh"', '"$repo_root/Packaging/build-ldac-output-installer.sh"')
         script = scripts / 'direct.sh'
@@ -298,7 +299,7 @@ def check_release(mode='success', notarize=False, signing=None, succeeds=True, a
         environment = {key: value for key, value in os.environ.items() if key not in ('CODE_SIGN_IDENTITY', 'NOTARY_KEYCHAIN_PROFILE')}
         environment.update(ACOUPLET_DIRECT_CHECK_ROOT=str(root), ACOUPLET_DIRECT_CHECK_MODE=mode, ACOUPLET_INSTALLER_SIGNING_IDENTITY='Developer ID Installer: Example (ABCDE12345)', ACOUPLET_DMG_APPEARANCE=appearance)
         environment.update({'CODE_SIGN_IDENTITY': 'Developer ID Application: Example (ABCDE12345)', 'NOTARY_KEYCHAIN_PROFILE': 'existing-profile'} if signing is None else signing)
-        result = subprocess.run(['/bin/zsh', str(script), *(['--notarize'] if notarize else [])], env=environment, capture_output=True, text=True)
+        result = subprocess.run(['/bin/zsh', str(script), *(['--notarize'] if notarize else [])], check=False, env=environment, capture_output=True, text=True)
         assert (result.returncode == 0) == succeeds, (mode, result.stdout, result.stderr)
         commands = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines()] if (root / 'commands.jsonl').exists() else []
         assert local_previous.read_text() == 'previous development receipt'

@@ -864,7 +864,7 @@ def run_fixture(contents, failure=None):
             environment["SDKROOT"] = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
         subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), "-o", str(binary)],
                        env=environment, check=True)
-        result = subprocess.run([str(binary)], env=environment, capture_output=True, text=True)
+        result = subprocess.run([str(binary)], check=False, env=environment, capture_output=True, text=True)
         if failure is None:
             assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
             print(result.stdout, end="")

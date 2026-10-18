@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 
 from check_runner import CheckCases
+from check_stubs import StubExecutable
 
 packaging = Path(__file__).parent
 service_check = (packaging / 'check-service.sh').read_text().split("<<'PLIST'\n", 1)[1].split('\nPLIST\n', 1)[0]
@@ -170,6 +171,8 @@ elif name in ('Acouplet', 'XM5 Control'):
 elif name != 'sleep':
     raise AssertionError('Unexpected stub: ' + name)
 '''
+stub_executable = StubExecutable(stub_source)
+sleep_executable = StubExecutable('#!/bin/sh\nexit 0\n')
 checks = CheckCases('check-install fixtures')
 
 
@@ -188,8 +191,7 @@ def fixture(root, mode):
     for path in (package, applications, agents, stubs): path.mkdir()
     for name in (*replacements.values(), 'mv', 'sleep'):
         stub = stubs / name
-        stub.write_text('#!/bin/sh\nexit 0\n' if name == 'sleep' else stub_source)
-        stub.chmod(0o755)
+        (sleep_executable if name == 'sleep' else stub_executable).link(stub)
     for parent, name, identifier, version in (
         (package, 'Acouplet.app', 'dev.baglayan.Acouplet', 'new'),
         (applications, 'Acouplet.app', 'dev.baglayan.Acouplet', 'old'),
@@ -201,8 +203,7 @@ def fixture(root, mode):
         (app / 'version').write_text(version)
         (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': identifier}))
         executable = app / ('Contents/MacOS/Acouplet' if identifier == 'dev.baglayan.Acouplet' else 'Contents/MacOS/XM5 Control')
-        executable.write_text(stub_source)
-        executable.chmod(0o755)
+        os.link(stub_executable.path, executable)
         if version == 'old':
             controls = app / 'Contents/PlugIns/Acouplet Controls.appex/Contents'
             controls.mkdir(parents=True)
@@ -283,7 +284,7 @@ def run(root, mode, name='Install.command', arguments=()):
     command.write_text(script)
     env = {**os.environ, 'PATH': str(root / 'stubs') + ':' + os.environ['PATH'],
            'ACOUPLET_INSTALL_CHECK_ROOT': str(root), 'ACOUPLET_INSTALL_CHECK_MODE': mode}
-    return subprocess.run(['/bin/zsh', str(command), *arguments], env=env, text=True, capture_output=True, timeout=60)
+    return subprocess.run(['/bin/zsh', str(command), *arguments], check=False, env=env, text=True, capture_output=True, timeout=60)
 
 
 def check_migration(scenario, mode, arguments, successful):

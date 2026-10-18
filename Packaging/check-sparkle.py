@@ -38,7 +38,7 @@ def check_fetch(name, environment=None, cached=None, succeeds=True, downloads=Fa
         variables = {key: value for key, value in os.environ.items()
                      if key not in {'ACOUPLET_SPARKLE_ENABLED', 'ACOUPLET_PUBLIC_APIS_ONLY', 'CONFIGURATION'}}
         variables.update(environment or {})
-        result = subprocess.run(['/bin/zsh', str(script)], env=variables, capture_output=True, text=True)
+        result = subprocess.run(['/bin/zsh', str(script)], check=False, env=variables, capture_output=True, text=True)
         assert (result.returncode == 0) == succeeds, (name, result.stdout, result.stderr)
         assert (root / 'network-call').exists() == downloads, name
         if downloads:

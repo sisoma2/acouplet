@@ -13,7 +13,7 @@ for name, arguments in [
     ('SonyAudioConnection', []),
     ('LDACLogObserver', []),
 ]:
-    result = subprocess.run([str(helpers / name), *arguments], capture_output=True, text=True, timeout=15)
+    result = subprocess.run([str(helpers / name), *arguments], check=False, capture_output=True, text=True, timeout=15)
     assert result.returncode == 2, (name, result.returncode, result.stderr)
     assert 'BEFORE' not in result.stdout, name
 
@@ -22,12 +22,12 @@ for name in ['LDACSignaling', 'LDACMediaTransport']:
 # The LaunchAgent clamps the whole helper tree to the utility QoS; the sender's real-time policy must
 # still put a thread in the real-time band there.
 realtime = subprocess.run(['/usr/sbin/taskpolicy', '-c', 'utility', str(helpers / 'LDACMediaTransport'), '--self-test'],
-                          capture_output=True, text=True, timeout=15)
+                          check=False, capture_output=True, text=True, timeout=15)
 assert realtime.returncode == 0 and 'REALTIME_CHECK applied=1 effective=1 effectiveAfterSleep=1' in realtime.stdout, realtime.stdout[-2000:]
 
 audio = helpers / 'Acouplet Audio.app/Contents/MacOS/AcoupletAudio'
 for arguments in [['capture.caf'], ['--sample-composition', 'capture.caf']]:
-    result = subprocess.run([str(audio), *arguments], capture_output=True, text=True, timeout=15)
+    result = subprocess.run([str(audio), *arguments], check=False, capture_output=True, text=True, timeout=15)
     assert result.returncode == 2 and 'CREATE_TAP' not in result.stdout, (arguments, result.stdout, result.stderr)
 for binary, markers in [
     (audio, [b'CREATE_CAF', b'WRITE_CAF', b'CLOSE_CAF', b'NEW_OUTPUT.caf', b'Acouplet Research']),

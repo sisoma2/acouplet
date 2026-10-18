@@ -143,7 +143,7 @@ else:
         environment.update(signing, ACOUPLET_STORE_CHECK_ROOT=str(root), ACOUPLET_STORE_CHECK_MODE=mode,
                            ACOUPLET_STORE_CHECK_DEVELOPER_DIR=signing.get('DEVELOPER_DIR', '/Applications/Selected Xcode.app/Contents/Developer'))
         result = subprocess.run(['/bin/zsh', str(script), *(['--unsigned'] if unsigned else [])],
-                                env=environment, text=True, capture_output=True)
+                                check=False, env=environment, text=True, capture_output=True)
         assert (result.returncode == 0) == succeeds, (name, result.stdout, result.stderr)
         assert (root / 'selected-developer-dir').exists() == ('DEVELOPER_DIR' not in signing)
         log = root / 'commands.jsonl'

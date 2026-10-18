@@ -119,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix='acouplet-ldac-build-check-') as directo
     assert '-DACOUPLET_SIGNING_TEAM="ABCDE12345"' in [command for command in commands if command[0] == 'clang'][-1]
     for team in ('abcde12345', 'ABCDE1234', 'ABCDE12345"', 'ABCDE 2345'):
         before = log.read_bytes()
-        failed = subprocess.run(['/bin/sh', str(script)], env={**environment, 'DEVELOPMENT_TEAM': team}, capture_output=True)
+        failed = subprocess.run(['/bin/sh', str(script)], check=False, env={**environment, 'DEVELOPMENT_TEAM': team}, capture_output=True)
         assert failed.returncode != 0 and b'DEVELOPMENT_TEAM' in failed.stderr, team
         assert not any('AcoupletVirtualOutput.c' in line for line in log.read_bytes()[len(before):].decode().splitlines()), team
     previous_log = log.read_bytes()

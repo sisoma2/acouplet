@@ -31,7 +31,7 @@ for scenario in ('three-devices', 'duplicate-address', 'invalid-address', 'inval
         output = root / 'PreferencePanes'
         commands, principals = [], set()
 
-        def run(args, **kwargs):
+        def run(args, *, commands=commands, principals=principals, scenario=scenario, **kwargs):
             commands.append(args)
             if args[1:4] == ['--sdk', 'macosx', '--show-sdk-path']:
                 return subprocess.CompletedProcess(args, 0, stdout='/mock/SDK\n')

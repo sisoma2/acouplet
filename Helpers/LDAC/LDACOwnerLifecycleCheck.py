@@ -427,7 +427,7 @@ with tempfile.TemporaryDirectory(prefix='acouplet-owner-check-') as temporary:
     binary = directory / 'check'
     swift.write_text(fixture)
     subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(swift), '-o', str(binary)], check=True)
-    rejected = subprocess.run([str(binary), '--ldac-owner'], capture_output=True, timeout=5)
+    rejected = subprocess.run([str(binary), '--ldac-owner'], check=False, capture_output=True, timeout=5)
     assert rejected.returncode != 0, 'A foreign parent invoked the signed owner entry point'
     print('PASS actual owner parent-signature check rejects direct foreign invocation')
     for mode in ['normal', 'crash', 'inherited', 'slow', 'early', 'cancel', 'dropped', 'claimed', 'missing', 'changed', 'gap', 'owner-crash', 'owner-term', 'malformed', 'oversized', 'eof', 'delayed', 'hung', 'parent-hung', 'ordering']:
@@ -442,7 +442,7 @@ with tempfile.TemporaryDirectory(prefix='acouplet-owner-check-') as temporary:
         holder = None
         try:
             marker = 'owner-configure-start' if mode == 'parent-hung' else 'claim ' if mode == 'slow' else ('app-complete' if mode in ['early', 'cancel', 'dropped', 'ordering'] else 'app-claimed' if mode == 'claimed' else 'app-gap' if mode == 'gap' else 'app-active')
-            wait_for(lambda: marker in events.read_text() or process.poll() is not None)
+            wait_for(lambda marker=marker, events=events, process=process: marker in events.read_text() or process.poll() is not None)
             assert process.poll() is None or mode in ['normal', 'early', 'cancel', 'dropped', 'delayed', 'malformed', 'oversized', 'eof', 'hung', 'ordering'], process.communicate(timeout=1)
             lines = events.read_text().splitlines()
             owner_pid = int(next(line.split()[1] for line in lines if line.startswith(('claim ', 'spawned '))))
@@ -461,17 +461,17 @@ with tempfile.TemporaryDirectory(prefix='acouplet-owner-check-') as temporary:
             transcript, diagnostics = process.communicate(timeout=8)
             if mode not in ['early', 'parent-hung']:
                 try:
-                    wait_for(lambda: (run / 'state').exists())
+                    wait_for(lambda run=run: (run / 'state').exists())
                 except AssertionError:
                     raise AssertionError(mode + '\n' + events.read_text() + '\n' + diagnostics.decode() + '\n' + repr({'caller_exit': process.returncode, 'owner_alive': alive(owner_pid), 'helpers_alive': [pid for pid in helpers if alive(pid)]}))
-            wait_for(lambda: not alive(owner_pid))
+            wait_for(lambda owner_pid=owner_pid: not alive(owner_pid))
             if mode == 'inherited':
                 assert time.monotonic() - killed_at < 1.5 and alive(holder), 'Owner waited for inherited pipe EOF'
                 os.kill(holder, signal.SIGKILL)
-                wait_for(lambda: not alive(holder))
+                wait_for(lambda holder=holder: not alive(holder))
             helpers = [int(line.split()[1]) for line in events.read_text().splitlines() if line.startswith('child ')]
             for helper in helpers:
-                wait_for(lambda: not alive(helper))
+                wait_for(lambda helper=helper: not alive(helper))
             if mode == 'parent-hung':
                 assert not (run / 'state').exists(), 'Forced owner termination claimed cooperative route restoration'
                 print('PASS actual parent death with a blocked owner: independent watchdog ends worker and children; restoration remains unverified')

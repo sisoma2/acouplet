@@ -162,7 +162,7 @@ struct Check {
 }
 ''')
     subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(sender_source), "-o", str(sender)], check=True)
-    result = subprocess.run([str(sender), str(child)], capture_output=True, text=True, timeout=15)
+    result = subprocess.run([str(sender), str(child)], check=False, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0 and "SENDER_CHECKS_PASSED" in result.stdout, (result.returncode, result.stdout, result.stderr)
     print("PASS actual child send: a 256 KiB line reaches a reading helper whole, a helper that never reads gets an explicit partial-write error after the bounded wait, and an exited helper is still EPIPE")
     result = subprocess.Popen([str(wrapper), "--exit-23"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)

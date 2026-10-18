@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix='acouplet-release-source-check-') as dir
     def run(action, succeeds=True, development=False, extra=None):
         result = subprocess.run(['/usr/bin/python3', str(packaging / 'release-source.py'), action, str(repo), str(record),
                                  *(['--development'] if development else [])],
-                                env={**environment, **(extra or {})}, text=True, capture_output=True)
+                                check=False, env={**environment, **(extra or {})}, text=True, capture_output=True)
         assert (result.returncode == 0) == succeeds, (action, result.stdout, result.stderr)
         return result.stdout
 

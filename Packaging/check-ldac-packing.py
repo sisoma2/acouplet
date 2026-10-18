@@ -119,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix='acouplet-ldac-packing-') as directory:
                         '-I', str(tree / 'inc'), '-I', str(tree / 'src'), str(check),
                         str(tree / 'src/ldacBT.c'), '-o', str(executable)], check=True)
         executables[name] = executable
-    reproduced = subprocess.run([str(executables['original-ubsan'])], capture_output=True, text=True)
+    reproduced = subprocess.run([str(executables['original-ubsan'])], check=False, capture_output=True, text=True)
     assert reproduced.returncode != 0 and 'left shift of negative value' in reproduced.stderr, reproduced
     print('Original pinned packer: UBSan negative-left-shift reproduced', flush=True)
     subprocess.run([str(executables['fixed'])], check=True)

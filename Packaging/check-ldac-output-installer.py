@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from check_runner import CheckCases
+from check_stubs import StubExecutable
 
 packaging = Path(__file__).parent
 identifier = 'dev.baglayan.Acouplet.LDACOutput'
@@ -76,6 +77,7 @@ elif name == 'stat':
 else:
     raise AssertionError(args)
 '''
+stub_executable = StubExecutable(stub_source)
 checks = CheckCases('check-ldac-output-installer fixtures')
 
 
@@ -105,8 +107,7 @@ def prepare(root):
     (root / 'HAL/Unrelated.driver/keep').write_text('preserve')
     for name in ('PlistBuddy', 'codesign', 'pgrep', 'pkgutil', 'rm', 'install', 'chown', 'stat'):
         stub = root / name
-        stub.write_text(stub_source)
-        stub.chmod(0o755)
+        stub_executable.link(stub)
     return {**os.environ, 'ACOUPLET_OUTPUT_INSTALL_CHECK_ROOT': str(root)}
 
 
@@ -137,7 +138,7 @@ def run_script(root, name, environment, volume='/', signing_team=team):
     script = root / Path(name).name
     script.write_text(source)
     command = ['/bin/zsh', str(script)] if name.endswith('.command') else ['/bin/sh', str(script), '/fixture.pkg', '/', volume]
-    return subprocess.run(command, env=environment, text=True, capture_output=True)
+    return subprocess.run(command, check=False, env=environment, text=True, capture_output=True)
 
 
 def commands(root):

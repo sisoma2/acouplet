@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 
 from check_runner import CheckCases
+from check_stubs import StubExecutable
 
 packaging = Path(__file__).parent
 project = json.loads(subprocess.check_output(['/usr/bin/plutil', '-convert', 'json', '-o', '-', str(packaging.parent / 'Acouplet.xcodeproj/project.pbxproj')]))
@@ -209,6 +210,7 @@ elif name == 'pkgutil':
 else:
     raise AssertionError('Unexpected stub: ' + name)
 '''
+stub_executable = StubExecutable(stub_source)
 
 
 def run_check(name, signing, mode='success', succeeds=True, local=False, panes=False, direct=False):
@@ -221,8 +223,7 @@ def run_check(name, signing, mode='success', succeeds=True, local=False, panes=F
         source = (packaging / 'package.sh').read_text()
         for tool in ('xcrun', 'codesign', 'ditto', 'otool', 'pkgbuild', 'pkgutil'):
             stub = stubs / tool
-            stub.write_text(stub_source)
-            stub.chmod(0o755)
+            stub_executable.link(stub)
             source = source.replace(('/usr/sbin/' if tool == 'pkgutil' else '/usr/bin/') + tool, str(stub))
         source = source.replace('/Applications/Acouplet.app/Contents/Info.plist', str(root / 'installed.plist'))
         script = scripts / 'package.sh'
@@ -277,7 +278,7 @@ def run_check(name, signing, mode='success', succeeds=True, local=False, panes=F
             old_package = root / '.build/local-update/Acouplet' if local else package
             (old_package / 'PreferencePanes/Sony-001122334455.prefPane').mkdir(parents=True)
 
-        result = subprocess.run(['/bin/zsh', str(script), *(['--local'] if local else ['--direct'] if direct else [])], env=environment, text=True, capture_output=True)
+        result = subprocess.run(['/bin/zsh', str(script), *(['--local'] if local else ['--direct'] if direct else [])], check=False, env=environment, text=True, capture_output=True)
         assert (result.returncode == 0) == succeeds, (name, result.returncode, result.stdout, result.stderr)
         log = root / 'commands.jsonl'
         commands = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []

@@ -82,7 +82,7 @@ if CommandLine.arguments.count == 1 {
     rejects(lambda: release.verify_updates(root, updates, public_key, 42, '1.2.4', repository='fixture/repo'))
     for url in ['https://other.example/updates/a.dmg', 'https://baglayan.dev/updates/%2e%2e/a.dmg',
                 'https://baglayan.dev/updates/a.dmg?token=x', 'http://baglayan.dev/updates/a.dmg']:
-        rejects(lambda: release.update_path(updates, url))
+        rejects(lambda url=url: release.update_path(updates, url))
     for url in ['https://github.com/other/repo/releases/download/v1.2.3/' + archive.name,
                 'https://github.com/fixture/repo/releases/download/v1.2.4/' + archive.name,
                 'https://github.com/fixture/repo/releases/latest/download/' + archive.name,
@@ -160,7 +160,7 @@ if CommandLine.arguments.count == 1 {
     fixture_key = base64.b64encode(bytes([0x42] * 32)).decode()
     result = subprocess.run([release.SPARKLE / 'generate_appcast', '--ed-key-file', '-', '--download-url-prefix', release.github_download_prefix('fixture/repo', '1.2.3'),
                              '--release-notes-url-prefix', release.PREFIX, '--disable-signing-warning', '--maximum-deltas', '0', generated],
-                            input=fixture_key, capture_output=True, text=True, env={**os.environ, 'CFFIXED_USER_HOME': str(generator_home)})
+                            check=False, input=fixture_key, capture_output=True, text=True, env={**os.environ, 'CFFIXED_USER_HOME': str(generator_home)})
     assert result.returncode == 0, result.stdout + result.stderr
     assert release.verify_updates(root, generated, public_key, 42, '1.2.3', repository='fixture/repo') == 42
     assert (generated / 'Fixture.md').read_text() == 'Test-only native generator notes.\n'
@@ -278,7 +278,7 @@ if CommandLine.arguments.count == 1 {
         (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(dict(info, CFBundleVersion='44', CFBundleShortVersionString='1.2.5')))
         previous_calls = len(generator_calls)
         with patch.object(release, 'REPO', fixture_repo), patch.object(release, 'run', feed_command):
-            rejects(lambda: release.feed(phase, app=app, archive=archive, notes='Fixture notes.', history=first_history, account='fixture-account'))
+            rejects(lambda phase=phase, first_history=first_history: release.feed(phase, app=app, archive=archive, notes='Fixture notes.', history=first_history, account='fixture-account'))
         assert len(generator_calls) == previous_calls
     first_history = saved_history
     phase = root / 'feed-filename-collision'
