@@ -183,7 +183,9 @@ with tempfile.TemporaryDirectory(prefix="acouplet-sony-ble-write-") as directory
     environment["ACOUPLET_TESTING"] = "1"
     environment["CFFIXED_USER_HOME"] = str(root / "home")
     Path(environment["CFFIXED_USER_HOME"]).mkdir()
-    environment["CLANG_MODULE_CACHE_PATH"] = str(root / "module-cache")
+    environment.setdefault("CLANG_MODULE_CACHE_PATH", str(source_path.parents[1] / ".build/check-all/ModuleCache"))
+    if not environment.get("SDKROOT"):
+        environment["SDKROOT"] = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
     binary = root / "check"
     subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "6", str(output), "-o", str(binary)],
                    env=environment, check=True)

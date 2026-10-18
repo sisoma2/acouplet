@@ -1,5 +1,6 @@
+from check_runner import CheckCases
 from pathlib import Path
-import fcntl, hashlib, json, os, plistlib, shutil, subprocess, tempfile
+import fcntl, hashlib, json, os, plistlib, re, shutil, subprocess, tempfile
 
 packaging = Path(__file__).parent
 service_check = (packaging / 'check-service.sh').read_text().split("<<'PLIST'\n", 1)[1].split('\nPLIST\n', 1)[0]
@@ -160,6 +161,8 @@ elif name in ('Acouplet', 'XM5 Control'):
 elif name != 'sleep':
     raise AssertionError('Unexpected stub: ' + name)
 '''
+checks = CheckCases('check-install fixtures')
+
 
 replacements = {
     '/usr/libexec/PlistBuddy': 'PlistBuddy', '/usr/bin/codesign': 'codesign',
@@ -176,7 +179,7 @@ def fixture(root, mode):
     for path in (package, applications, agents, stubs): path.mkdir()
     for name in (*replacements.values(), 'mv', 'sleep'):
         stub = stubs / name
-        stub.write_text(stub_source)
+        stub.write_text('#!/bin/sh\nexit 0\n' if name == 'sleep' else stub_source)
         stub.chmod(0o755)
     for parent, name, identifier, version in (
         (package, 'Acouplet.app', 'dev.baglayan.Acouplet', 'new'),
@@ -263,6 +266,7 @@ def fixture(root, mode):
 
 def run(root, mode, name='Install.command', arguments=()):
     script = (packaging / name).read_text().replace('/Applications', str(root / 'Applications')).replace('$HOME/Library/LaunchAgents', str(root / 'LaunchAgents')).replace('$HOME/Library/PreferencePanes', str(root / 'PreferencePanes'))
+    script = re.sub(r'for attempt in \{1\.\.(?:20|80|120)\}', 'for attempt in {1..4}', script)
     for original, stub in replacements.items(): script = script.replace(original, str(root / 'stubs' / stub))
     assert not any(original in script for original in replacements)
     assert '/Applications' not in script.replace(str(root / 'Applications'), '')
@@ -270,19 +274,10 @@ def run(root, mode, name='Install.command', arguments=()):
     command.write_text(script)
     env = {**os.environ, 'PATH': str(root / 'stubs') + ':' + os.environ['PATH'],
            'ACOUPLET_INSTALL_CHECK_ROOT': str(root), 'ACOUPLET_INSTALL_CHECK_MODE': mode}
-    return subprocess.run(['/bin/zsh', str(command), *arguments], env=env, text=True, capture_output=True, timeout=30)
+    return subprocess.run(['/bin/zsh', str(command), *arguments], env=env, text=True, capture_output=True, timeout=60)
 
 
-for scenario, mode, arguments, successful in (
-    ('explicit-team-migration', 'success', ('--require-stopped', '--replace-team', 'OTHER12345'), True),
-    ('team-migration-without-opt-in', 'success', (), False),
-    ('team-migration-wrong-pin', 'success', ('--replace-team', 'WRONG12345'), False),
-    ('team-migration-invalid-pin', 'success', ('--replace-team', 'invalid'), False),
-    ('team-migration-missing-pin', 'success', ('--replace-team',), False),
-    ('team-migration-bad-installed-signature', 'installed-bad-signature', ('--replace-team', 'OTHER12345'), False),
-    ('team-migration-bad-source-signature', 'source-bad-signature', ('--replace-team', 'OTHER12345'), False),
-    ('team-migration-rollback', 'installed-validation-failure', ('--replace-team', 'OTHER12345'), False),
-):
+def check_migration(scenario, mode, arguments, successful):
     with tempfile.TemporaryDirectory(prefix='acouplet-team-migration-check-') as directory:
         root = Path(directory)
         configs, original_state = fixture(root, mode)
@@ -316,7 +311,19 @@ for scenario, mode, arguments, successful in (
                 assert not any(command[0] in ('mv', 'osascript') for command in commands), (scenario, commands)
         assert not list(applications.glob('.*installing-*.app'))
         assert not [path for path in applications.glob('.*previous-*.app') if 'interrupted' not in path.name]
-        print(scenario + ': passed', flush=True)
+
+
+for scenario, mode, arguments, successful in (
+    ('explicit-team-migration', 'success', ('--require-stopped', '--replace-team', 'OTHER12345'), True),
+    ('team-migration-without-opt-in', 'success', (), False),
+    ('team-migration-wrong-pin', 'success', ('--replace-team', 'WRONG12345'), False),
+    ('team-migration-invalid-pin', 'success', ('--replace-team', 'invalid'), False),
+    ('team-migration-missing-pin', 'success', ('--replace-team',), False),
+    ('team-migration-bad-installed-signature', 'installed-bad-signature', ('--replace-team', 'OTHER12345'), False),
+    ('team-migration-bad-source-signature', 'source-bad-signature', ('--replace-team', 'OTHER12345'), False),
+    ('team-migration-rollback', 'installed-validation-failure', ('--replace-team', 'OTHER12345'), False),
+):
+    checks.add('migration/' + scenario, check_migration, scenario, mode, arguments, successful)
 
 scenarios = ('helper-failure', 'success', 'matching-plist', 'matching-plist-failure', 'previous-plist', 'fresh-install', 'inactive-update', 'staging-failure',
              'bootstrap-failure', 'stop-failure', 'restore-app-failure', 'restore-plist-failure',
@@ -328,7 +335,7 @@ scenarios = ('helper-failure', 'success', 'matching-plist', 'matching-plist-fail
              'native-keepalive-relaunch', 'native-delayed-quit', 'login-item-rollback',
              'controls-unregister-failure', 'embedded-controls', 'foreign-controls', 'ldac-owner-running',
              'agent-exited', 'agent-stays-stopped')
-for scenario in scenarios:
+def check_install(scenario):
     with tempfile.TemporaryDirectory(prefix='acouplet-install-check-') as directory:
         root = Path(directory)
         configs, original_state = fixture(root, scenario)
@@ -454,12 +461,12 @@ for scenario in scenarios:
             assert not unregistered and not reregistered, commands
         if scenario == 'concurrent-install':
             assert run(root, 'success').returncode == 0
-        print(scenario + ': passed')
 
-for scenario in ('success', 'orphan-service', 'unexpected-agent', 'unexpected-loaded-legacy',
-                 'unexpected-bundle', 'repurposed-legacy', 'stop-failure', 'inactive-update',
-                 'native-quit-declined', 'native-quit-timeout', 'native-quit-stalled', 'native-partial-quit',
-                 'native-keepalive-relaunch', 'native-delayed-quit', 'legacy-quit-success', 'legacy-quit-declined', 'legacy-wrong-team'):
+
+for scenario in scenarios:
+    checks.add('install/' + str(scenario), check_install, scenario)
+
+def check_uninstall(scenario):
     with tempfile.TemporaryDirectory(prefix='acouplet-uninstall-check-') as directory:
         root = Path(directory)
         configs, original_state = fixture(root, scenario)
@@ -493,9 +500,15 @@ for scenario in ('success', 'orphan-service', 'unexpected-agent', 'unexpected-lo
         assert (root / 'Applications/Acouplet.app/version').read_text() == 'old'
         assert (root / 'Applications/XM5 Control Native.app/version').read_text() == 'legacy'
         assert (root / 'Preferences/dev.baglayan.Acouplet.plist').read_text() == 'preserve'
-        print('uninstall-' + scenario + ': passed')
 
-for scenario in ('running', 'running-release-changed', 'local-stopped', 'local-release-changed', 'local-stage-changed', 'local-hud-check-changed', 'local-ldac-media-changed', 'local-audio-capture-changed', 'local-output-driver-changed', 'local-output-driver-info-changed', 'local-driver-installer-changed', 'local-driver-uninstaller-changed', 'local-resource-seal-changed'):
+
+for scenario in ('success', 'orphan-service', 'unexpected-agent', 'unexpected-loaded-legacy',
+                 'unexpected-bundle', 'repurposed-legacy', 'stop-failure', 'inactive-update',
+                 'native-quit-declined', 'native-quit-timeout', 'native-quit-stalled', 'native-partial-quit',
+                 'native-keepalive-relaunch', 'native-delayed-quit', 'legacy-quit-success', 'legacy-quit-declined', 'legacy-wrong-team'):
+    checks.add('uninstall/' + str(scenario), check_uninstall, scenario)
+
+def check_local(scenario):
     with tempfile.TemporaryDirectory(prefix='acouplet-local-install-check-') as directory:
         root = Path(directory)
         mode = 'success' if scenario.startswith('running') else 'inactive-update'
@@ -540,14 +553,13 @@ for scenario in ('running', 'running-release-changed', 'local-stopped', 'local-r
             assert (installed / 'version').read_text() == 'old'
             assert json.loads((root / 'state.json').read_text()) == initial_state
         assert (root / 'Preferences/dev.baglayan.Acouplet.plist').read_text() == 'preserve'
-        print('require-stopped-' + scenario + ': passed')
 
 
-for driver_state, message in (('current', 'already up to date; no restart is needed'),
-                              ('restartRequired', 'The LDAC audio driver is installed. Restart the Mac to activate it.'),
-                              ('outdated', 'includes a newer LDAC audio driver. Use Update LDAC Driver in the app'),
-                              ('missing', 'turn it on in the app to install its audio driver'),
-                              ('unavailable', 'could not be checked'), ('fail', 'could not be checked')):
+for scenario in ('running', 'running-release-changed', 'local-stopped', 'local-release-changed', 'local-stage-changed', 'local-hud-check-changed', 'local-ldac-media-changed', 'local-audio-capture-changed', 'local-output-driver-changed', 'local-output-driver-info-changed', 'local-driver-installer-changed', 'local-driver-uninstaller-changed', 'local-resource-seal-changed'):
+    checks.add('local/' + str(scenario), check_local, scenario)
+
+
+def check_driver_message(driver_state, message):
     with tempfile.TemporaryDirectory(prefix='acouplet-driver-message-check-') as directory:
         root = Path(directory)
         fixture(root, 'success')
@@ -560,9 +572,16 @@ for driver_state, message in (('current', 'already up to date; no restart is nee
         assert message in result.stdout, (driver_state, result.stdout)
         assert ('restart the mac' in result.stdout.lower()) == (driver_state not in ('current', 'unavailable', 'fail')), result.stdout
         assert ('did not install the driver' in result.stdout) == (driver_state != 'current'), result.stdout
-        print('driver-message-' + driver_state + ': passed')
 
-for scenario in ('pane-success', 'pane-legacy-target', 'pane-foreign-target', 'pane-symlink-target', 'pane-bad-signature', 'pane-stage-failure', 'pane-commit-failure', 'pane-foreign-prototype'):
+
+for driver_state, message in (('current', 'already up to date; no restart is needed'),
+                              ('restartRequired', 'The LDAC audio driver is installed. Restart the Mac to activate it.'),
+                              ('outdated', 'includes a newer LDAC audio driver. Use Update LDAC Driver in the app'),
+                              ('missing', 'turn it on in the app to install its audio driver'),
+                              ('unavailable', 'could not be checked'), ('fail', 'could not be checked')):
+    checks.add('driver-message/' + driver_state, check_driver_message, driver_state, message)
+
+def check_pane(scenario):
     with tempfile.TemporaryDirectory(prefix='acouplet-pane-install-check-') as directory:
         root = Path(directory)
         fixture(root, 'inactive-update')
@@ -608,9 +627,12 @@ for scenario in ('pane-success', 'pane-legacy-target', 'pane-foreign-target', 'p
         assert (panes / 'Other.prefPane').is_dir()
         assert not list(panes.glob('.*.installing-*')) and not list(panes.glob('.*.previous-*'))
         assert not json.loads((root / 'state.json').read_text())[native_label]['loaded']
-        print(scenario + ': passed')
 
-for scenario in ('legacy-controls', 'foreign-legacy-controls', 'concurrent-legacy-install'):
+
+for scenario in ('pane-success', 'pane-legacy-target', 'pane-foreign-target', 'pane-symlink-target', 'pane-bad-signature', 'pane-stage-failure', 'pane-commit-failure', 'pane-foreign-prototype'):
+    checks.add('pane/' + str(scenario), check_pane, scenario)
+
+def check_legacy(scenario):
     with tempfile.TemporaryDirectory(prefix='acouplet-legacy-install-check-') as directory:
         root = Path(directory)
         fixture(root, 'success')
@@ -625,4 +647,11 @@ for scenario in ('legacy-controls', 'foreign-legacy-controls', 'concurrent-legac
         commands = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines()]
         assert (['pluginkit', '-r', str(controls)] in commands) == (scenario == 'legacy-controls'), commands
         assert (root / 'Applications/Acouplet.app/version').read_text() == ('new' if scenario == 'legacy-controls' else 'old')
-        print(scenario + ': passed')
+
+
+for scenario in ('legacy-controls', 'foreign-legacy-controls', 'concurrent-legacy-install'):
+    checks.add('legacy/' + str(scenario), check_legacy, scenario)
+
+
+if __name__ == '__main__':
+    checks.main()

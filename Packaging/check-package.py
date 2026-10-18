@@ -1,4 +1,5 @@
 from pathlib import Path
+from check_runner import CheckCases
 import hashlib, json, os, plistlib, re, shutil, subprocess, tempfile, zipfile
 
 packaging = Path(__file__).parent
@@ -200,7 +201,7 @@ else:
 '''
 
 
-def check(name, signing, mode='success', succeeds=True, local=False, panes=False, direct=False):
+def run_check(name, signing, mode='success', succeeds=True, local=False, panes=False, direct=False):
     with tempfile.TemporaryDirectory(prefix='acouplet-package-check-') as directory:
         root = Path(directory).resolve()
         scripts = root / 'Packaging'
@@ -378,7 +379,13 @@ def check(name, signing, mode='success', succeeds=True, local=False, panes=False
             if mode == 'sandboxed-app': assert 'must omit the sandbox entitlement' in result.stderr, result.stderr
             if mode == 'wrong-distribution': assert 'must declare the requested' in result.stderr, result.stderr
             if mode == 'development-upstream-feed': assert 'Incorrect Sparkle policy: SUFeedURL' in result.stderr, result.stderr
-        print(name + ': passed')
+
+
+checks = CheckCases('Run isolated packaging fixtures without building or signing the app.')
+
+
+def check(*arguments, **options):
+    checks.add(arguments[0], run_check, *arguments, **options)
 
 
 check('default-developer-id', {})
@@ -443,3 +450,11 @@ check('deferred-device-panes-archive', {}, panes=True)
 check('deferred-controls-local', {}, 'embedded-controls', False, local=True)
 check('deferred-controls-archive', {}, 'embedded-controls', False)
 check('deferred-controls-stale-build-output', {}, 'stale-controls', local=True)
+
+
+def main():
+    checks.main()
+
+
+if __name__ == '__main__':
+    main()

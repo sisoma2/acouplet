@@ -1,5 +1,7 @@
+from check_runner import CheckCases
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 import json, os, plistlib, runpy, shutil, subprocess, tempfile
 
 packaging = Path(__file__).parent
@@ -112,52 +114,58 @@ def sparkle_fixture(app):
     (driver.parents[1] / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'dev.baglayan.Acouplet.LDACOutput', 'CFBundleVersion': '22'}))
 
 
-with tempfile.TemporaryDirectory(prefix='acouplet-direct-check-') as directory:
-    root = Path(directory)
-    dmg = root / 'release.dmg'
-    dmg.touch()
-    sparkle_fixture(root / 'Acouplet.app')
-    with patch('subprocess.run', side_effect=command), patch('subprocess.check_output', return_value=b'@rpath/Sparkle.framework/Versions/B/Sparkle'):
-        report = inspect_package(root, True, dmg)
-        assert not report['blockers'] and not report['stapled_tickets_verified']
-        assert not any(args[1:3] == ['stapler', 'validate'] for args in calls)
-        calls.clear()
-        report = inspect_package(root, False, dmg)
-        assert not report['blockers'] and report['stapled_tickets_verified']
-        assert [args[-1] for args in calls if args[1:3] == ['stapler', 'validate']] == [str(root / 'Acouplet.app/Contents/Resources/Acouplet LDAC Output.pkg'), str(root / 'Acouplet.app/Contents/Resources/Acouplet LDAC Removal.pkg'), str(dmg)]
-        for name in ('Acouplet.app', 'Acouplet Battery Publisher', 'SonyNativeHUD.dylib', 'SonyNativeHUDCheck', 'Installer.xpc', 'Autoupdate', 'Updater.app', 'Sparkle.framework', 'LDACSignaling', 'LDACMediaTransport', 'SonyAudioConnection', 'LDACLogObserver', 'Acouplet Audio.app', 'AcoupletLDACOutput.driver', 'release.dmg'):
-            for check in ('signature', 'developer-id', 'timestamp', 'team'):
-                failure = (check, name)
+def check_distribution():
+    global failure
+    failure = None
+    calls.clear()
+    commands = SimpleNamespace(run=command, check_output=lambda *args: b'@rpath/Sparkle.framework/Versions/B/Sparkle',
+                               TimeoutExpired=subprocess.TimeoutExpired, CalledProcessError=subprocess.CalledProcessError)
+    with tempfile.TemporaryDirectory(prefix='acouplet-direct-check-') as directory:
+        root = Path(directory)
+        dmg = root / 'release.dmg'
+        dmg.touch()
+        sparkle_fixture(root / 'Acouplet.app')
+        with patch.dict(inspect_package.__globals__, subprocess=commands), patch.dict(checker['sparkle']['check_bundle'].__globals__, subprocess=commands):
+            report = inspect_package(root, True, dmg)
+            assert not report['blockers'] and not report['stapled_tickets_verified']
+            assert not any(args[1:3] == ['stapler', 'validate'] for args in calls)
+            calls.clear()
+            report = inspect_package(root, False, dmg)
+            assert not report['blockers'] and report['stapled_tickets_verified']
+            assert [args[-1] for args in calls if args[1:3] == ['stapler', 'validate']] == [str(root / 'Acouplet.app/Contents/Resources/Acouplet LDAC Output.pkg'), str(root / 'Acouplet.app/Contents/Resources/Acouplet LDAC Removal.pkg'), str(dmg)]
+            for name in ('Acouplet.app', 'Acouplet Battery Publisher', 'SonyNativeHUD.dylib', 'SonyNativeHUDCheck', 'Installer.xpc', 'Autoupdate', 'Updater.app', 'Sparkle.framework', 'LDACSignaling', 'LDACMediaTransport', 'SonyAudioConnection', 'LDACLogObserver', 'Acouplet Audio.app', 'AcoupletLDACOutput.driver', 'release.dmg'):
+                for check in ('signature', 'developer-id', 'timestamp', 'team'):
+                    failure = (check, name)
+                    assert inspect_package(root, True, dmg)['blockers'], failure
+            for name in ('Acouplet.app', 'Acouplet Battery Publisher', 'SonyNativeHUD.dylib', 'SonyNativeHUDCheck', 'Installer.xpc', 'Autoupdate', 'Updater.app', 'Sparkle.framework', 'LDACSignaling', 'LDACMediaTransport', 'SonyAudioConnection', 'LDACLogObserver', 'Acouplet Audio.app', 'AcoupletLDACOutput.driver'):
+                for check in ('runtime', 'debugger'):
+                    failure = (check, name)
+                    assert inspect_package(root, True, dmg)['blockers'], failure
+            for name in ('Acouplet.app', 'Acouplet Battery Publisher'):
+                failure = ('sandbox', name)
                 assert inspect_package(root, True, dmg)['blockers'], failure
-        for name in ('Acouplet.app', 'Acouplet Battery Publisher', 'SonyNativeHUD.dylib', 'SonyNativeHUDCheck', 'Installer.xpc', 'Autoupdate', 'Updater.app', 'Sparkle.framework', 'LDACSignaling', 'LDACMediaTransport', 'SonyAudioConnection', 'LDACLogObserver', 'Acouplet Audio.app', 'AcoupletLDACOutput.driver'):
-            for check in ('runtime', 'debugger'):
-                failure = (check, name)
+            for check in ('inherit', 'extra-entitlement'):
+                failure = (check, 'Acouplet Battery Publisher')
                 assert inspect_package(root, True, dmg)['blockers'], failure
-        for name in ('Acouplet.app', 'Acouplet Battery Publisher'):
-            failure = ('sandbox', name)
-            assert inspect_package(root, True, dmg)['blockers'], failure
-        for check in ('inherit', 'extra-entitlement'):
-            failure = (check, 'Acouplet Battery Publisher')
-            assert inspect_package(root, True, dmg)['blockers'], failure
-        for check in ('signature', 'developer-id', 'timestamp', 'team', 'payload', 'scripts', 'scripts-team', 'scripts-extra', 'scripts-mode', 'mode', 'staple'):
-            failure = (check, 'Acouplet LDAC Output.pkg')
-            assert inspect_package(root, check != 'staple', dmg)['blockers'], failure
-        for check in ('signature', 'developer-id', 'timestamp', 'team', 'payload', 'scripts', 'scripts-team', 'scripts-extra', 'scripts-mode', 'identity', 'staple'):
-            failure = (check, 'Acouplet LDAC Removal.pkg')
-            assert inspect_package(root, check != 'staple', dmg)['blockers'], failure
-        failure = ('staple', dmg.name)
-        assert inspect_package(root, False, dmg)['blockers']
-        failure = None
-        info_path = root / 'Acouplet.app/Contents/Info.plist'
-        original_info = plistlib.loads(info_path.read_bytes())
-        for key, value in [('SURequireSignedFeed', False), ('SUVerifyUpdateBeforeExtraction', False), ('SUEnableInstallerLauncherService', True),
-                           ('SUSignedFeedFailureExpirationInterval', 1728000), ('SUPublicEDKey', ''),
-                           ('SUPublicEDKey', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='),
-                           ('SUFeedURL', 'http://baglayan.dev/updates/appcast.xml'), ('AcoupletDistribution', 'development'), ('AcoupletDistribution', '')]:
-            info_path.write_bytes(plistlib.dumps({**original_info, key: value}))
-            assert inspect_package(root, True, dmg)['blockers'], key
-        info_path.write_bytes(plistlib.dumps(original_info))
-print('nested signatures, timestamps, entitlements, team and DMG ticket: passed')
+            for check in ('signature', 'developer-id', 'timestamp', 'team', 'payload', 'scripts', 'scripts-team', 'scripts-extra', 'scripts-mode', 'mode', 'staple'):
+                failure = (check, 'Acouplet LDAC Output.pkg')
+                assert inspect_package(root, check != 'staple', dmg)['blockers'], failure
+            for check in ('signature', 'developer-id', 'timestamp', 'team', 'payload', 'scripts', 'scripts-team', 'scripts-extra', 'scripts-mode', 'identity', 'staple'):
+                failure = (check, 'Acouplet LDAC Removal.pkg')
+                assert inspect_package(root, check != 'staple', dmg)['blockers'], failure
+            failure = ('staple', dmg.name)
+            assert inspect_package(root, False, dmg)['blockers']
+            failure = None
+            info_path = root / 'Acouplet.app/Contents/Info.plist'
+            original_info = plistlib.loads(info_path.read_bytes())
+            for key, value in [('SURequireSignedFeed', False), ('SUVerifyUpdateBeforeExtraction', False), ('SUEnableInstallerLauncherService', True),
+                               ('SUSignedFeedFailureExpirationInterval', 1728000), ('SUPublicEDKey', ''),
+                               ('SUPublicEDKey', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='),
+                               ('SUFeedURL', 'http://baglayan.dev/updates/appcast.xml'), ('AcoupletDistribution', 'development'), ('AcoupletDistribution', '')]:
+                info_path.write_bytes(plistlib.dumps({**original_info, key: value}))
+                assert inspect_package(root, True, dmg)['blockers'], key
+            info_path.write_bytes(plistlib.dumps(original_info))
+
 
 stub_source = r'''#!/usr/bin/python3
 from pathlib import Path
@@ -322,15 +330,20 @@ def check_release(mode='success', notarize=False, signing=None, succeeds=True, a
             if mode == 'tests-failure':
                 assert Path(commands[-1][1]).name == 'check-all.py'
                 assert not any(args[0] in ('package.sh', 'codesign', 'xcrun') for args in commands)
-        print('direct release ' + mode + (' notarized' if notarize else '') + ': passed')
 
 
-check_release()
-check_release(appearance='dark')
-check_release(notarize=True)
-check_release(signing={'CODE_SIGN_IDENTITY': 'A' * 40})
-check_release(signing={}, succeeds=False)
-check_release(signing={'CODE_SIGN_IDENTITY': 'Apple Development'}, succeeds=False)
-check_release(signing={'CODE_SIGN_IDENTITY': 'Developer ID Application: Example (ABCDE12345)'}, notarize=True, succeeds=False)
+checks = CheckCases('Direct release fixtures')
+checks.add('distribution-policy', check_distribution)
+checks.add('release', check_release)
+checks.add('dark', check_release, appearance='dark')
+checks.add('notarized', check_release, notarize=True)
+checks.add('fingerprint', check_release, signing={'CODE_SIGN_IDENTITY': 'A' * 40})
+checks.add('missing-identity', check_release, signing={}, succeeds=False)
+checks.add('development-identity', check_release, signing={'CODE_SIGN_IDENTITY': 'Apple Development'}, succeeds=False)
+checks.add('missing-notary-profile', check_release, signing={'CODE_SIGN_IDENTITY': 'Developer ID Application: Example (ABCDE12345)'}, notarize=True, succeeds=False)
 for mode in ('tests-failure', 'build-failure', 'sign-failure', 'background-failure', 'image-failure', 'check-failure', 'notary-invalid', 'staple-failure', 'gatekeeper-failure', 'installer-notary-failure', 'source-dirty', 'source-drift', 'source-drift-before-notary', 'source-drift-after-notary'):
-    check_release(mode, notarize=True, succeeds=False)
+    checks.add(mode, check_release, mode, notarize=True, succeeds=False)
+
+
+if __name__ == '__main__':
+    checks.main()

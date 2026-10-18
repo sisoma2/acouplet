@@ -51,8 +51,40 @@ python3 Packaging/check-all.py
 ```
 
 This runs XCTest, offline native helper and driver checks, localization checks,
-and packaging fixtures. It stops at the first failure. `Packaging/direct.sh`
+and packaging fixtures, reporting failures with their check logs. `Packaging/direct.sh`
 runs the same checks before packaging a production release.
+
+Xcode build products are reused between runs. Add `--clean` when a fresh build
+is needed. Independent scripts run concurrently in separate processes, with
+individual logs under `.build/check-all/Logs/`. Use `--jobs 1` for serial checks.
+Suites and their child cases share the worker budget to avoid nested pools
+overloading the machine. Swift fixture compilers reuse the module cache.
+
+Run just the fixtures, select matching scripts, or focus XCTest on a class:
+
+```sh
+python3 Packaging/check-all.py --fixtures-only
+python3 Packaging/check-all.py --fixtures-only --filter '*LDAC*'
+python3 Packaging/check-all.py --xctest-only --only-testing AcoupletTests/LDACCallAudioTests
+python3 Packaging/check-all.py --list
+```
 
 UI tests, native HUD presentation and the launch service check run separately.
 Bluetooth, audio and connection recovery still need testing with real hardware.
+
+Packaging, app installation, LDAC driver installation, and direct-release
+fixtures run up to four isolated cases concurrently. They support `--filter`,
+`--list`, and `--jobs` for focused reruns without rebuilding the app:
+
+```sh
+python3 Packaging/check-package.py
+python3 Packaging/check-package.py --filter 'local-*'
+python3 Packaging/check-package.py --jobs 4
+python3 Packaging/check-install.py --filter 'install/native-*'
+python3 Packaging/check-ldac-output-installer.py --filter 'postinstall/*'
+python3 Packaging/check-direct.py --filter '*notary*'
+python3 Helpers/LDAC/LDACControllerVolumeCheck.py --check-mutations --filter 'mutation/*volume*'
+```
+
+Installer fixtures shorten simulated polling budgets while keeping delayed-exit
+and timeout cases. The installed scripts keep their normal wait times.

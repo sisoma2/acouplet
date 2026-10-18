@@ -1,3 +1,4 @@
+from check_runner import CheckCases
 from pathlib import Path
 import fcntl, json, os, plistlib, shutil, subprocess, tempfile
 
@@ -68,6 +69,8 @@ elif name == 'stat':
 else:
     raise AssertionError(args)
 '''
+checks = CheckCases('check-ldac-output-installer fixtures')
+
 
 
 def make_bundle(path, legacy=False, state='owned'):
@@ -137,22 +140,25 @@ def commands(root):
 
 invalid_states = ('foreign', 'executable-foreign', 'symlink', 'symlink-contents', 'symlink-info',
                   'symlink-macos', 'symlink-executable', 'wrong-team', 'bad-signature')
+def check_preinstall(legacy, state):
+    with tempfile.TemporaryDirectory(prefix='acouplet-output-preinstall-check-') as directory:
+        root = Path(directory)
+        environment = prepare(root)
+        driver = root / 'HAL' / ('XM5LDACOutput.driver' if legacy else 'AcoupletLDACOutput.driver')
+        if state != 'absent': make_bundle(driver, legacy, state)
+        result = run_script(root, 'LDACOutputInstaller/preinstall', environment)
+        assert (result.returncode == 0) == (state in ('absent', 'owned')), (legacy, state, result.stderr)
+        assert (driver.exists() or driver.is_symlink()) == (state != 'absent')
+        assert not any(command[0] in ('rm', 'pkgutil') for command in commands(root))
+        assert run_script(root, 'LDACOutputInstaller/preinstall', environment, '/other-volume').returncode != 0
+        assert (root / 'HAL/Unrelated.driver/keep').read_text() == 'preserve'
+
+
 for legacy in (False, True):
     for state in ('absent', 'owned', *invalid_states):
-        with tempfile.TemporaryDirectory(prefix='acouplet-output-preinstall-check-') as directory:
-            root = Path(directory)
-            environment = prepare(root)
-            driver = root / 'HAL' / ('XM5LDACOutput.driver' if legacy else 'AcoupletLDACOutput.driver')
-            if state != 'absent': make_bundle(driver, legacy, state)
-            result = run_script(root, 'LDACOutputInstaller/preinstall', environment)
-            assert (result.returncode == 0) == (state in ('absent', 'owned')), (legacy, state, result.stderr)
-            assert (driver.exists() or driver.is_symlink()) == (state != 'absent')
-            assert not any(command[0] in ('rm', 'pkgutil') for command in commands(root))
-            assert run_script(root, 'LDACOutputInstaller/preinstall', environment, '/other-volume').returncode != 0
-            assert (root / 'HAL/Unrelated.driver/keep').read_text() == 'preserve'
-print('Preinstall: both identities, signatures, teams, symlink boundaries and startup volume passed')
+        checks.add('preinstall/' + str(legacy) + '/' + str(state), check_preinstall, legacy, state)
 
-for signing_team in ('', 'not set', 'ABCDE1234', 'ABCDE123456', 'abcde12345'):
+def check_signing_team(signing_team):
     with tempfile.TemporaryDirectory(prefix='acouplet-output-signing-team-check-') as directory:
         root = Path(directory)
         environment = prepare(root)
@@ -163,37 +169,42 @@ for signing_team in ('', 'not set', 'ABCDE1234', 'ABCDE123456', 'abcde12345'):
         result = run_script(root, 'LDACOutputInstaller/preinstall', environment, signing_team=signing_team)
         assert result.returncode != 0 and 'no valid signing team' in result.stderr, (signing_team, result.stderr)
         assert new_driver.is_dir() and old_driver.is_dir() and not commands(root)
-print('Preinstall: missing or malformed signing team refused before installed drivers were inspected or changed')
+
+
+for signing_team in ('', 'not set', 'ABCDE1234', 'ABCDE123456', 'abcde12345'):
+    checks.add('signing-team/' + str(signing_team), check_signing_team, signing_team)
+
+def check_postinstall(legacy, state):
+    with tempfile.TemporaryDirectory(prefix='acouplet-output-postinstall-check-') as directory:
+        root = Path(directory)
+        environment = prepare(root)
+        new_driver = root / 'HAL/AcoupletLDACOutput.driver'
+        old_driver = root / 'HAL/XM5LDACOutput.driver'
+        if legacy or state != 'absent': make_bundle(new_driver, state='owned' if legacy else state)
+        if not legacy or state != 'absent': make_bundle(old_driver, True, state if legacy else 'owned')
+        result = run_script(root, 'LDACOutputInstaller/postinstall', environment)
+        succeeds = state == 'owned' or (legacy and state in ('absent', 'old-revision'))
+        assert (result.returncode == 0) == succeeds, (legacy, state, result.stdout, result.stderr)
+        assert (old_driver.exists() or old_driver.is_symlink()) == (not succeeds and (not legacy or state != 'absent'))
+        assert new_driver.exists() == (legacy or state != 'absent')
+        recorded = commands(root)
+        assert (['pkgutil', '--forget', legacy_identifier] in recorded) == succeeds
+        if succeeds:
+            assert 'Restart your Mac' in result.stdout
+            if state != 'absent':
+                verified = [index for index, command in enumerate(recorded) if command[:2] == ['codesign', '--verify']]
+                removal = next(index for index, command in enumerate(recorded) if command[0] == 'rm')
+                assert len(verified) == 2 and max(verified) < removal
+        else:
+            assert not any(command[0] in ('rm', 'pkgutil') for command in recorded)
+        assert (root / 'HAL/Unrelated.driver/keep').read_text() == 'preserve'
+
 
 for legacy in (False, True):
     for state in ('absent', 'owned', 'old-revision', *invalid_states):
-        with tempfile.TemporaryDirectory(prefix='acouplet-output-postinstall-check-') as directory:
-            root = Path(directory)
-            environment = prepare(root)
-            new_driver = root / 'HAL/AcoupletLDACOutput.driver'
-            old_driver = root / 'HAL/XM5LDACOutput.driver'
-            if legacy or state != 'absent': make_bundle(new_driver, state='owned' if legacy else state)
-            if not legacy or state != 'absent': make_bundle(old_driver, True, state if legacy else 'owned')
-            result = run_script(root, 'LDACOutputInstaller/postinstall', environment)
-            succeeds = state == 'owned' or (legacy and state in ('absent', 'old-revision'))
-            assert (result.returncode == 0) == succeeds, (legacy, state, result.stdout, result.stderr)
-            assert (old_driver.exists() or old_driver.is_symlink()) == (not succeeds and (not legacy or state != 'absent'))
-            assert new_driver.exists() == (legacy or state != 'absent')
-            recorded = commands(root)
-            assert (['pkgutil', '--forget', legacy_identifier] in recorded) == succeeds
-            if succeeds:
-                assert 'Restart your Mac' in result.stdout
-                if state != 'absent':
-                    verified = [index for index, command in enumerate(recorded) if command[:2] == ['codesign', '--verify']]
-                    removal = next(index for index, command in enumerate(recorded) if command[0] == 'rm')
-                    assert len(verified) == 2 and max(verified) < removal
-            else:
-                assert not any(command[0] in ('rm', 'pkgutil') for command in recorded)
-            assert (root / 'HAL/Unrelated.driver/keep').read_text() == 'preserve'
-print('Postinstall: validated revision 5 before legacy removal; refused invalid or mismatched drivers without removal')
+        checks.add('postinstall/' + str(legacy) + '/' + str(state), check_postinstall, legacy, state)
 
-for state in ('absent', 'owned', 'read-only', 'symlink-directory', 'file-directory', 'foreign-directory', 'writable-directory',
-              'symlink-file', 'directory-file', 'fifo-file', 'foreign-file', 'writable-file', 'hardlink-file'):
+def check_route_owner(state):
     with tempfile.TemporaryDirectory(prefix='acouplet-output-route-owner-check-') as directory:
         root = Path(directory)
         environment = prepare(root)
@@ -248,86 +259,113 @@ for state in ('absent', 'owned', 'read-only', 'symlink-directory', 'file-directo
                 assert not any(command[0] in ('rm', 'pkgutil') for command in commands(root))
         finally:
             if descriptor is not None: os.close(descriptor)
-print('Global route ownership: create-only installer state, locked inode/mode preservation, both removal paths retain lock, and malformed/foreign/writable paths refuse before legacy removal; root ownership mocked')
+
+
+for state in ('absent', 'owned', 'read-only', 'symlink-directory', 'file-directory', 'foreign-directory', 'writable-directory',
+              'symlink-file', 'directory-file', 'fifo-file', 'foreign-file', 'writable-file', 'hardlink-file'):
+    checks.add('route-owner/' + str(state), check_route_owner, state)
+
+def check_remove(legacy, state):
+    with tempfile.TemporaryDirectory(prefix='acouplet-output-removal-check-') as directory:
+        root = Path(directory)
+        environment = prepare(root)
+        make_app(root)
+        new_driver = root / 'HAL/AcoupletLDACOutput.driver'
+        old_driver = root / 'HAL/XM5LDACOutput.driver'
+        if legacy or state != 'absent': make_bundle(new_driver, state='owned' if legacy else state)
+        if not legacy or state != 'absent': make_bundle(old_driver, True, state if legacy else 'owned')
+        result = run_script(root, 'Uninstall LDAC Output.command', environment)
+        succeeds = state in ('owned', 'absent')
+        assert (result.returncode == 0) == succeeds, (legacy, state, result.stdout, result.stderr)
+        for driver in (new_driver, old_driver):
+            assert (driver.exists() or driver.is_symlink()) == (not succeeds)
+        recorded = commands(root)
+        for receipt in (identifier, legacy_identifier):
+            assert (['pkgutil', '--forget', receipt] in recorded) == succeeds
+        if succeeds:
+            assert 'Restart your Mac' in result.stdout and 'Core Audio was not restarted' in result.stdout
+            verified = [index for index, command in enumerate(recorded) if command[:2] == ['codesign', '--verify']]
+            removed = [index for index, command in enumerate(recorded) if command[0] == 'rm']
+            assert max(verified) < min(removed)
+        else:
+            assert not any(command[0] in ('rm', 'pkgutil') for command in recorded)
+        assert (root / 'HAL/Unrelated.driver/keep').read_text() == 'preserve'
+
 
 for legacy in (False, True):
     for state in ('absent', 'owned', *invalid_states):
-        with tempfile.TemporaryDirectory(prefix='acouplet-output-removal-check-') as directory:
-            root = Path(directory)
-            environment = prepare(root)
-            make_app(root)
-            new_driver = root / 'HAL/AcoupletLDACOutput.driver'
-            old_driver = root / 'HAL/XM5LDACOutput.driver'
-            if legacy or state != 'absent': make_bundle(new_driver, state='owned' if legacy else state)
-            if not legacy or state != 'absent': make_bundle(old_driver, True, state if legacy else 'owned')
-            result = run_script(root, 'Uninstall LDAC Output.command', environment)
-            succeeds = state in ('owned', 'absent')
-            assert (result.returncode == 0) == succeeds, (legacy, state, result.stdout, result.stderr)
-            for driver in (new_driver, old_driver):
-                assert (driver.exists() or driver.is_symlink()) == (not succeeds)
-            recorded = commands(root)
-            for receipt in (identifier, legacy_identifier):
-                assert (['pkgutil', '--forget', receipt] in recorded) == succeeds
-            if succeeds:
-                assert 'Restart your Mac' in result.stdout and 'Core Audio was not restarted' in result.stdout
-                verified = [index for index, command in enumerate(recorded) if command[:2] == ['codesign', '--verify']]
-                removed = [index for index, command in enumerate(recorded) if command[0] == 'rm']
-                assert max(verified) < min(removed)
-            else:
-                assert not any(command[0] in ('rm', 'pkgutil') for command in recorded)
-            assert (root / 'HAL/Unrelated.driver/keep').read_text() == 'preserve'
-print('Uninstall: both drivers verified before either removal, including same-team checks and both receipts')
+        checks.add('remove/' + str(legacy) + '/' + str(state), check_remove, legacy, state)
+
+def check_owner(state, legacy):
+    with tempfile.TemporaryDirectory(prefix='acouplet-output-owner-check-') as directory:
+        root = Path(directory)
+        environment = prepare(root)
+        make_app(root, legacy, state)
+        driver = root / 'HAL' / ('XM5LDACOutput.driver' if legacy else 'AcoupletLDACOutput.driver')
+        make_bundle(driver, legacy)
+        if state.startswith('running-'):
+            environment['ACOUPLET_OUTPUT_INSTALL_CHECK_RUNNING'] = 'XM5 Control' if state == 'running-legacy' else 'Acouplet'
+        if state == 'no-receipts': environment['ACOUPLET_OUTPUT_INSTALL_CHECK_RECEIPTS'] = 'no'
+        result = run_script(root, 'Uninstall LDAC Output.command', environment)
+        succeeds = state in ('owned', 'no-receipts')
+        assert (result.returncode == 0) == succeeds, (legacy, state, result.stdout, result.stderr)
+        assert driver.exists() != succeeds
+        recorded = commands(root)
+        if not succeeds: assert not any(command[0] in ('rm', 'pkgutil') for command in recorded)
+        if state == 'no-receipts': assert not any(command[:2] == ['pkgutil', '--forget'] for command in recorded)
+
 
 for state in ('owned', 'missing', 'foreign', 'bad-signature', 'wrong-team', 'no-team',
               'symlink', 'symlink-contents', 'symlink-info', 'running-new', 'running-legacy', 'no-receipts'):
     for legacy in (False, True):
-        with tempfile.TemporaryDirectory(prefix='acouplet-output-owner-check-') as directory:
-            root = Path(directory)
-            environment = prepare(root)
-            make_app(root, legacy, state)
-            driver = root / 'HAL' / ('XM5LDACOutput.driver' if legacy else 'AcoupletLDACOutput.driver')
-            make_bundle(driver, legacy)
-            if state.startswith('running-'):
-                environment['ACOUPLET_OUTPUT_INSTALL_CHECK_RUNNING'] = 'XM5 Control' if state == 'running-legacy' else 'Acouplet'
-            if state == 'no-receipts': environment['ACOUPLET_OUTPUT_INSTALL_CHECK_RECEIPTS'] = 'no'
-            result = run_script(root, 'Uninstall LDAC Output.command', environment)
-            succeeds = state in ('owned', 'no-receipts')
-            assert (result.returncode == 0) == succeeds, (legacy, state, result.stdout, result.stderr)
-            assert driver.exists() != succeeds
-            recorded = commands(root)
-            if not succeeds: assert not any(command[0] in ('rm', 'pkgutil') for command in recorded)
-            if state == 'no-receipts': assert not any(command[:2] == ['pkgutil', '--forget'] for command in recorded)
+        checks.add('owner/' + str(state) + '/' + str(legacy), check_owner, state, legacy)
 
 with tempfile.TemporaryDirectory(prefix='acouplet-output-empty-check-') as directory:
     root = Path(directory)
     result = run_script(root, 'Uninstall LDAC Output.command', prepare(root))
     assert result.returncode == 0, result.stderr
     assert not any(command[0] in ('codesign', 'rm') for command in commands(root))
-print('Uninstall: trusted current or legacy app required; running apps and invalid ownership refuse removal')
+
+def check_remove_package(legacy, state):
+    with tempfile.TemporaryDirectory(prefix='acouplet-output-removal-package-check-') as directory:
+        root = Path(directory)
+        environment = prepare(root)
+        new_driver = root / 'HAL/AcoupletLDACOutput.driver'
+        old_driver = root / 'HAL/XM5LDACOutput.driver'
+        if legacy or state != 'absent': make_bundle(new_driver, state='owned' if legacy else state)
+        if not legacy or state != 'absent': make_bundle(old_driver, True, state if legacy else 'owned')
+        result = run_script(root, 'LDACOutputUninstaller/postinstall', environment)
+        succeeds = state in ('absent', 'owned')
+        assert (result.returncode == 0) == succeeds, (legacy, state, result.stderr)
+        recorded = commands(root)
+        if succeeds:
+            assert not new_driver.exists() and not old_driver.exists()
+            verified = [index for index, command in enumerate(recorded) if command[:2] == ['codesign', '--verify']]
+            removed = [index for index, command in enumerate(recorded) if command[0] == 'rm']
+            assert max(verified) < min(removed)
+            assert [command[1:] for command in recorded if command[:2] == ['pkgutil', '--forget']] == [['--forget', identifier], ['--forget', legacy_identifier]]
+            assert 'Restart your Mac' in result.stdout and 'Core Audio was not restarted' in result.stdout
+        else:
+            assert not any(command[0] in ('rm', 'pkgutil') for command in recorded)
+        assert (root / 'HAL/Unrelated.driver/keep').read_text() == 'preserve'
+
 
 for legacy in (False, True):
     for state in ('absent', 'owned', *invalid_states):
-        with tempfile.TemporaryDirectory(prefix='acouplet-output-removal-package-check-') as directory:
-            root = Path(directory)
-            environment = prepare(root)
-            new_driver = root / 'HAL/AcoupletLDACOutput.driver'
-            old_driver = root / 'HAL/XM5LDACOutput.driver'
-            if legacy or state != 'absent': make_bundle(new_driver, state='owned' if legacy else state)
-            if not legacy or state != 'absent': make_bundle(old_driver, True, state if legacy else 'owned')
-            result = run_script(root, 'LDACOutputUninstaller/postinstall', environment)
-            succeeds = state in ('absent', 'owned')
-            assert (result.returncode == 0) == succeeds, (legacy, state, result.stderr)
-            recorded = commands(root)
-            if succeeds:
-                assert not new_driver.exists() and not old_driver.exists()
-                verified = [index for index, command in enumerate(recorded) if command[:2] == ['codesign', '--verify']]
-                removed = [index for index, command in enumerate(recorded) if command[0] == 'rm']
-                assert max(verified) < min(removed)
-                assert [command[1:] for command in recorded if command[:2] == ['pkgutil', '--forget']] == [['--forget', identifier], ['--forget', legacy_identifier]]
-                assert 'Restart your Mac' in result.stdout and 'Core Audio was not restarted' in result.stdout
-            else:
-                assert not any(command[0] in ('rm', 'pkgutil') for command in recorded)
-            assert (root / 'HAL/Unrelated.driver/keep').read_text() == 'preserve'
+        checks.add('remove-package/' + str(legacy) + '/' + str(state), check_remove_package, legacy, state)
+
+def check_process(process, respawn):
+    with tempfile.TemporaryDirectory(prefix='acouplet-output-removal-running-check-') as directory:
+        root = Path(directory)
+        environment = prepare(root)
+        environment['ACOUPLET_OUTPUT_INSTALL_CHECK_PROCESS'] = process
+        if respawn: environment['ACOUPLET_OUTPUT_INSTALL_CHECK_RESPAWN'] = '1'
+        driver = root / 'HAL/AcoupletLDACOutput.driver'
+        make_bundle(driver)
+        result = run_script(root, 'LDACOutputUninstaller/postinstall', environment)
+        assert result.returncode != 0 and 'Nothing was removed' in result.stderr, (process, result.stderr)
+        assert driver.exists() and not any(command[0] in ('rm', 'pkgutil') for command in commands(root))
+
 
 for process in ('/Applications/Acouplet.app/Contents/MacOS/Acouplet --background-service',
                 '/Users/guest/Downloads/Renamed.app/Contents/MacOS/Acouplet',
@@ -336,27 +374,28 @@ for process in ('/Applications/Acouplet.app/Contents/MacOS/Acouplet --background
                 '/Applications/Acouplet.app/Contents/Helpers/Acouplet Audio.app/Contents/MacOS/AcoupletAudio',
                 *('/Applications/Acouplet.app/Contents/Helpers/' + name for name in ('LDACSignaling', 'LDACMediaTransport', 'SonyAudioConnection', 'LDACLogObserver'))):
     for respawn in (False, True):
-        with tempfile.TemporaryDirectory(prefix='acouplet-output-removal-running-check-') as directory:
-            root = Path(directory)
-            environment = prepare(root)
-            environment['ACOUPLET_OUTPUT_INSTALL_CHECK_PROCESS'] = process
-            if respawn: environment['ACOUPLET_OUTPUT_INSTALL_CHECK_RESPAWN'] = '1'
-            driver = root / 'HAL/AcoupletLDACOutput.driver'
-            make_bundle(driver)
-            result = run_script(root, 'LDACOutputUninstaller/postinstall', environment)
-            assert result.returncode != 0 and 'Nothing was removed' in result.stderr, (process, result.stderr)
-            assert driver.exists() and not any(command[0] in ('rm', 'pkgutil') for command in commands(root))
+        checks.add('process/' + str(process) + '/' + str(respawn), check_process, process, respawn)
 
-for signing_team, volume in [('', '/'), ('not set', '/'), ('abcde12345', '/'), (team, '/other-volume')]:
+def check_invalid_volume(signing_team, volume):
     with tempfile.TemporaryDirectory(prefix='acouplet-output-removal-boundary-check-') as directory:
         root = Path(directory)
         driver = root / 'HAL/AcoupletLDACOutput.driver'
         make_bundle(driver)
         result = run_script(root, 'LDACOutputUninstaller/postinstall', prepare(root), volume, signing_team)
         assert result.returncode != 0 and driver.exists() and not commands(root), result.stderr
-print('Removal package: pinned team and both owned drivers, app-absent recovery, running/respawned apps and helpers, startup volume and deferred unload passed')
 
-for name in ('LDACOutputInstaller/preinstall', 'LDACOutputInstaller/postinstall', 'Uninstall LDAC Output.command', 'LDACOutputUninstaller/postinstall'):
+
+for signing_team, volume in [('', '/'), ('not set', '/'), ('abcde12345', '/'), (team, '/other-volume')]:
+    checks.add('invalid-volume/' + str(signing_team) + '/' + str(volume), check_invalid_volume, signing_team, volume)
+
+def check_source(name):
     source = (packaging / name).read_text()
     assert 'coreaudiod' not in source and '/sbin/reboot' not in source and 'killall' not in source
-print('Driver ownership refusal, fixed nonrelocatable payload, receipt removal and deferred activation: passed')
+
+
+for name in ('LDACOutputInstaller/preinstall', 'LDACOutputInstaller/postinstall', 'Uninstall LDAC Output.command', 'LDACOutputUninstaller/postinstall'):
+    checks.add('source/' + str(name), check_source, name)
+
+
+if __name__ == '__main__':
+    checks.main()
