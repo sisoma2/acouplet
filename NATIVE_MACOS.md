@@ -99,7 +99,13 @@ python3 Helpers/LDAC/LDACControllerVolumeCheck.py --check-mutations --filter 'mu
 ```
 
 Installer fixtures shorten simulated polling budgets while keeping delayed-exit
-and timeout cases. The installed scripts keep their normal wait times.
+and timeout cases. The installed scripts keep their normal wait times. Packaging
+fixtures share each unchanged stub executable across cases, avoiding repeated
+macOS launch costs for newly written executable files. Command names, exit codes,
+logs and filesystem state remain specific to each fixture. Python stubs use the
+same interpreter as the test runner. No passing check results are cached. On
+macOS 26.7.1, all 104 installer cases completed in 68.1 seconds with four workers,
+compared with the previous 217.3-second run using four workers.
 
 ## LDAC capability and presentation timing
 

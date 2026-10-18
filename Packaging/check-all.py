@@ -25,6 +25,7 @@ python_checks = (
     'Packaging/check-ldac-output-installer.py',
     'Packaging/check-notarize-ldac-installer.py',
     'Packaging/check-runner-check.py',
+    'Packaging/check-stubs-check.py',
     'Packaging/check-package.py',
     'Packaging/check-install.py',
     'Packaging/check-direct.py',
