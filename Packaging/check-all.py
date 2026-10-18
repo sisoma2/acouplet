@@ -12,6 +12,7 @@ python_checks = (
     'Packaging/check-release-source.py',
     'Packaging/check-ldac-packing.py',
     'Packaging/check-ldac-build.py',
+    'Packaging/check-ldac-session-stats.py',
     'Packaging/check-ldac-output-installer.py',
     'Packaging/check-notarize-ldac-installer.py',
     'Packaging/check-runner-check.py',

@@ -75,6 +75,11 @@ final class LDACNativeOutput {
     private var restoringOwner = false
     private var model = ""
 
+    func updateLatency(frames: UInt32) throws {
+        guard frames <= UInt32(sampleRateHz * 4) else { throw OutputError("Invalid LDAC presentation latency.") }
+        try Self.write(device, selector: 0x786D6C74, value: NSNumber(value: frames) as CFNumber, requiringLease: true)
+    }
+
     private var handoffSelectors: [AudioObjectPropertySelector] {
         Self.defaultSelectors.filter {
             $0 == kAudioHardwarePropertyDefaultOutputDevice || savedDefaults[$0] == savedDefaults[kAudioHardwarePropertyDefaultOutputDevice]
@@ -224,6 +229,7 @@ final class LDACNativeOutput {
             guard clock.now < formatDeadline else { throw OutputError(String(localized: "macOS did not confirm the selected LDAC sample rate. Update Acouplet LDAC Output, then retry.")) }
             try await Task.sleep(for: .milliseconds(100))
         }
+        try updateLatency(frames: LDACPipelineLatency(configuration: LDACConfiguration(sampleRate: sampleRate)).frames)
         record("claim-ready", reason: "device=\(device) visible and eligible")
         try listen(device, selector: kAudioDevicePropertyNominalSampleRate)
         for selector in [kAudioStreamPropertyPhysicalFormat, kAudioStreamPropertyVirtualFormat] {

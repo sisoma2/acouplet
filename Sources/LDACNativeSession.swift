@@ -44,6 +44,22 @@ enum LDACQuality: String, CaseIterable, Codable, Sendable {
 struct LDACConfiguration: Equatable, Codable, Sendable {
     var sampleRate: LDACSampleRate = .hz48000
     var quality: LDACQuality = .connection
+    var latencyOffsetMilliseconds: Int = 0
+
+    init(sampleRate: LDACSampleRate = .hz48000, quality: LDACQuality = .connection, latencyOffsetMilliseconds: Int = 0) {
+        self.sampleRate = sampleRate
+        self.quality = quality
+        self.latencyOffsetMilliseconds = min(500, max(-500, latencyOffsetMilliseconds))
+    }
+
+    private enum CodingKeys: String, CodingKey { case sampleRate, quality, latencyOffsetMilliseconds }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(sampleRate: try values.decode(LDACSampleRate.self, forKey: .sampleRate),
+            quality: try values.decode(LDACQuality.self, forKey: .quality),
+            latencyOffsetMilliseconds: try values.decodeIfPresent(Int.self, forKey: .latencyOffsetMilliseconds) ?? 0)
+    }
 
     var bitrateKbps: Int {
         let high = sampleRate.rawValue.isMultiple(of: 44100) ? 909 : 990
@@ -57,6 +73,40 @@ struct LDACConfiguration: Equatable, Codable, Sendable {
     var format: LDACFormat { LDACFormat(sampleRateHz: sampleRate.rawValue, bitrateKbps: bitrateKbps, channels: 2) }
     var qualityDisplayName: String { quality == .adaptive ? quality.displayName : String(localized: "\(quality.displayName) · \(bitrateKbps) kb/s") }
     var helperArguments: [String] { ["--sample-rate", String(sampleRate.rawValue), "--quality", quality.rawValue] }
+}
+
+struct LDACPipelineLatency: Equatable, Sendable {
+    let rate: Int
+    var reserveFrames: Int
+    var frameBytes: Int
+    var mtu = 679
+    var receiverDelayTenthsMilliseconds = 0
+    var offsetMilliseconds: Int
+
+    init(configuration: LDACConfiguration) {
+        rate = configuration.sampleRate.rawValue
+        reserveFrames = rate / 4
+        frameBytes = (3 - configuration.quality.encoderMode) * 110
+        offsetMilliseconds = configuration.latencyOffsetMilliseconds
+    }
+
+    var frames: UInt32 {
+        let encoderFrames = rate > 48000 ? 256 : 128
+        let packetFrames = max(2, min(15, (min(mtu, 679) - 18) / max(1, frameBytes))) * encoderFrames
+        let receiverFrames = (receiverDelayTenthsMilliseconds * rate + 9999) / 10000
+        let calibrationFrames = min(500, max(-500, offsetMilliseconds)) * rate / 1000
+        return UInt32(min(rate * 4, max(0, reserveFrames + encoderFrames + packetFrames + receiverFrames + calibrationFrames)))
+    }
+
+    mutating func acceptReceiverReport(_ line: String) -> Bool {
+        let fields = line.split(separator: " ", omittingEmptySubsequences: false)
+        guard fields.count == 3, fields[0] == "DELAY_REPORT", fields[1].hasPrefix("value="), fields[2] == "units=0.1ms" else { return false }
+        let value = fields[1].dropFirst(6)
+        guard !value.isEmpty, value.count <= 5, value.allSatisfy({ $0 >= "0" && $0 <= "9" }),
+              let delay = Int(value), (0...20000).contains(delay) else { return false }
+        receiverDelayTenthsMilliseconds = delay
+        return true
+    }
 }
 
 enum LDACState: Equatable, Sendable {
@@ -143,6 +193,7 @@ final class LDACNativeSession: @unchecked Sendable {
         case handoffReady
         case active(LDACFormat)
         case formatChanged(LDACFormat)
+        case latencyFrames(UInt32)
         case gainApplied(Double)
         case ldacEndpoint(Bool)
         case audioCaptureAccess(LDACAudioCaptureAccess)
@@ -166,6 +217,7 @@ final class LDACNativeSession: @unchecked Sendable {
     private let address: String
     private let helpers: Helpers
     private let configuration: LDACConfiguration
+    private var pipelineLatency: LDACPipelineLatency
     private let outputDeviceUID: String?
     private let priority: LDACPriorityControl?
     private let receive: @MainActor @Sendable (Event) -> Void
@@ -280,6 +332,7 @@ final class LDACNativeSession: @unchecked Sendable {
         self.address = address
         self.helpers = helpers
         self.configuration = configuration
+        pipelineLatency = LDACPipelineLatency(configuration: configuration)
         self.recoveryAttempt = recoveryAttempt
         self.restoringOnly = restoringOnly
         self.outputDeviceUID = outputDeviceUID
@@ -580,6 +633,9 @@ final class LDACNativeSession: @unchecked Sendable {
             if line == "RESTORE_CONNECTED native=1 connected=1" ||
                 line == "RESTORE_PRESERVED native=1 connected=1" { nativeAudioRestored = true }
         } else if source == "probe" {
+            if line.hasPrefix("DELAY_REPORT "), !shouldStop, pipelineLatency.acceptReceiverReport(line) {
+                emit(.latencyFrames(pipelineLatency.frames))
+            }
             if line == "SIGNALING_ARMED waitingForACL=1" {
                 guard !signalingArmed, children["connector"] == nil else {
                     throw LDACSessionError("The LDAC signaling helper reported repeated or late readiness.")
@@ -644,6 +700,8 @@ final class LDACNativeSession: @unchecked Sendable {
                 guard LDACChannelGate.captures("^READY CID=[0-9A-Fa-f]+ outgoingMTU=[0-9]+ socketFD=[0-9]+ PSM=0019 rate=\(configuration.sampleRate.rawValue) channels=2 bitrateKbps=\(configuration.bitrateKbps) eqmid=\(configuration.quality.encoderMode)$", line) != nil else {
                     throw LDACSessionError(String(localized: "LDAC did not start with the selected audio format."))
                 }
+                pipelineLatency.mtu = mtu
+                emit(.latencyFrames(pipelineLatency.frames))
             } else if line.hasPrefix("PCM_READY ") {
                 let prefill = configuration.sampleRate.rawValue / 4
                 let capacity = (configuration.sampleRate.rawValue + 127) / 128 * 128
@@ -653,6 +711,12 @@ final class LDACNativeSession: @unchecked Sendable {
                     throw LDACSessionError("Live PCM prefill did not match the verified format.")
                 }
                 pcmReady = true
+            } else if line.hasPrefix("LIVE_BEGIN ") {
+                if let values = LDACChannelGate.captures("\\breserveFrames=([0-9]+)$", line),
+                   let frames = Int(values[0]), (configuration.sampleRate.rawValue / 4...(configuration.sampleRate.rawValue + 127) / 128 * 128).contains(frames) {
+                    pipelineLatency.reserveFrames = frames
+                    emit(.latencyFrames(pipelineLatency.frames))
+                }
             } else if line.hasPrefix("LIVE_SENT ") {
                 guard line == "LIVE_SENT packets=1 rate=\(configuration.sampleRate.rawValue) channels=2 bitrateKbps=\(configuration.bitrateKbps) eqmid=\(configuration.quality.encoderMode)" else {
                     throw LDACSessionError(String(localized: "LDAC did not start with the selected audio format."))
@@ -673,6 +737,8 @@ final class LDACNativeSession: @unchecked Sendable {
                       (49...330).contains(frameBytes), bitrate == frameBytes * 8 * rate / frameSamples / 1000 else {
                     throw LDACSessionError(String(localized: "LDAC reported an invalid audio format."))
                 }
+                pipelineLatency.frameBytes = frameBytes
+                if !shouldStop { emit(.latencyFrames(pipelineLatency.frames)) }
                 if !shouldStop { emit(.formatChanged(LDACFormat(sampleRateHz: rate, bitrateKbps: bitrate, channels: 2))) }
             } else if let values = LDACChannelGate.captures("^GAIN_APPLIED gain=([0-9.eE+-]+)$", line),
                       let applied = Double(values[0]), applied.isFinite, (0...1).contains(applied) {

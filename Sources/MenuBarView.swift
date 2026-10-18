@@ -272,8 +272,8 @@ struct MenuBarView: View {
 
     #if !ACOUPLET_PUBLIC_APIS_ONLY
     private var showsLDACControl: Bool {
-        showsLDACSession || (settings.experimentalLDACEnabled && ldac.support(forAddress: headphones.address) != .unsupported
-            && ((showsHeadphoneControls && ldac.canEnable(forAddress: headphones.address))
+        showsLDACSession || (settings.experimentalLDACEnabled
+            && ((showsHeadphoneControls && ldac.deviceUnavailableReason(forAddress: headphones.address) == nil)
             || (ldac.targetAddress == headphones.address && ldac.state != .off)))
     }
 
@@ -313,6 +313,12 @@ struct MenuBarView: View {
             HStack {
                 Text("LDAC")
                 Menu {
+                    Button("Check LDAC support again") {
+                        ldac.checkSupportAgain(forAddress: headphones.address, configuration: settings.ldacConfiguration(forAddress: headphones.address))
+                    }
+                    .disabled(!ldac.canStartOrInstallDriver)
+                    .help("Checks support by starting LDAC playback.")
+                    Divider()
                     Picker("Sample Rate", selection: $settings.ldacConfiguration.sampleRate) {
                         ForEach(LDACSampleRate.allCases, id: \.self) { rate in
                             Text(rate.displayName).tag(rate)
@@ -351,7 +357,7 @@ struct MenuBarView: View {
                     .accessibilityIdentifier("audio.ldacFormat")
                 Toggle("LDAC", isOn: Binding(
                     get: { ldacIsEnabled },
-                    set: { ldac.setEnabled($0, forAddress: headphones.address, configuration: settings.ldacConfiguration) }
+                    set: { ldac.setEnabled($0, forAddress: headphones.address, configuration: settings.ldacConfiguration(forAddress: headphones.address)) }
                 ))
                 .labelsHidden()
                 .toggleStyle(.switch)
@@ -830,7 +836,7 @@ struct LDACPermissionGuidance: View {
                     NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security")!)
                 }
                 .accessibilityIdentifier("audio.ldacPrivacySettings")
-                Button("Retry LDAC") { ldac.setEnabled(true, forAddress: headphones.address, configuration: settings.ldacConfiguration) }
+                Button("Retry LDAC") { ldac.setEnabled(true, forAddress: headphones.address, configuration: settings.ldacConfiguration(forAddress: headphones.address)) }
                     .disabled(!ldac.canEnable(forAddress: headphones.address))
                     .accessibilityIdentifier("audio.ldacRetry")
             }

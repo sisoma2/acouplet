@@ -16,8 +16,10 @@
 #define ACOUPLET_SIGNING_TEAM "5743Y47SC7"
 #endif
 
-enum { kAcoupletLease = 'xmls', kAcoupletModel = 'xmnm', kAcoupletPriority = 'xmpr', kAcoupletRevision = 'xmvr' };
-static const SInt32 kAcoupletDriverRevision = 5;
+enum { kAcoupletLease = 'xmls', kAcoupletModel = 'xmnm', kAcoupletPriority = 'xmpr', kAcoupletRevision = 'xmvr', kAcoupletLatency = 'xmlt' };
+static const SInt32 kAcoupletDriverRevision = 6;
+static UInt32 gPipelineLatencyFrames;
+static UInt32 gNotifiedLatencyFrames;
 static UInt64 gLeaseDeadline;
 static pid_t gLeaseOwner;
 static atomic_bool gAvailable;
@@ -475,7 +477,23 @@ static Boolean AcoupletRefreshLease(void) {
     return expired;
 }
 
+static void AcoupletLatencyChanged(void) {
+    pthread_mutex_lock(&gPlugIn_StateMutex);
+    if (!AcoupletLeaseValid()) gPipelineLatencyFrames = 0;
+    Boolean changed = gNotifiedLatencyFrames != gPipelineLatencyFrames;
+    gNotifiedLatencyFrames = gPipelineLatencyFrames;
+    pthread_mutex_unlock(&gPlugIn_StateMutex);
+    if (!changed || !gPlugIn_Host) return;
+    AudioObjectPropertyAddress properties[] = {
+        {kAudioDevicePropertyLatency, kAudioObjectPropertyScopeOutput, kAudioObjectPropertyElementMain},
+        {kAudioDevicePropertyLatency, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain},
+        {kAcoupletLatency, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain}
+    };
+    gPlugIn_Host->PropertiesChanged(gPlugIn_Host, kObjectID_Device, 3, properties);
+}
+
 static void AcoupletLeaseChanged(void) {
+    AcoupletLatencyChanged();
     AudioObjectPropertyAddress property = {kAcoupletLease, kAudioObjectPropertyScopeGlobal,
         kAudioObjectPropertyElementMain};
     gPlugIn_Host->PropertiesChanged(gPlugIn_Host, kObjectID_Device, 1, &property);
@@ -537,6 +555,7 @@ static OSStatus AcoupletPerformConfiguration(AudioServerPlugInDriverRef driver, 
     if (!gShuttingDown && action && action == gPendingRateAction) {
         if (gPendingRateOwner == gLeaseOwner && AcoupletLeaseValid() &&
             gPendingRateGeneration == gLeaseGeneration && !gDevice_IOIsRunning) {
+            gPipelineLatencyFrames = (UInt32)ceil(gPipelineLatencyFrames * gPendingRate / gDevice_SampleRate);
             gDevice_SampleRate = gPendingRate;
             gDevice_HostTicksPerFrame = gTicksPerSecond / gDevice_SampleRate;
             gDevice_NumberTimeStamps = 0;
@@ -550,6 +569,7 @@ static OSStatus AcoupletPerformConfiguration(AudioServerPlugInDriverRef driver, 
         gPendingRateAction = 0;
     }
     pthread_mutex_unlock(&gPlugIn_StateMutex);
+    AcoupletLatencyChanged();
     if (expired || changed) AcoupletLeaseChanged();
     AcoupletQueueAvailability();
     return noErr;
@@ -581,6 +601,8 @@ static OSStatus AcoupletInitialize(AudioServerPlugInDriverRef driver, AudioServe
     gModel = CFRetain(CFSTR("WF-1000XM5"));
     gTicksPerSecond = gDevice_HostTicksPerFrame * 48000;
     gPendingRateAction = 0;
+    gPipelineLatencyFrames = 0;
+    gNotifiedLatencyFrames = 0;
     gPriorityPhase = gPrioritySent ? CFSTR("cleanup-required") : CFSTR("idle");
     gPriorityOwner = 0;
     atomic_store(&gClockPeriod, kDevice_RingBufferSize);
@@ -689,6 +711,8 @@ static UInt32 AcoupletList(AudioObjectID object, const AudioObjectPropertyAddres
 static UInt32 AcoupletSize(AudioObjectID object, const AudioObjectPropertyAddress *property) {
     if (object == kObjectID_PlugIn && property->mSelector == kAudioPlugInPropertyBundleID)
         return sizeof(CFStringRef);
+    if ((object == kObjectID_Device && property->mSelector == kAudioDevicePropertyLatency) ||
+        (object == kObjectID_Stream_Output && property->mSelector == kAudioStreamPropertyLatency)) return sizeof(UInt32);
     AudioObjectID values[3];
     UInt32 count = AcoupletList(object, property, values);
     if (count != UINT32_MAX) return count * sizeof(AudioObjectID);
@@ -698,10 +722,11 @@ static UInt32 AcoupletSize(AudioObjectID object, const AudioObjectPropertyAddres
             case kAcoupletModel: return sizeof(CFStringRef);
             case kAudioDevicePropertyIcon: return sizeof(CFURLRef);
             case kAcoupletPriority: return sizeof(CFPropertyListRef);
-            case kAcoupletRevision: return sizeof(CFNumberRef);
+            case kAcoupletRevision:
+            case kAcoupletLatency: return sizeof(CFNumberRef);
             case kAudioDevicePropertyVolumeScalar: return sizeof(Float32);
             case kAudioDevicePropertyMute: return sizeof(UInt32);
-            case kAudioObjectPropertyCustomPropertyInfoList: return 4 * sizeof(AudioServerPlugInCustomPropertyInfo);
+            case kAudioObjectPropertyCustomPropertyInfoList: return 5 * sizeof(AudioServerPlugInCustomPropertyInfo);
             case kAudioDevicePropertyAvailableNominalSampleRates: return 4 * sizeof(AudioValueRange);
         }
     }
@@ -719,6 +744,9 @@ static Boolean AcoupletHasProperty(AudioServerPlugInDriverRef driver, AudioObjec
     if (driver != gAudioServerPlugInDriverRef || !AcoupletObject(object) || !property) return false;
     AudioObjectPropertyAddress controlProperty;
     if (Acouplet(object, property, &controlProperty)) return true;
+    if (object == kObjectID_Device && property->mSelector == kAudioDevicePropertyLatency)
+        return (property->mScope == kAudioObjectPropertyScopeGlobal || property->mScope == kAudioObjectPropertyScopeOutput) &&
+            property->mElement == kAudioObjectPropertyElementMain;
     if (property->mSelector == kAudioDevicePropertyIcon)
         return object == kObjectID_Device && property->mScope == kAudioObjectPropertyScopeGlobal &&
             property->mElement == kAudioObjectPropertyElementMain;
@@ -729,7 +757,7 @@ static Boolean AcoupletHasProperty(AudioServerPlugInDriverRef driver, AudioObjec
         (object == kObjectID_PlugIn && property->mSelector == kAudioPlugInPropertyTranslateUIDToBox))
         return false;
     if (object == kObjectID_Device && (property->mSelector == kAcoupletLease || property->mSelector == kAcoupletModel ||
-        property->mSelector == kAcoupletPriority || property->mSelector == kAcoupletRevision ||
+        property->mSelector == kAcoupletPriority || property->mSelector == kAcoupletRevision || property->mSelector == kAcoupletLatency ||
         property->mSelector == kAudioObjectPropertyCustomPropertyInfoList))
         return property->mScope == kAudioObjectPropertyScopeGlobal && property->mElement == kAudioObjectPropertyElementMain;
     return NullAudio_HasProperty(driver, object, client, property);
@@ -742,11 +770,12 @@ static OSStatus AcoupletIsSettable(AudioServerPlugInDriverRef driver, AudioObjec
     AudioObjectPropertyAddress controlProperty;
     if (Acouplet(object, property, &controlProperty) ||
         (object == kObjectID_Device && (property->mSelector == kAcoupletLease || property->mSelector == kAcoupletModel ||
-            property->mSelector == kAcoupletPriority))) {
+            property->mSelector == kAcoupletPriority || property->mSelector == kAcoupletLatency))) {
         *settable = true;
         return noErr;
     }
     if (property->mSelector == kAudioObjectPropertyCustomPropertyInfoList || property->mSelector == kAcoupletRevision ||
+        property->mSelector == kAudioDevicePropertyLatency || property->mSelector == kAudioStreamPropertyLatency ||
         (object == kObjectID_PlugIn && property->mSelector == kAudioPlugInPropertyBundleID)) {
         *settable = false;
         return noErr;
@@ -779,6 +808,16 @@ static OSStatus AcoupletGetData(AudioServerPlugInDriverRef driver, AudioObjectID
         UInt32 requested = capacity / sizeof(AudioObjectID);
         *size = (requested < count ? requested : count) * sizeof(AudioObjectID);
         if (*size) memcpy(data, values, *size);
+        return noErr;
+    }
+    if ((object == kObjectID_Device && property->mSelector == kAudioDevicePropertyLatency) ||
+        (object == kObjectID_Stream_Output && property->mSelector == kAudioStreamPropertyLatency)) {
+        if (capacity < sizeof(UInt32)) return kAudioHardwareBadPropertySizeError;
+        pthread_mutex_lock(&gPlugIn_StateMutex);
+        *(UInt32 *)data = object == kObjectID_Device && property->mScope != kAudioObjectPropertyScopeInput &&
+            AcoupletLeaseValid() ? gPipelineLatencyFrames : 0;
+        pthread_mutex_unlock(&gPlugIn_StateMutex);
+        *size = sizeof(UInt32);
         return noErr;
     }
     UInt32 custom = AcoupletSize(object, property);
@@ -841,6 +880,14 @@ static OSStatus AcoupletGetData(AudioServerPlugInDriverRef driver, AudioObjectID
                 *size = sizeof(CFBooleanRef);
                 return noErr;
             }
+            case kAcoupletLatency: {
+                pthread_mutex_lock(&gPlugIn_StateMutex);
+                SInt32 frames = AcoupletLeaseValid() ? gPipelineLatencyFrames : 0;
+                pthread_mutex_unlock(&gPlugIn_StateMutex);
+                *(CFNumberRef *)data = CFNumberCreate(NULL, kCFNumberSInt32Type, &frames);
+                *size = sizeof(CFNumberRef);
+                return noErr;
+            }
             case kAcoupletRevision:
                 *(CFNumberRef *)data = CFNumberCreate(NULL, kCFNumberSInt32Type, &kAcoupletDriverRevision);
                 *size = sizeof(CFNumberRef);
@@ -882,7 +929,10 @@ static OSStatus AcoupletGetData(AudioServerPlugInDriverRef driver, AudioObjectID
                 ((AudioServerPlugInCustomPropertyInfo *)data)[3] = (AudioServerPlugInCustomPropertyInfo){
                     kAcoupletRevision, kAudioServerPlugInCustomPropertyDataTypeCFPropertyList,
                     kAudioServerPlugInCustomPropertyDataTypeNone};
-                *size = 4 * sizeof(AudioServerPlugInCustomPropertyInfo);
+                ((AudioServerPlugInCustomPropertyInfo *)data)[4] = (AudioServerPlugInCustomPropertyInfo){
+                    kAcoupletLatency, kAudioServerPlugInCustomPropertyDataTypeCFPropertyList,
+                    kAudioServerPlugInCustomPropertyDataTypeNone};
+                *size = 5 * sizeof(AudioServerPlugInCustomPropertyInfo);
                 return noErr;
             case kAudioDevicePropertyAvailableNominalSampleRates:
                 *size = (capacity / sizeof(AudioValueRange) < 4 ? capacity / sizeof(AudioValueRange) : 4) * sizeof(AudioValueRange);
@@ -1076,6 +1126,23 @@ static OSStatus AcoupletSetData(AudioServerPlugInDriverRef driver, AudioObjectID
     AudioObjectPropertyAddress controlProperty;
     AudioObjectID control = Acouplet(object, property, &controlProperty);
     if (control) return AcoupletSetData(driver, control, client, &controlProperty, qualifierSize, qualifier, size, data);
+    if (object == kObjectID_Device && property->mSelector == kAcoupletLatency) {
+        if (size != sizeof(CFNumberRef)) return kAudioHardwareBadPropertySizeError;
+        CFNumberRef value = *(const CFNumberRef *)data;
+        double frames;
+        if (!value || CFGetTypeID(value) != CFNumberGetTypeID() ||
+            !CFNumberGetValue(value, kCFNumberDoubleType, &frames) || !isfinite(frames) || frames < 0 || floor(frames) != frames)
+            return kAudioHardwareIllegalOperationError;
+        if (!AcoupletClientAuthorized(client)) return kAudioDevicePermissionsError;
+        pthread_mutex_lock(&gPlugIn_StateMutex);
+        OSStatus status = noErr;
+        if (gShuttingDown || frames > gDevice_SampleRate * 4) status = kAudioHardwareIllegalOperationError;
+        else if (client != gLeaseOwner || !AcoupletLeaseValid()) status = kAudioDevicePermissionsError;
+        else gPipelineLatencyFrames = (UInt32)frames;
+        pthread_mutex_unlock(&gPlugIn_StateMutex);
+        if (!status) AcoupletLatencyChanged();
+        return status;
+    }
     if (object == kObjectID_Device && property->mSelector == kAcoupletPriority) {
         if (size != sizeof(CFPropertyListRef)) return kAudioHardwareBadPropertySizeError;
         return AcoupletSetPriority(client, *(const CFPropertyListRef *)data);
@@ -1096,6 +1163,7 @@ static OSStatus AcoupletSetData(AudioServerPlugInDriverRef driver, AudioObjectID
             pthread_mutex_unlock(&gPlugIn_StateMutex);
             return kAudioDevicePermissionsError;
         }
+        if (!gLeaseOwner || !claim) gPipelineLatencyFrames = 0;
         gLeaseOwner = claim ? client : 0;
         gLeaseDeadline = claim ? mach_absolute_time() + (UInt64)(gTicksPerSecond * 3) : 0;
         AcoupletRefreshLease();

@@ -88,3 +88,47 @@ python3 Helpers/LDAC/LDACControllerVolumeCheck.py --check-mutations --filter 'mu
 
 Installer fixtures shorten simulated polling budgets while keeping delayed-exit
 and timeout cases. The installed scripts keep their normal wait times.
+
+## LDAC capability and presentation timing
+
+The LDAC settings menu offers **Check LDAC support again**. It clears only the
+selected device's observation and starts the normal guarded playback setup,
+which can interrupt ordinary playback. Known model exclusions, microphone,
+multipoint, output ownership, driver and capture-permission checks still apply.
+Capability records include the observation time, firmware, connection mode and
+multipoint state. Negative observations expire after one day, positive ones after
+30 days; changed context or a potentially hidden endpoint permits discovery again.
+Legacy Boolean observations are ignored because their age and context are unknown.
+An advertised LDAC endpoint with an unsupported requested sample rate remains a
+sample-rate failure, rather than a negative codec observation.
+
+Driver revision 6 reports the pipeline estimate in device latency frames at the
+negotiated sample rate; stream latency remains zero so Core Audio's device plus
+stream sum counts the pipeline once. The estimate includes the initial 250 ms PCM
+reserve (replaced by the actual sender reserve at startup), one encoder frame,
+and the encoder's packet assembly duration. The transport queue capacity is a
+congestion limit, not another fixed delay, and is not added to the reserve.
+Negotiated AVDTP receiver delay reports from 0 to 2 seconds replace the previous
+receiver contribution rather than accumulating it. Malformed, unnegotiated and
+out-of-range reports are rejected. The owner writes the bounded estimate using an
+authenticated, lease-protected property; changes notify Core Audio, and release,
+expiry and owner exit clear the session estimate.
+
+The experimental settings also save a **Latency offset** per device, from -500 to
++500 ms, applied on the next start. Positive values increase the reported delay;
+negative values reduce it, with the total clamped to zero. The new driver must be
+installed and loaded using the existing update/restart flow. This is an estimate,
+not a measured audiovisual offset. Hardware qualification should compare video
+synchronization at 44.1, 48, 88.2 and 96 kHz in each quality mode, both with and
+without receiver reports, in players that honor Core Audio latency. Record the
+player, device firmware, observed offset and calibration; other players may ignore
+these properties.
+
+`Packaging/ldac-session-stats.py` reports the last observed bitrate, a transition
+timeline, seconds at each observed bitrate, observed range and an average over
+known intervals in JSON. The text report includes the timeline and unknown time.
+Missing startup, missing completion or unobserved bitrate intervals mark a session
+as partial. No bitrate is inferred for time before the first available observation.
+`Packaging/check-ldac-session-stats.py` replays synthetic promotions, demotions,
+malformed events, encoder resets, rotations and partial logs. These checks and the
+native property/parser checks run through `Packaging/check-all.py`.

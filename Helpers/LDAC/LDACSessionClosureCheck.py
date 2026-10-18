@@ -443,6 +443,46 @@ extension LDACNativeSession {
     }
 
     @MainActor
+    static func presentationLatencyCheck() async throws {
+        for rate in LDACSampleRate.allCases {
+            for quality in LDACQuality.allCases {
+                let events = SessionEvents()
+                let configuration = LDACConfiguration(sampleRate: rate, quality: quality, latencyOffsetMilliseconds: 100)
+                let session = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01",
+                    helpers: Helpers(bundle: .main), gain: 0, configuration: configuration, receive: { events.values.append($0) })
+                var expected = LDACPipelineLatency(configuration: configuration)
+                try session.handle("probe", line: "DELAY_REPORT value=1000 units=0.1ms")
+                try session.handle("probe", line: "DELAY_REPORT value=1000 units=0.1ms")
+                expected.receiverDelayTenthsMilliseconds = 1000
+                let receiverFrames = expected.frames
+                for invalid in ["DELAY_REPORT value=-1 units=0.1ms", "DELAY_REPORT value=65535 units=0.1ms",
+                                "DELAY_REPORT value=100 units=ms", "DELAY_REPORT value=1.5 units=0.1ms"] {
+                    try session.handle("probe", line: invalid)
+                }
+                try session.handle("media", line: "DELAY_REPORT value=2000 units=0.1ms")
+                let reserve = rate.rawValue / 3
+                try session.handle("media", line: "LIVE_BEGIN gain=0 seconds=0 targetSamples=0 bufferedFrames=\(reserve) reserveFrames=\(reserve)")
+                expected.reserveFrames = reserve
+                var values = [receiverFrames, receiverFrames, expected.frames]
+                if quality == .adaptive {
+                    session.active = true
+                    let bitrate = rate.rawValue.isMultiple(of: 44100) ? 909 : 990
+                    try session.handle("media", line: "LIVE_FORMAT rate=\(rate.rawValue) channels=2 bitrateKbps=\(bitrate) frameBytes=330")
+                    expected.frameBytes = 330
+                    values.append(expected.frames)
+                }
+                for _ in 0..<100 { await Task.yield() }
+                let observed = events.values.compactMap { event -> UInt32? in
+                    if case let .latencyFrames(frames) = event { return frames }
+                    return nil
+                }
+                try require(observed == values, "Session latency omitted reserve, accumulated receiver delay or accepted malformed reports")
+            }
+        }
+        print("PASS actual session latency propagation for all rates and qualities: reserve, receiver replacement, calibration, adaptive packet duration and malformed reports")
+    }
+
+    @MainActor
     static func loggerAuthorizationCheck() async throws {
         for source in ["daemon", "probe", "media"] {
             let events = SessionEvents()
@@ -977,6 +1017,7 @@ enum LDACSessionClosureCheck {
             print("PASS signaling startup mode=\(mode): readiness before reconnect, delayed ACL evidence, takeover rejection and cancellation")
         }
         try LDACNativeSession.finishChildrenCheck(executable: executable)
+        try await LDACNativeSession.presentationLatencyCheck()
         try await LDACNativeSession.loggerAuthorizationCheck()
         print("PASS logger authorization failure retains its account requirement")
         for role in ["preflight", "capture"] {

@@ -19,7 +19,7 @@ import Combine
 import CoreAudio
 
 enum LDACState: Equatable { case off, requested, waitingForDevice, connecting, stopping, failed(String) }
-enum LDACSupport { case supported, unsupported, unknown; func allowsStart(requested: Bool) -> Bool { requested && self != .unsupported } }
+__SUPPORT__
 enum LDACAudioCaptureAccess { case checking, unchecked }
 struct LDACConfiguration: Equatable { var value = 0 }
 enum SonyBLEIdentity {
@@ -39,7 +39,12 @@ final class MacAudioRouteObserver {
     var route: Route? = Route(uid: "fixture-headphones")
 }
 
-enum Model { case unknown, wfXM3, whCH720N, wfXM5, whXM5 }
+enum Model {
+    case unknown, wfXM3, whCH720N, wfXM5, whXM5
+    var offersLDACOnlyWithoutMultipoint: Bool { false }
+}
+struct MultipointSetting { var enabled: Bool? }
+struct SystemFeatures { var multipoint: MultipointSetting? }
 enum SonyConnectionMode { case soundQuality, stableConnection, lowLatency }
 struct ConnectionTransition {
     enum Phase { case awaitingResponse, awaitingUser, recovering, confirmed, cancelled, failed, pairingRequired }
@@ -59,6 +64,8 @@ struct EarbudFinder {
 @MainActor
 final class Device: ObservableObject {
     var deviceModel: Model
+    var firmwareVersion: String?
+    var systemFeatures = SystemFeatures()
     @Published var isReady: Bool
     var notificationSession: UInt64 = 1
     @Published var isDeviceConnected = true
@@ -210,6 +217,9 @@ final class Controller: ObservableObject {
     var restores: [String] = []
     var recoveryRecords: [String] = []
     var musicControlStatus: String { "simulated" }
+    var defaults: UserDefaults?
+    var discoveredSupport: [String: LDACCapabilityRecord] = [:]
+    func observeSupport(_ supported: Bool, address: String) { recordDiscoveredSupport(supported, address: address) }
 
     init(output: Output? = nil) {
         nativeOutput = output
@@ -250,7 +260,6 @@ final class Controller: ObservableObject {
         var errorDescription: String? { message }
         init(_ message: String) { self.message = message }
     }
-    func support(forAddress address: String) -> LDACSupport { .unknown }
 __METHODS__
 }
 
@@ -288,6 +297,31 @@ enum LDACControllerCleanupCheck {
     @MainActor
     static func main() async {
         let address = "02:00:00:00:00:01"
+        let suite = "dev.baglayan.Acouplet.capability-check.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = LDACSupportStore(defaults: defaults)
+        let context = LDACCapabilityContext(connectionMode: "soundQuality")
+        store.record(false, forAddress: address, context: context)
+        store.record(true, forAddress: "02:00:00:00:00:02", context: context)
+        let rediscovery = Controller()
+        rediscovery.defaults = defaults
+        rediscovery.discoveredSupport = store.all
+        rediscovery.devices!.controller(for: address)!.connectionMode = .soundQuality
+        precondition(!rediscovery.canEnable(forAddress: address))
+        rediscovery.setEnabled(true, forAddress: address)
+        precondition(rediscovery.starts.isEmpty)
+        rediscovery.checkSupportAgain(forAddress: address, configuration: LDACConfiguration())
+        precondition(rediscovery.starts == [address])
+        precondition(store.discovered(forAddress: address, context: context) == nil)
+        precondition(store.discovered(forAddress: "02:00:00:00:00:02", context: context) == true)
+        rediscovery.observeSupport(true, address: address)
+        precondition(rediscovery.support(forAddress: address) == .supported)
+        let excluded = Controller()
+        excluded.devices!.controller(for: address)!.deviceModel = .wfXM3
+        excluded.checkSupportAgain(forAddress: address, configuration: LDACConfiguration())
+        precondition(excluded.starts.isEmpty)
+        print("PASS actual capability rediscovery clears only the selected negative record, retries guarded admission, accepts a new endpoint and preserves model exclusions")
         for state in [LDACDriverInstaller.State.missing, .current, .restartRequired, .unavailable("Untrusted driver")] {
             let update = Controller()
             update.devices = nil
@@ -782,7 +816,9 @@ enum LDACControllerCleanupCheck {
         print("PASS actual finder admission: active finding and unconfirmed Stop block LDAC; manual driver installation is independent of headphones and preserves busy/driver-state checks")
     }
 }
-'''.replace("__METHODS__", "\n".join(method(name) for name in ["needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "openDriverInstaller", "setEnabled", "stop", "suspend", "resumeIfReady", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
+'''.replace("__METHODS__", "\n".join(method(name) for name in ["support", "capabilityContext", "recordDiscoveredSupport", "checkSupportAgain", "needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "openDriverInstaller", "setEnabled", "stop", "suspend", "resumeIfReady", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
+
+fixture = fixture.replace("__SUPPORT__", (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACSupport.swift").read_text())
 
 output_source = (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeOutput.swift").read_text()
 transfer_start = output_source.index("    nonisolated static func canTransferControls(")

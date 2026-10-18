@@ -1,6 +1,74 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Checks support by starting LDAC playback.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checks support by starting LDAC playback."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC çalmayı başlatarak desteği denetler."
+          }
+        }
+      }
+    },
+    "Applied to this device on the next LDAC start.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applied to this device on the next LDAC start."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir sonraki LDAC başlangıcında bu aygıta uygulanır."
+          }
+        }
+      }
+    },
+    "Latency offset: %lld ms": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Latency offset: %lld ms"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gecikme düzeltmesi: %lld ms"
+          }
+        }
+      }
+    },
+    "Check LDAC support again": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check LDAC support again"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC desteğini yeniden denetle"
+          }
+        }
+      }
+    },
     "Last reported": {
       "extractionState": "manual",
       "localizations": {

@@ -239,7 +239,7 @@ final class LDACNativeSession {
     struct Helpers { var isAvailable = true }
     struct Completion { var message: String?; var canRetry = false; var requiresAttention = false; var targetDisconnected = false; var waitForReconnect = false }
     enum Event {
-        case handoffReady, connecting, active(LDACFormat), formatChanged(LDACFormat), gainApplied(Double), ldacEndpoint(Bool)
+        case handoffReady, connecting, active(LDACFormat), formatChanged(LDACFormat), latencyFrames(UInt32), gainApplied(Double), ldacEndpoint(Bool)
         case audioCaptureAccess(LDACAudioCaptureAccess), failed(String), connectionLost(String), finished(Completion)
     }
     let id: UUID

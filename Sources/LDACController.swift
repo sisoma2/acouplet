@@ -15,7 +15,7 @@ final class LDACController: ObservableObject {
     @Published private(set) var isSuspendedForMicrophone = false
     @Published private(set) var audioCaptureAccess: LDACAudioCaptureAccess = .unchecked
     @Published private(set) var driverState: LDACDriverInstaller.State
-    @Published private(set) var discoveredSupport: [String: Bool]
+    @Published private(set) var discoveredSupport: [String: LDACCapabilityRecord]
     @Published private(set) var driverInstallationError: String?
     @Published private(set) var isOpeningDriverInstaller = false
     @Published private(set) var multipointConflictAddress: String?
@@ -268,13 +268,32 @@ final class LDACController: ObservableObject {
 
     func support(forAddress address: String) -> LDACSupport {
         LDACSupport.decide(modelImpliesLDAC: devices?.controller(for: address)?.deviceModel.offersLDACOnlyWithoutMultipoint == true,
-                           discovered: SonyBLEIdentity.normalizedAddress(address).flatMap { discoveredSupport[$0] })
+                           discovered: SonyBLEIdentity.normalizedAddress(address).flatMap { discoveredSupport[$0]?.observation(in: capabilityContext(forAddress: address)) })
+    }
+
+    private func capabilityContext(forAddress address: String) -> LDACCapabilityContext {
+        let headphones = devices?.controller(for: address)
+        let mode = headphones?.connectionMode
+        return LDACCapabilityContext(firmware: headphones?.firmwareVersion,
+            connectionMode: mode.map { String(describing: $0) }, multipoint: headphones?.systemFeatures.multipoint?.enabled,
+            endpointMayBeHidden: mode == .stableConnection || mode == .lowLatency || headphones?.ldacRequiresMultipointOff == true)
+    }
+
+    func checkSupportAgain(forAddress address: String, configuration: LDACConfiguration) {
+        guard let address = SonyBLEIdentity.normalizedAddress(address), !isSessionRunning,
+              requestedAddress == nil, deviceUnavailableReason(forAddress: address) == nil else { return }
+        let store = LDACSupportStore(defaults: defaults)
+        store.clear(forAddress: address)
+        discoveredSupport.removeValue(forKey: address)
+        setEnabled(true, forAddress: address, configuration: configuration)
     }
 
     private func recordDiscoveredSupport(_ supported: Bool, address: String) {
-        guard discoveredSupport[address] != supported else { return }
-        LDACSupportStore(defaults: defaults).record(supported, forAddress: address)
-        discoveredSupport[address] = supported
+        let store = LDACSupportStore(defaults: defaults)
+        let context = capabilityContext(forAddress: address)
+        let now = Date()
+        store.record(supported, forAddress: address, context: context, now: now)
+        discoveredSupport[address] = LDACCapabilityRecord(supported: supported, observedAt: now, context: context)
         record("ldac-support", reason: supported ? "endpoint listed" : "no endpoint listed")
         if !supported, support(forAddress: address) == .unsupported, requestedAddress == address {
             requestedAddress = nil
@@ -898,6 +917,7 @@ final class LDACController: ObservableObject {
                     self.transportFormat = format
                     if case .active = self.state { self.state = .active(format) }
                 }
+            case .latencyFrames: break
             case let .ldacEndpoint(supported):
                 self.recordDiscoveredSupport(supported, address: address)
             case let .gainApplied(gain):

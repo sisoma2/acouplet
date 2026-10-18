@@ -9,6 +9,7 @@ import re
 source = (Path(__file__).resolve().parents[2] / "Sources/LDACNativeOutput.swift").read_text()
 driver = (Path(__file__).resolve().parent / "VirtualOutput/AcoupletVirtualOutput.c").read_text()
 assert re.search(r'kAcoupletLease,\s*kAudioServerPlugInCustomPropertyDataTypeCFPropertyList,\s*kAudioServerPlugInCustomPropertyDataTypeNone', driver)
+latency = source[source.index("    func updateLatency("):source.index("    private var handoffSelectors:")]
 claim = source[source.index("    nonisolated static func canTransferControls("):source.index("    func priorityControl(")]
 priority = source[source.index("    func priorityControl("):source.index("    func selectForHandoff(")]
 priority_state = source[source.index("    private nonisolated static func priorityState("):source.index("    private nonisolated static func read<T>(")]
@@ -22,6 +23,8 @@ handoff = source[source.index("    func selectForHandoff()"):source.index("    @
 verify = source[source.index("    private func verifyRoute()"):source.index("    private func hasSelectedFormat()")]
 selectors = source[source.index("    private var handoffSelectors:"):source.index("    init(id:")]
 volume = source[source.index("struct LDACNativeVolume:"):source.index("\n@MainActor\nfinal class LDACNativeOutput")]
+native = (Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift").read_text()
+latency_types = native[native.index('struct LDACFormat:'):native.index('enum LDACState:')]
 fixture = r'''
 import Foundation
 import CoreAudio
@@ -73,7 +76,7 @@ enum SonyBLEIdentity {
         return address
     }
 }
-enum LDACSampleRate: Int, Codable { case hz48000 = 48000 }
+__LATENCY_TYPES__
 struct LDACPriorityControl: Sendable {
     struct State: Sendable { let phase: String; let error: String? }
     let request: @Sendable (Bool, Bool) throws -> Void
@@ -419,6 +422,7 @@ __SELECTORS__
             current[selector] = value
         }
     }
+__LATENCY__
 __CLAIM__
 __HANDOFF__
 __VERIFY__
@@ -946,6 +950,8 @@ enum Check {
     }
 }
 '''.replace("__SELECTORS__", selectors).replace("__HANDOFF__", handoff).replace("__VERIFY__", verify).replace("__VOLUME__", volume).replace("__METHOD__", method).replace("__CLAIM__", claim).replace("__APPLY__", apply).replace("__PRIORITY__", priority).replace("__PRIORITY_STATE__", priority_state).replace("__LEASE_STATE__", lease_state).replace("__HAL_WRITE__", hal_write).replace("__ROUTE_OWNER__", route_owner).replace("__SET_LEASE__", set_lease)
+
+fixture = fixture.replace('__LATENCY__', latency).replace('__LATENCY_TYPES__', latency_types)
 
 with tempfile.TemporaryDirectory(prefix="acouplet-native-output-restore-") as directory:
     directory = Path(directory)

@@ -428,7 +428,8 @@ static NSData *PeerReply(DirectPlaybackProbe *probe, NSData *packet) {
         case 13:
             if (packet.length != 5) { error = 0x11; break; }
             if (bytes[2] != 0x04) { error = 0x12; break; }
-            if (!probe.configured && !probe.configurationSent) { error = 0x31; break; }
+            if (!probe.delayReporting || (!probe.configured && !probe.configurationSent)) { error = 0x31; break; }
+            if (((bytes[3] << 8) | bytes[4]) > 20000) { error = 0x19; break; }
             return [NSData dataWithBytes:response length:2];
         case 3:
         case 5:
@@ -637,7 +638,7 @@ static BOOL PlaybackSequence(DirectPlaybackProbe *probe) {
             BOOL delayReporting = NO;
             if (!probe.selectedSink && LDACSelection(reply, probe.sampleRate, &delayReporting)) {
                 probe.selectedSink = seid;
-                probe.delayReporting = NO;
+                probe.delayReporting = delayReporting;
             }
         }
         if (!capabilitiesComplete || probe.peerStopped || probe.closed || probe.failed || probe.stopRequested) break;
@@ -758,9 +759,23 @@ static BOOL SelfTest(void) {
     probe.configured = YES;
     passed &= [PeerReply(probe, request) isEqualToData:[NSData dataWithBytes:usedSEP length:sizeof(usedSEP)]];
     const uint8_t delay[] = {0x30, 0x0D, 0x04, 0x00, 0x64};
+    const uint8_t unnegotiatedDelayReject[] = {0x33, 0x0D, 0x31};
+    passed &= [PeerReply(probe, [NSData dataWithBytes:delay length:sizeof(delay)])
+        isEqualToData:[NSData dataWithBytes:unnegotiatedDelayReject length:sizeof(unnegotiatedDelayReject)]];
+    probe.delayReporting = YES;
     const uint8_t delayAccept[] = {0x32, 0x0D};
     passed &= [PeerReply(probe, [NSData dataWithBytes:delay length:sizeof(delay)])
         isEqualToData:[NSData dataWithBytes:delayAccept length:sizeof(delayAccept)]];
+    const uint8_t configurationQuery[] = {0x50, 0x04, 0x04};
+    passed &= PeerReply(probe, [NSData dataWithBytes:configurationQuery length:sizeof(configurationQuery)]).length == 18;
+    const uint8_t invalidDelay[] = {0x30, 0x0D, 0x04, 0xFF, 0xFF};
+    const uint8_t invalidDelayReject[] = {0x33, 0x0D, 0x19};
+    passed &= [PeerReply(probe, [NSData dataWithBytes:invalidDelay length:sizeof(invalidDelay)])
+        isEqualToData:[NSData dataWithBytes:invalidDelayReject length:sizeof(invalidDelayReject)]];
+    const uint8_t shortDelay[] = {0x30, 0x0D, 0x04, 0x00};
+    const uint8_t shortDelayReject[] = {0x33, 0x0D, 0x11};
+    passed &= [PeerReply(probe, [NSData dataWithBytes:shortDelay length:sizeof(shortDelay)])
+        isEqualToData:[NSData dataWithBytes:shortDelayReject length:sizeof(shortDelayReject)]];
     probe.configured = NO;
     const uint8_t delayReject[] = {0x33, 0x0D, 0x31};
     passed &= [PeerReply(probe, [NSData dataWithBytes:delay length:sizeof(delay)])
@@ -786,6 +801,7 @@ static BOOL SelfTest(void) {
     passed &= DecodeReply(sbc, 2, 12, 1, NO) != nil && DecodeReply(aac, 3, 12, 2, NO) != nil;
     BOOL hasDelay = NO;
     passed &= DecodeReply(actual, 4, 12, 3, NO) != nil && LDACSelection(actual, 48000, &hasDelay) && hasDelay;
+    probe.delayReporting = NO;
     const uint32_t rates[] = {44100, 48000, 88200, 96000};
     for (NSUInteger rate = 0; rate < 4; rate++) {
         probe.sampleRate = rates[rate];

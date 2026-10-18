@@ -27,6 +27,7 @@ import argparse
 import datetime
 import glob
 import json
+import math
 import os
 import re
 import sys
@@ -107,7 +108,9 @@ def read_lines(files):
                     raw = raw.rstrip('\n')
                     head, _, rest = raw.partition(' ')
                     try:
-                        yield float(head), rest
+                        timestamp = float(head)
+                        if math.isfinite(timestamp):
+                            yield timestamp, rest
                     except ValueError:
                         continue
         except OSError as error:
@@ -126,6 +129,7 @@ def analyze(session_id, files):
         pacing_breaches=0, pcm_skips=0, skipped_frames=0, pcm_failed=0, lost_percent=[],
         successful=None, connection_lost=0, queue_peak=None, queue_drops=None, max_drain=None,
         other_acl=[], other_a2dp=[], l2cap_in_stream=[], media=False)
+    bitrate_observations = []
     daemon = []  # (timestamp, kind, detail) for bluetoothd events
     for ts, text in events:
         if STREAM_START.search(text):
@@ -145,11 +149,24 @@ def analyze(session_id, files):
                     s['rate'] = int(match.group(1))
             continue
         fields = kv(text)
-        if text.startswith('media LIVE_SENT') or text.startswith('media PCM_ENCODER_RESET'):
-            if 'rate' in fields and num(fields['rate']):
-                s['rate'] = int(float(fields['rate']))
-            if 'bitrateKbps' in fields and num(fields['bitrateKbps']):
-                s['bitrate_kbps'] = int(float(fields['bitrateKbps']))
+        if text.split(' ', 2)[:2] in [['media', 'LIVE_SENT'], ['media', 'PCM_ENCODER_RESET'], ['media', 'LIVE_FORMAT']]:
+            rate_text, bitrate_text = fields.get('rate', ''), fields.get('bitrateKbps', '')
+            if not rate_text.isdigit() or not bitrate_text.isdigit() or len(rate_text) > 5 or len(bitrate_text) > 3:
+                continue
+            rate, bitrate = int(rate_text), int(bitrate_text)
+            if rate not in (44100, 48000, 88200, 96000) or not 1 <= bitrate <= 990 or fields.get('channels', '2' if text.startswith('media PCM_ENCODER_RESET ') else '') != '2':
+                continue
+            if text.startswith('media LIVE_FORMAT '):
+                frame_text = fields.get('frameBytes', '')
+                if not frame_text.isdigit() or len(frame_text) > 3:
+                    continue
+                frame_bytes = int(frame_text)
+                if not 49 <= frame_bytes <= 330 or bitrate != frame_bytes * 8 * rate // (256 if rate > 48000 else 128) // 1000:
+                    continue
+            s['media'] = True
+            s['rate'], s['bitrate_kbps'] = rate, bitrate
+            if not bitrate_observations or (rate, bitrate) != bitrate_observations[-1][1:]:
+                bitrate_observations.append((ts, rate, bitrate))
         elif text.startswith('media DRAIN_BREACH'):
             s['media'] = True
             s['drain_breaches'] += 1
@@ -203,11 +220,32 @@ def analyze(session_id, files):
 
     if not s['media']:
         return None  # restore-only (or otherwise silent) session
+    startup_missing = stream_start is None
+    ending_missing = stream_end is None
     if stream_start is None:
         stream_start = start
     if stream_end is None:
         stream_end = end
     stream_end = max(stream_end, stream_start)
+
+    timeline = []
+    seconds_by_bitrate = {}
+    for index, (ts, rate, bitrate) in enumerate(bitrate_observations):
+        until = bitrate_observations[index + 1][0] if index + 1 < len(bitrate_observations) else stream_end
+        observed_start, observed_end = max(ts, stream_start), min(until, stream_end)
+        if observed_start > stream_end or observed_end < stream_start:
+            continue
+        seconds = max(0, observed_end - observed_start)
+        timeline.append(dict(offset_seconds=observed_start - stream_start, rate=rate, bitrate_kbps=bitrate, seconds=seconds))
+        seconds_by_bitrate[str(bitrate)] = seconds_by_bitrate.get(str(bitrate), 0) + seconds
+    known_seconds = sum(seconds_by_bitrate.values())
+    unknown_seconds = max(0, stream_end - stream_start - known_seconds)
+    observed_rates = [entry['bitrate_kbps'] for entry in timeline]
+    s.update(bitrate_label='last observed', bitrate_timeline=timeline, bitrate_seconds=seconds_by_bitrate,
+             bitrate_min_kbps=min(observed_rates, default=None), bitrate_max_kbps=max(observed_rates, default=None),
+             bitrate_time_weighted_kbps=(sum(int(rate) * seconds for rate, seconds in seconds_by_bitrate.items()) / known_seconds
+                                         if known_seconds else None),
+             bitrate_unknown_seconds=unknown_seconds, partial=startup_missing or ending_missing or unknown_seconds > 0)
 
     labels = {}
     for ts, kind, detail in daemon:
@@ -239,7 +277,7 @@ def hms(seconds):
 
 
 def render(sessions, totals):
-    header = ['session', 'start', 'end', 'stream', 'rate/kbps', 'casc', 'pace', 'skip(n/frames)',
+    header = ['session', 'start', 'end', 'stream', 'rate/last kbps', 'partial', 'casc', 'pace', 'skip(n/frames)',
               'PCM_FAILED lost%', 'ok', 'maxDrain', 'queue(peak/drops)', 'other']
     rows = []
     for s in sessions:
@@ -249,7 +287,7 @@ def render(sessions, totals):
         queue = '-' if s['queue_peak'] is None and s['queue_drops'] is None else \
             f"{s['queue_peak'] if s['queue_peak'] is not None else '-'}/{s['queue_drops'] or 0:g}"
         rows.append([
-            s['id'], clock(s['start']), clock(s['end']), hms(s['stream_seconds']), f'{rate}/{kbps}',
+            s['id'], clock(s['start']), clock(s['end']), hms(s['stream_seconds']), f'{rate}/{kbps}', 'yes' if s['partial'] else 'no',
             s['cascades'], s['pacing_breaches'], f"{s['pcm_skips']}/{s['skipped_frames']}",
             f"{s['pcm_failed']} ({','.join(f'{v:g}' for v in s['lost_percent']) or '-'})", ok,
             '-' if s['max_drain'] is None else f"{s['max_drain']:g}", queue, s['other_events']])
@@ -261,6 +299,12 @@ def render(sessions, totals):
                  f"streaming: {totals['stream_hours']:.2f} h")
     lines.append(f"Aborts/hour: {totals['aborts_per_hour']:.2f}  cascades: {totals['cascades']}  "
                  f"cascades/hour: {totals['cascades_per_hour']:.2f}")
+    lines.append('')
+    lines.append('Observed bitrate timeline (seconds from stream start; durations end at last available evidence):')
+    for s in sessions:
+        timeline = ', '.join(f"+{entry['offset_seconds']:g}s: {entry['bitrate_kbps']} kb/s for {entry['seconds']:g}s"
+                             for entry in s['bitrate_timeline']) or 'no valid bitrate observations'
+        lines.append(f"  {s['id']}: {timeline}; unknown: {s['bitrate_unknown_seconds']:g}s")
     notes = []
     for s in sessions:
         if s['aborted'] or s['other_events']:

@@ -10,6 +10,7 @@ static atomic_uint volumeNotifications;
 static atomic_uint muteNotifications;
 static atomic_uint iconNotifications;
 static atomic_uint terminalNotifications;
+static atomic_uint latencyNotifications;
 static CFBundleRef iconBundle;
 static atomic_bool rejectRequest;
 static AudioServerPlugInDriverRef driver;
@@ -35,6 +36,7 @@ static OSStatus Changed(AudioServerPlugInHostRef host, AudioObjectID object, UIn
             assert(properties[i].mSelector != kAudioDevicePropertyIsHidden);
             if (properties[i].mSelector == kAudioDevicePropertyVolumeScalar) atomic_fetch_add(&volumeNotifications, 1);
             if (properties[i].mSelector == kAudioDevicePropertyMute) atomic_fetch_add(&muteNotifications, 1);
+            if (properties[i].mSelector == kAudioDevicePropertyLatency) atomic_fetch_add(&latencyNotifications, 1);
             if (properties[i].mSelector == kAudioDevicePropertyIcon) atomic_fetch_add(&iconNotifications, 1);
         }
     }
@@ -73,8 +75,11 @@ static void Get(AudioObjectID object, pid_t client, UInt32 selector, UInt32 scop
                  UInt32 capacity, void *data) {
     AudioObjectPropertyAddress property = Property(selector, scope);
     UInt32 size = 0;
-    assert((*driver)->GetPropertyData(driver, object, client, &property, 0, NULL,
-                                     capacity, &size, data) == noErr && size == capacity);
+    OSStatus status = (*driver)->GetPropertyData(driver, object, client, &property, 0, NULL, capacity, &size, data);
+    if (status != noErr || size != capacity)
+        fprintf(stderr, "Get object=%u selector=%08X scope=%08X status=%d capacity=%u size=%u\n",
+            object, selector, scope, status, capacity, size);
+    assert(status == noErr && size == capacity);
 }
 
 static UInt32 Available(UInt32 selector, UInt32 scope) {
@@ -803,6 +808,41 @@ static void CheckIdentity(CFStringRef icon, UInt32 terminal) {
     assert(!(*driver)->HasProperty(driver, kObjectID_Stream_Output, owner, &property));
 }
 
+static void CheckLatency(pid_t client, Float64 rate) {
+    UInt32 frames = (UInt32)(rate / 4);
+    CFNumberRef value = CFNumberCreate(NULL, kCFNumberSInt32Type, &frames);
+    UInt32 before = atomic_load(&latencyNotifications);
+    Boolean changed = frames != gPipelineLatencyFrames;
+    assert(Set(kObjectID_Device, client, kAcoupletLatency, kAudioObjectPropertyScopeGlobal,
+        sizeof(value), &value) == noErr);
+    assert(atomic_load(&latencyNotifications) == before + (changed ? 2 : 0));
+    for (UInt32 i = 0; i < 2; ++i) {
+        UInt32 observed;
+        Get(kObjectID_Device, client, kAudioDevicePropertyLatency,
+            i ? kAudioObjectPropertyScopeOutput : kAudioObjectPropertyScopeGlobal, sizeof(observed), &observed);
+        assert(observed == frames);
+    }
+    UInt32 streamLatency;
+    Get(kObjectID_Stream_Output, client, kAudioStreamPropertyLatency,
+        kAudioObjectPropertyScopeGlobal, sizeof(streamLatency), &streamLatency);
+    assert(streamLatency == 0);
+    assert(Set(kObjectID_Device, client == owner ? owner + 1 : owner, kAcoupletLatency,
+        kAudioObjectPropertyScopeGlobal, sizeof(value), &value) == kAudioDevicePermissionsError);
+    assert(Set(kObjectID_Device, client, kAcoupletLatency, kAudioObjectPropertyScopeGlobal,
+        sizeof(value) - 1, &value) == kAudioHardwareBadPropertySizeError);
+    CFRelease(value);
+    double invalid[] = {-1, NAN, INFINITY, 0.5, rate * 4 + 1};
+    for (UInt32 i = 0; i < 5; ++i) {
+        value = CFNumberCreate(NULL, kCFNumberDoubleType, &invalid[i]);
+        assert(Set(kObjectID_Device, client, kAcoupletLatency, kAudioObjectPropertyScopeGlobal,
+            sizeof(value), &value) == kAudioHardwareIllegalOperationError);
+        CFRelease(value);
+    }
+    CFBooleanRef boolean = kCFBooleanTrue;
+    assert(Set(kObjectID_Device, client, kAcoupletLatency, kAudioObjectPropertyScopeGlobal,
+        sizeof(boolean), &boolean) == kAudioHardwareIllegalOperationError);
+}
+
 static void CheckRevision(void) {
     AudioObjectPropertyAddress property = Property(kAcoupletRevision, kAudioObjectPropertyScopeGlobal);
     assert((*driver)->HasProperty(driver, kObjectID_Device, owner, &property));
@@ -816,7 +856,7 @@ static void CheckRevision(void) {
     Get(kObjectID_Device, owner, kAcoupletRevision, kAudioObjectPropertyScopeGlobal, sizeof(revision), &revision);
     SInt32 value = 0;
     assert(revision && CFGetTypeID(revision) == CFNumberGetTypeID());
-    assert(CFNumberGetValue(revision, kCFNumberSInt32Type, &value) && value == kAcoupletDriverRevision && value == 5);
+    assert(CFNumberGetValue(revision, kCFNumberSInt32Type, &value) && value == kAcoupletDriverRevision && value == 6);
     assert((*driver)->SetPropertyData(driver, kObjectID_Device, owner, &property, 0, NULL,
         sizeof(revision), &revision) != noErr);
     CFRelease(revision);
@@ -868,13 +908,14 @@ int main(int argc, const char *argv[]) {
     assert((*driver)->GetPropertyDataSize(driver, kObjectID_Device, owner, &property, 0, NULL, &size) == noErr && !size);
     AudioObjectID unusedObject;
     assert((*driver)->GetPropertyData(driver, kObjectID_Device, owner, &property, 0, NULL, 0, &size, &unusedObject) == noErr);
-    AudioServerPlugInCustomPropertyInfo custom[4];
+    AudioServerPlugInCustomPropertyInfo custom[5];
     Get(kObjectID_Device, owner, kAudioObjectPropertyCustomPropertyInfoList, kAudioObjectPropertyScopeGlobal,
         sizeof(custom), custom);
     assert(custom[0].mSelector == kAcoupletLease && custom[0].mPropertyDataType == kAudioServerPlugInCustomPropertyDataTypeCFPropertyList &&
         custom[0].mQualifierDataType == kAudioServerPlugInCustomPropertyDataTypeNone);
     assert(custom[1].mSelector == kAcoupletModel && custom[1].mPropertyDataType == kAudioServerPlugInCustomPropertyDataTypeCFString);
     assert(custom[2].mSelector == kAcoupletPriority && custom[2].mPropertyDataType == kAudioServerPlugInCustomPropertyDataTypeCFPropertyList);
+    assert(custom[4].mSelector == kAcoupletLatency && custom[4].mPropertyDataType == kAudioServerPlugInCustomPropertyDataTypeCFPropertyList);
     assert(custom[3].mSelector == kAcoupletRevision && custom[3].mPropertyDataType == kAudioServerPlugInCustomPropertyDataTypeCFPropertyList);
     assert(!gPriorityConnection && gPriorityNotify == -1 && CFEqual(gPriorityPhase, CFSTR("idle")));
     CFStringRef initialName;
@@ -1056,6 +1097,7 @@ int main(int argc, const char *argv[]) {
         Get(kObjectID_Device, rateOwner, kAudioDevicePropertyNominalSampleRate,
             kAudioObjectPropertyScopeGlobal, sizeof(observed), &observed);
         assert(observed == rate && atomic_load(&gClockSeed) == priorSeed + 1);
+        CheckLatency(rateOwner, rate);
         for (UInt32 selector = 0; selector < 2; ++selector) {
             AudioStreamBasicDescription format;
             Get(kObjectID_Stream_Output, rateOwner, selector ? kAudioStreamPropertyVirtualFormat : kAudioStreamPropertyPhysicalFormat,
@@ -1101,7 +1143,9 @@ int main(int argc, const char *argv[]) {
         kAudioObjectPropertyScopeGlobal, sizeof(rate), &rate) == noErr);
     UInt64 rateStale = WaitRequest();
     SetLease(rateOwner, false);
+    assert(Available(kAudioDevicePropertyLatency, kAudioObjectPropertyScopeOutput) == 0);
     SetLease(owner, true);
+    assert(Available(kAudioDevicePropertyLatency, kAudioObjectPropertyScopeOutput) == 0);
     Perform(rateStale);
     assert(gDevice_SampleRate == 96000 && !gPendingRateAction);
     SetLease(owner, false);

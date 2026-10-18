@@ -58,6 +58,9 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(experimentalLDACEnabled, forKey: Keys.experimentalLDACEnabled) }
     }
     #if !ACOUPLET_PUBLIC_APIS_ONLY
+    @Published var ldacLatencyOffsets: [String: Int] {
+        didSet { persist(ldacLatencyOffsets, forKey: "preferences.ldacLatencyOffsets") }
+    }
     @Published var ldacConfiguration: LDACConfiguration {
         didSet { persist(ldacConfiguration, forKey: Keys.ldacConfiguration) }
     }
@@ -122,6 +125,7 @@ final class SettingsStore: ObservableObject {
         firmwareNotificationsEnabled = defaults.bool(forKey: Keys.firmwareNotificationsEnabled)
         experimentalLDACEnabled = defaults.bool(forKey: Keys.experimentalLDACEnabled)
         #if !ACOUPLET_PUBLIC_APIS_ONLY
+        ldacLatencyOffsets = Self.decode([String: Int].self, from: defaults.data(forKey: "preferences.ldacLatencyOffsets")) ?? [:]
         ldacConfiguration = Self.decode(LDACConfiguration.self, from: defaults.data(forKey: Keys.ldacConfiguration)) ?? LDACConfiguration()
         #endif
         reconnectAutomatically = defaults.object(forKey: Keys.reconnectAutomatically) == nil
@@ -136,6 +140,20 @@ final class SettingsStore: ObservableObject {
         equalizerProfiles = Self.decode([SavedEqualizerProfile].self, from: defaults.data(forKey: Keys.equalizerProfiles)) ?? []
         refreshLaunchStatus()
     }
+
+    #if !ACOUPLET_PUBLIC_APIS_ONLY
+    func ldacConfiguration(forAddress address: String) -> LDACConfiguration {
+        var configuration = ldacConfiguration
+        let key = address.replacingOccurrences(of: "-", with: ":").uppercased()
+        configuration.latencyOffsetMilliseconds = min(500, max(-500, ldacLatencyOffsets[key] ?? 0))
+        return configuration
+    }
+
+    func setLDACLatencyOffset(_ offset: Int, forAddress address: String) {
+        let key = address.replacingOccurrences(of: "-", with: ":").uppercased()
+        ldacLatencyOffsets[key] = min(500, max(-500, offset))
+    }
+    #endif
 
     func consumeFirstLaunch(ofBuild build: String?) -> Bool {
         guard let build, !build.isEmpty, defaults.string(forKey: Keys.lastLaunchedBuild) != build else { return false }

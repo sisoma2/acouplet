@@ -4,6 +4,22 @@ import XCTest
 @testable import Acouplet
 
 final class SettingsStoreTests: XCTestCase {
+    #if !ACOUPLET_PUBLIC_APIS_ONLY
+    @MainActor
+    func testPerDeviceLatencyCalibrationPersistsAndIsBounded() throws {
+        let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.setLDACLatencyOffset(120, forAddress: "AA-BB-CC-DD-EE-01")
+        settings.setLDACLatencyOffset(-900, forAddress: "AA-BB-CC-DD-EE-02")
+        let reopened = SettingsStore(defaults: defaults)
+        XCTAssertEqual(reopened.ldacConfiguration(forAddress: "aa:bb:cc:dd:ee:01").latencyOffsetMilliseconds, 120)
+        XCTAssertEqual(reopened.ldacConfiguration(forAddress: "AA-BB-CC-DD-EE-02").latencyOffsetMilliseconds, -500)
+        XCTAssertEqual(reopened.ldacConfiguration(forAddress: "AA-BB-CC-DD-EE-03").latencyOffsetMilliseconds, 0)
+    }
+    #endif
+
     @MainActor
     func testAppLanguageUsesOnlyItsOwnDomainAndRestoresSystemDefault() throws {
         let suiteName = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"

@@ -179,7 +179,7 @@ struct SettingsView: View {
             Section("Experimental Features") {
                 Toggle("Show LDAC controls", isOn: $settings.experimentalLDACEnabled)
                     .accessibilityIdentifier("experimental.ldac")
-                if settings.experimentalLDACEnabled, ldac.support(forAddress: headphones.address) != .unsupported {
+                if settings.experimentalLDACEnabled {
                     Picker("Sample Rate", selection: $settings.ldacConfiguration.sampleRate) {
                         ForEach(LDACSampleRate.allCases, id: \.self) { rate in
                             Text(rate.displayName).tag(rate)
@@ -195,6 +195,22 @@ struct SettingsView: View {
                     }
                     .disabled(ldac.isSessionRunning || ldac.state == .waitingForDevice)
                     .accessibilityIdentifier("ldac.quality")
+                    Stepper(value: Binding(
+                        get: { settings.ldacConfiguration(forAddress: headphones.address).latencyOffsetMilliseconds },
+                        set: { settings.setLDACLatencyOffset($0, forAddress: headphones.address) }
+                    ), in: -500...500, step: 10) {
+                        Text("Latency offset: \(settings.ldacConfiguration(forAddress: headphones.address).latencyOffsetMilliseconds) ms")
+                    }
+                    .disabled(ldac.needsStopBeforeTermination || ldac.state == .waitingForDevice || headphones.address.isEmpty)
+                    .help("Applied to this device on the next LDAC start.")
+                    .accessibilityIdentifier("ldac.latencyOffset")
+                    Button("Check LDAC support again") {
+                        ldac.checkSupportAgain(forAddress: headphones.address, configuration: settings.ldacConfiguration(forAddress: headphones.address))
+                    }
+                    .disabled(ldac.needsStopBeforeTermination || ldac.state == .waitingForDevice || !ldac.canStartOrInstallDriver
+                              || ldac.deviceUnavailableReason(forAddress: headphones.address) != nil)
+                    .help("Checks support by starting LDAC playback.")
+                    .accessibilityIdentifier("ldac.checkSupport")
                     if !ldac.isSessionRunning { LDACDriverGuidance() }
                 }
                 if settings.experimentalLDACEnabled, ldac.support(forAddress: headphones.address) != .unsupported,

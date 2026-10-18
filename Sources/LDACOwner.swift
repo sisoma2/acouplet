@@ -523,10 +523,15 @@ enum LDACOwnerWorker {
                 case .silence: output?.silence()
                 case let .start(id, configuration, recovery, restore):
                     guard session == nil, let address, claimTask == nil else { throw LDACOwnerError(message: String(localized: "LDAC did not stop completely.")) }
+                    if !restore { try output?.updateLatency(frames: LDACPipelineLatency(configuration: configuration).frames) }
                     let session = LDACNativeSession(id: id, address: address, helpers: .init(bundle: .main), gain: 0,
                         outputDeviceUID: LDACNativeOutput.uid, priority: restore ? nil : priority, configuration: configuration,
                         recoveryAttempt: recovery, restoringOnly: restore) { [weak self] event in
                         guard let self, self.session?.id == id else { return }
+                        if case let .latencyFrames(frames) = event {
+                            do { try self.output?.updateLatency(frames: frames) }
+                            catch { self.send(.outputFailure(error.localizedDescription, false)) }
+                        }
                         if case let .finished(completion) = event {
                             self.session = nil
                             self.restoreAfterSession = completion.canRetry && !completion.waitForReconnect

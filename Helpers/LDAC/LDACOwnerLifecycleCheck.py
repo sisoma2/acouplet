@@ -112,6 +112,10 @@ final class LDACNativeOutput {
         Self.routes[Self.defaultSelectors[0]] = model == "changed" ? 9 : 5
         SwiftRecord("handoff")
     }
+    func updateLatency(frames: UInt32) throws {
+        precondition(frames <= 384000)
+        SwiftRecord("latency \(frames)")
+    }
     func validateForRecovery() throws {}
     func prepareForReconnect() throws -> LDACPriorityControl { try priorityControl() }
     func finishPreparation() throws { ready = true }
@@ -178,6 +182,7 @@ final class LDACNativeSession: @unchecked Sendable {
         }
         SwiftRecord("start \(configuration.sampleRate.rawValue) \(configuration.quality.rawValue)")
         receive(.handoffReady)
+        receive(.latencyFrames(LDACPipelineLatency(configuration: configuration).frames + 100))
         receive(.active(configuration.format))
     }
     @MainActor
@@ -485,6 +490,7 @@ with tempfile.TemporaryDirectory(prefix='acouplet-owner-check-') as temporary:
             elif helpers:
                 assert lines.index('children-reaped') < lines.index('output restoring')
             if mode == 'normal':
+                assert 'latency 25792' in lines and 'latency 25892' in lines
                 assert 'second-complete' in lines
                 for line in lines:
                     if line.startswith('claim '):
