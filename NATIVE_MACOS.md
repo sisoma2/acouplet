@@ -17,11 +17,23 @@ open Acouplet.xcodeproj
 Select your development team under Signing & Capabilities and run the Acouplet
 scheme. Debug uses a separate bundle identifier from the installed app.
 
-To build a local installer using an existing Apple Development certificate:
+To build a local installer with ad-hoc signing, without an Apple development
+team or certificate:
 
 ```sh
 DEVELOPER_DIR="$(xcode-select -p)" Packaging/package.sh --local
 ```
+
+To use an existing Apple Development certificate instead:
+
+```sh
+CODE_SIGN_IDENTITY='Apple Development' DEVELOPMENT_TEAM=YOURTEAMID \
+DEVELOPER_DIR="$(xcode-select -p)" Packaging/package.sh --local
+```
+
+Certificate signing provides permission continuity between builds and is required
+for LDAC driver authentication. Release and App Store builds use your signing
+settings; the project does not pin an upstream Team ID.
 
 Quit the installed app, then open `Install.command` in
 `.build/local-update/Acouplet/`. See that package's README for removal instructions.

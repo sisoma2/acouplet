@@ -32,15 +32,11 @@ if (( ${+CODE_SIGN_IDENTITY} )) && [[ -z "$CODE_SIGN_IDENTITY" ]]; then
     exit 1
 fi
 default_signing_identity='Developer ID Application'
-if [[ "$local_update" == true ]]; then default_signing_identity='Apple Development'; fi
+if [[ "$local_update" == true ]]; then default_signing_identity='-'; fi
 signing_identity="${CODE_SIGN_IDENTITY:-$default_signing_identity}"
-signing_settings=("CODE_SIGN_IDENTITY=$signing_identity" CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO ENABLE_HARDENED_RUNTIME=YES)
-if [[ -n "${DEVELOPMENT_TEAM:-}" ]]; then
-    signing_settings+=("DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM")
-fi
-if [[ "$signing_identity" != - ]] && { [[ "$local_update" == false ]] || (( ${+CODE_SIGN_IDENTITY} )) || [[ -z "${DEVELOPMENT_TEAM:-}" ]]; }; then
-    signing_settings+=(CODE_SIGN_STYLE=Manual)
-fi
+signing_team="${DEVELOPMENT_TEAM:-}"
+if [[ "$signing_identity" == - ]]; then signing_team=; fi
+signing_settings=("CODE_SIGN_IDENTITY=$signing_identity" "DEVELOPMENT_TEAM=$signing_team" CODE_SIGN_STYLE=Manual CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO ENABLE_HARDENED_RUNTIME=YES)
 
 mkdir -p "$repo_root/.build"
 if (( ${+ACOUPLET_BUILD_NUMBER} )); then

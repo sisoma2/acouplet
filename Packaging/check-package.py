@@ -13,6 +13,7 @@ resources = project['objects']['400000000000000000000005']['files']
 resource_paths = [project['objects'][project['objects'][key]['fileRef']]['path'] for key in resources]
 assert 'LICENSE' in resource_paths and 'THIRD-PARTY-NOTICES.md' in resource_paths
 assert project['objects']['700000000000000000000003']['buildSettings']['ACOUPLET_DISTRIBUTION'] == 'development'
+assert all(not entry.get('buildSettings', {}).get('DEVELOPMENT_TEAM') for entry in project['objects'].values())
 
 stub_source = r'''#!/usr/bin/python3
 from pathlib import Path
@@ -61,7 +62,7 @@ elif name == 'xcrun':
         else: bundle.mkdir(parents=True, exist_ok=True)
     (sparkle / 'Resources').mkdir()
     (sparkle / 'Resources/Info.plist').write_bytes(plistlib.dumps({'CFBundleShortVersionString': '2.10.0'}))
-    team = settings.get('DEVELOPMENT_TEAM', 'ABCDE12345')
+    team = settings.get('DEVELOPMENT_TEAM') or 'ABCDE12345'
     adhoc = settings['CODE_SIGN_IDENTITY'] == '-'
     for bundle in (app, helper, hud, hud_check, *sparkle_codes, *ldac_codes):
         metadata = {'apple': not adhoc, 'team': 'not set' if adhoc else team,
@@ -287,7 +288,7 @@ def run_check(name, signing, mode='success', succeeds=True, local=False, panes=F
         else:
             assert len(builds) == 1, builds
             settings = dict(arg.split('=', 1) for arg in builds[0] if '=' in arg)
-            identity = signing.get('CODE_SIGN_IDENTITY', 'Apple Development' if local else 'Developer ID Application')
+            identity = signing.get('CODE_SIGN_IDENTITY', '-' if local else 'Developer ID Application')
             assert settings['CURRENT_PROJECT_VERSION'] == str(expected_build), settings
             assert settings['MARKETING_VERSION'] == signing.get('ACOUPLET_MARKETING_VERSION', '0.' + str(expected_build)), settings
             assert settings['ACOUPLET_DISTRIBUTION'] == ('development' if local else 'production'), settings
@@ -302,9 +303,8 @@ def run_check(name, signing, mode='success', succeeds=True, local=False, panes=F
             assert settings['CODE_SIGN_IDENTITY'] == identity, settings
             assert settings['CODE_SIGN_INJECT_BASE_ENTITLEMENTS'] == 'NO', settings
             assert settings['ENABLE_HARDENED_RUNTIME'] == 'YES', settings
-            assert settings.get('DEVELOPMENT_TEAM') == signing.get('DEVELOPMENT_TEAM'), settings
-            manual = identity != '-' and (not local or 'CODE_SIGN_IDENTITY' in signing or not signing.get('DEVELOPMENT_TEAM'))
-            assert settings.get('CODE_SIGN_STYLE') == ('Manual' if manual else None), settings
+            assert settings['DEVELOPMENT_TEAM'] == ('' if identity == '-' else signing.get('DEVELOPMENT_TEAM', '')), settings
+            assert settings['CODE_SIGN_STYLE'] == 'Manual', settings
             assert '-allowProvisioningUpdates' not in builds[0], builds[0]
             if succeeds and identity != '-':
                 checks = [command for command in commands if '--test-requirement==anchor apple generic' in command]
@@ -406,7 +406,7 @@ check('fingerprint-cannot-bypass-developer-id', {'CODE_SIGN_IDENTITY': 'A' * 40}
 check('production-rejects-development-driver', {}, 'development-driver', False)
 check('production-rejects-development-helper', {}, 'development-helper', False)
 check('local-development-fingerprint', {'CODE_SIGN_IDENTITY': 'A' * 40}, 'development-output', local=True)
-check('existing-project-team', {'CODE_SIGN_IDENTITY': 'Developer ID Application'})
+check('certificate-without-explicit-team', {'CODE_SIGN_IDENTITY': 'Developer ID Application'})
 check('empty-identity', {'CODE_SIGN_IDENTITY': ''}, succeeds=False)
 check('missing-identity-no-fallback', {'CODE_SIGN_IDENTITY': 'Developer ID Application'}, 'build-failure', False)
 check('unexpected-ad-hoc-output', {'CODE_SIGN_IDENTITY': 'Developer ID Application'}, 'adhoc-output', False)
@@ -429,6 +429,8 @@ for failure in ('missing-runtime-app', 'debuggable-app'):
     check(failure, {'CODE_SIGN_IDENTITY': 'Developer ID Application'}, failure, False)
 
 check('local-stage-receipt-without-archive', {}, local=True)
+check('local-default-ignores-team', {'DEVELOPMENT_TEAM': '5743Y47SC7'}, local=True)
+check('local-certificate-without-explicit-team', {'CODE_SIGN_IDENTITY': 'Apple Development'}, local=True)
 check('local-ad-hoc-receipt-without-archive', {'CODE_SIGN_IDENTITY': '-'}, local=True)
 
 for failure in ('missing-helper', 'adhoc-helper', 'different-helper-team', 'missing-runtime-helper', 'debuggable-helper', 'sandboxed-helper', 'inherited-helper', 'extra-helper-entitlement', 'wrong-build', 'missing-hud', 'different-hud-team', 'missing-runtime-hud', 'missing-hud-check', 'different-hud-check-team', 'missing-runtime-hud-check', 'debuggable-hud-check', 'different-sparkle-team', 'missing-runtime-sparkle'):
