@@ -390,6 +390,7 @@ final class LDACNativeSession: @unchecked Sendable {
     enum Event: Codable, Sendable {
         case connecting
         case handoffReady
+        case controlsRequired
         case active(LDACFormat)
         case formatChanged(LDACFormat)
         case latencyFrames(UInt32)
@@ -443,6 +444,8 @@ final class LDACNativeSession: @unchecked Sendable {
     private let restoringOnly: Bool
     private var handoffAllowed = false
     private var handoffRequested = false
+    private var mediaSetupAllowed = false
+    private var controlsRequested = false
     private var restoreAudio = true
     private var requestedGain: Double?
     private var gain: Double
@@ -575,6 +578,10 @@ final class LDACNativeSession: @unchecked Sendable {
         lock.lock()
         handoffAllowed = true
         lock.unlock()
+    }
+
+    func allowMediaSetup() {
+        lock.withLock { mediaSetupAllowed = true }
     }
 
     func updateGain(_ gain: Double) {
@@ -1128,6 +1135,7 @@ final class LDACNativeSession: @unchecked Sendable {
             if mediaPrepared && !preparedSent && connected && connectorReady && nativeAudioFinished {
                 try send("probe", "media-prepared")
                 preparedSent = true
+                deadline = DispatchTime.now() + 35
             }
             if let ready = mediaReady, mediaGate.opened, !readySent {
                 guard !mediaGate.closed, mediaGate.mtu == ready.mtu else { throw LDACSessionError("The media channel disagreed with its Bluetooth daemon ownership evidence.") }
@@ -1138,9 +1146,16 @@ final class LDACNativeSession: @unchecked Sendable {
                     deadline = DispatchTime.now() + 5
                 }
                 if captureReady && pcmReady {
-                    try send("probe", "media-ready \(String(ready.cid, radix: 16)) \(ready.mtu)")
-                    readySent = true
-                    deadline = DispatchTime.now() + 30
+                    if outputDeviceUID == nil || lock.withLock({ mediaSetupAllowed }) {
+                        try send("probe", "media-ready \(String(ready.cid, radix: 16)) \(ready.mtu)")
+                        readySent = true
+                        deadline = DispatchTime.now() + 30
+                    } else if !controlsRequested {
+                        controlsRequested = true
+                        deadline = DispatchTime.now() + 55
+                        record("CONTROLS_REQUIRED before=media-start")
+                        emit(.controlsRequired)
+                    }
                 }
             }
             if DispatchTime.now() >= deadline { throw LDACSessionError("LDAC did not complete its required connection or live audio readiness checks.") }

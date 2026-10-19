@@ -120,6 +120,11 @@ final class SonyHeadphonesController: ObservableObject {
     var musicVolumeReadbackID: UUID? = UUID()
     var musicStatusReadbackID: UUID? = UUID()
     var refreshes = 0
+    var controlRetries = 0
+    var controlRetryPending = false
+    var startupCommandsPending = false
+    var isLDACStreaming = false
+    var isControlChannelIdle: Bool { isReady && !startupCommandsPending }
     var volumeRefreshes = 0
     var queuedWrite: VolumeWrite?
     var blocksPlaybackCommands = false
@@ -146,6 +151,22 @@ final class SonyHeadphonesController: ObservableObject {
     func refresh() {
         refreshes += 1
         guard isReady else { return }
+        musicVolumeReadbackID = UUID()
+        musicStatusReadbackID = UUID()
+    }
+    func retryControlsIfNeeded(allowingSuppressedReconnect _: Bool = false) -> Bool {
+        guard !isReady, !controlRetryPending else { return false }
+        controlRetries += 1
+        controlRetryPending = true
+        return true
+    }
+    func completeControlRetry() {
+        controlRetryPending = false
+        notificationSession += 1
+        isReady = true
+        capabilityFresh = true
+        statusFresh = true
+        volumeFresh = true
         musicVolumeReadbackID = UUID()
         musicStatusReadbackID = UUID()
     }
@@ -245,7 +266,7 @@ final class LDACNativeSession {
     struct Helpers { var isAvailable = true }
     struct Completion { var message: String?; var canRetry = false; var requiresAttention = false; var targetDisconnected = false; var waitForReconnect = false }
     enum Event {
-        case handoffReady, connecting, active(LDACFormat), formatChanged(LDACFormat), latencyFrames(UInt32), gainApplied(Double), ldacEndpoint(Bool)
+        case handoffReady, connecting, controlsRequired, active(LDACFormat), formatChanged(LDACFormat), latencyFrames(UInt32), gainApplied(Double), ldacEndpoint(Bool)
         case audioCaptureAccess(LDACAudioCaptureAccess), failed(String), connectionLost(String), finished(Completion)
         case health(LDACTransportHealth), compatibility(LDACRuntimeStatus), capabilities(UInt8, UInt8)
     }
@@ -257,6 +278,7 @@ final class LDACNativeSession {
     var stops = 0
     var audioRestorations: [Bool] = []
     var handoffs = 0
+    var mediaSetups = 0
     init(id: UUID, address: String, helpers: Helpers, gain: Double, outputDeviceUID: String,
          priority: LDACPriorityControl?, configuration: LDACConfiguration, recoveryAttempt: Bool,
          restoringOnly: Bool, receive: @escaping (Event) -> Void) {
@@ -275,9 +297,11 @@ final class LDACNativeSession {
     func start() {}
     func emit(_ event: Event) { receive(event) }
     func allowHandoff() { handoffs += 1 }
+    func allowMediaSetup() { mediaSetups += 1 }
     func updateGain(_ gain: Double) { gains.append(gain) }
     func stop(restoreAudio: Bool) { stops += 1; audioRestorations.append(restoreAudio) }
-    func recoverConnection(reason: String) {}
+    var recoveries: [String] = []
+    func recoverConnection(reason: String) { recoveries.append(reason) }
     func verifyConnectionLoss(reason: String) {}
 }
 
@@ -351,7 +375,10 @@ final class Controller: ObservableObject {
     func capabilityContext(forAddress address: String) -> LDACCapabilityContext { .init() }
     var events: [String] = []
     func record(_ event: String, reason: String) { events.append(event) }
-    func recordRecovery(_ event: String, reason: String) { recoveryEvents.append("\(event) \(reason)") }
+    func recordRecovery(_ event: String, reason: String) {
+        transportHealth.lastReason = LDACDiagnosticReport.redacted(reason)
+        recoveryEvents.append("\(event) \(reason)")
+    }
     func support(forAddress address: String) -> LDACSupport { .unknown }
     func recordDiscoveredSupport(_ supported: Bool, address: String) {}
     __METHODS__
@@ -365,12 +392,12 @@ final class Controller: ObservableObject {
 @main
 enum Check {
     @MainActor
-    static func waitUntil(line: UInt = #line, _ condition: () -> Bool) async throws {
-        for _ in 0..<200 {
+    static func waitUntil(line: UInt = #line, message: String? = nil, _ condition: () -> Bool) async throws {
+        for _ in 0..<600 {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(5))
         }
-        preconditionFailure("Production controller did not reach the expected fixture state at line \(line)")
+        check(false, message ?? "Production controller did not reach the expected fixture state at line \(line)")
     }
 
     @MainActor
@@ -463,6 +490,78 @@ enum Check {
         precondition(controller.transportFormat == nil && controller.controlSession == nil && session.gains.last == 0)
         try await stop(controller)
         print("PASS actual volume task: raw loss revokes the queued write token before fake transmission")
+
+        let (reconnecting, reconnectingDevice, reconnectingOutput, reconnectingRaw) = try await started(.v2)
+        reconnectingRaw.emit(.handoffReady)
+        try await waitUntil { reconnectingRaw.handoffs == 1 }
+        reconnectingDevice.isReady = false
+        reconnectingDevice.capabilityFresh = false
+        reconnectingDevice.statusFresh = false
+        reconnectingDevice.volumeFresh = false
+        reconnectingRaw.emit(.active(LDACFormat()))
+        try await waitUntil(message: "failed modern control channel is reopened") { reconnectingDevice.controlRetries == 1 }
+        precondition(!reconnectingOutput.ready && reconnecting.controlSession == nil)
+        reconnectingDevice.completeControlRetry()
+        try await waitUntil { reconnectingDevice.queuedWrite != nil }
+        reconnectingDevice.transmitVolume()
+        reconnectingDevice.confirmVolume()
+        try await waitUntil { reconnecting.usable }
+        precondition(reconnectingOutput.ready && reconnectingDevice.controlRetries == 1)
+        try await stop(reconnecting)
+        print("PASS actual handoff recovery: a failed modern control channel is reopened before volume admission times out")
+
+        for generation in [Generation.v1, .v2] {
+            for _ in 0..<3 {
+                let (preparing, device, endpoint, raw) = try await started(generation)
+                raw.emit(.handoffReady)
+                try await waitUntil { raw.handoffs == 1 }
+                device.isReady = false
+                device.startupCommandsPending = true
+                raw.emit(.controlsRequired)
+                try await waitUntil { device.controlRetries == 1 }
+                precondition(raw.mediaSetups == 0 && !endpoint.ready && raw.gains == [0])
+                device.completeControlRetry()
+                try await waitUntil { device.volumeRefreshes == 1 }
+                device.receiveVolume()
+                try await Task.sleep(for: .milliseconds(110))
+                precondition(raw.mediaSetups == 0, "A volume reply without fresh source status admitted media setup")
+                device.receiveStatus()
+                try await Task.sleep(for: .milliseconds(600))
+                precondition(raw.mediaSetups == 0, "Fresh volume admitted media while startup commands were still pending")
+                device.startupCommandsPending = false
+                try await waitUntil { raw.mediaSetups == 1 }
+                precondition(!endpoint.ready && !preparing.usable && raw.gains == [0] && device.controlRetries == 1 && device.isLDACStreaming)
+                try await stop(preparing)
+            }
+        }
+        print("PASS repeated prestream admission: both generations reconnect and confirm fresh status plus volume before media setup")
+
+        let (cancelledPreparation, cancelledDevice, cancelledOutput, cancelledRaw) = try await started(.v2)
+        cancelledRaw.emit(.handoffReady)
+        try await waitUntil { cancelledRaw.handoffs == 1 }
+        cancelledDevice.isReady = false
+        cancelledRaw.emit(.controlsRequired)
+        try await waitUntil { cancelledDevice.controlRetries == 1 }
+        try await stop(cancelledPreparation)
+        cancelledDevice.completeControlRetry()
+        try await Task.sleep(for: .milliseconds(110))
+        precondition(cancelledRaw.mediaSetups == 0 && !cancelledOutput.ready && cancelledRaw.gains == [0])
+        print("PASS cancelled prestream admission cannot start media after a late control reply")
+
+        let (timedPreparation, timedDevice, timedOutput, timedRaw) = try await started(.v2)
+        timedRaw.emit(.handoffReady)
+        try await waitUntil { timedRaw.handoffs == 1 }
+        timedDevice.isReady = false
+        timedRaw.emit(.controlsRequired)
+        try await waitUntil { !timedRaw.recoveries.isEmpty }
+        precondition(timedRaw.mediaSetups == 0 && !timedOutput.ready && timedPreparation.isRecovering)
+        precondition(timedDevice.controlRetries == 1 && timedRaw.recoveries.count == 1)
+        let failureReason = timedPreparation.transportHealth.lastReason
+        timedRaw.emit(.health(LDACTransportHealth()))
+        precondition(failureReason != nil && timedPreparation.transportHealth.lastReason == failureReason,
+                     "A final metrics snapshot erased the control failure from the exported report")
+        try await stop(timedPreparation)
+        print("PASS prestream timeout requests orderly bounded recovery and preserves its diagnostic reason")
 
         let (waiting, waitingDevice, _, waitingRaw) = try await active()
         waitingRaw.emit(.connectionLost("fixture loss"))
@@ -835,7 +934,7 @@ enum Check {
 '''
 names = ["needsStopBeforeTermination", "deviceUnavailableReason", "refreshDriverState", "start", "launch", "sessionFinished",
          "fallBackToOrdinaryAudio", "hasMusicVolumeForHandoff", "hasOwnedMusicContext",
-         "hasOtherMusicSource", "bindingIsCurrent", "bindingCheck", "musicControlStatus", "waitForControls", "controlsChanged",
+         "hasOtherMusicSource", "bindingIsCurrent", "bindingCheck", "musicControlStatus", "prepareControlsForMedia", "waitForControls", "controlsChanged",
          "holdBinding", "recoverBinding", "stopForChange", "sendPendingVolume", "setOutputGain", "fail", "beginRecovery",
          "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry", "stop", "stopSession",
          "suspend", "resumeIfReady", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode",
@@ -848,6 +947,7 @@ native_types = (root / "Sources/LDACNativeSession.swift").read_text()
 fixture = fixture.replace("__FEATURES__", native_types[native_types.index("enum LDACMicrophonePolicy:"):native_types.index("struct LDACConfiguration:")])
 fixture = fixture.replace("__SUPPORT__", (root / "Sources/LDACSupport.swift").read_text())
 fixture = fixture.replace("__VOLUME__", volume).replace("__METHODS__", "\n".join(member(name) for name in names))
+fixture = fixture.replace(".advanced(by: .seconds(45))", ".advanced(by: .milliseconds(2500))")
 
 def run_fixture(contents, failure=None):
     with tempfile.TemporaryDirectory(prefix="acouplet-ldac-controller-volume-") as directory:
@@ -873,10 +973,14 @@ def run_fixture(contents, failure=None):
 
 
 mutations = [
+    ("prestream command drain", "if headphones.isControlChannelIdle {", "if true {",
+     "Fresh volume admitted media while startup commands were still pending"),
     ("raw", "hasMusicVolumeForHandoff && (headphones?.playback.generation != .v1 || transportFormat != nil)",
      "hasMusicVolumeForHandoff", "Legacy raw ownership admitted before active"),
     ("status", "&& headphones.musicStatusReadbackID != nil && headphones.musicStatusReadbackID != initialStatusReadbackID",
      "", "Volume without post-admission status admitted legacy LDAC"),
+    ("handoff control retry", "                    if self.controlSession == nil, !retriedControls,\n                       self.headphones?.retryControlsIfNeeded(allowingSuppressedReconnect: true) == true { retriedControls = true }\n",
+     "", "failed modern control channel is reopened"),
     ("ordinary-audio restoration", "        if targetDisconnected {\n            sessionID = UUID()\n            launch(address, restoringOnly: true)\n        } else {\n            finish(nil)\n        }",
      "        finish(nil, targetDisconnected: targetDisconnected)", "A recoverable abort left the headphones disconnected"),
     ("single retry", "if recoveryAttempt >= 1 {", "if recoveryAttempt >= 2 {", "The aborted retry tried LDAC again"),

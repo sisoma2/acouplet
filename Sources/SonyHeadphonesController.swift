@@ -391,6 +391,9 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             && [playback.statusQueryPayload, playback.musicVolumeQueryPayload]
                 .allSatisfy { playbackReads[$0] == nil && !queuedPlaybackQueries.contains($0) }
     }
+    var isControlChannelIdle: Bool {
+        isReady && commandQueue.pending == nil && classicWrites.isEmpty && pendingInboundAcknowledgments == 0
+    }
     /// Names the unfinished connection, source, device-action or multipoint transition, if any. While one runs,
     /// `hasCurrentMusicVolumeControl` is false even when the selected source ends up unchanged, so LDAC holds its
     /// binding and decides with the final values instead of recovering.
@@ -1767,8 +1770,9 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         requestCurrentSettings()
     }
 
-    func retryControlsIfNeeded() -> Bool {
-        guard !displayOnly, !isSystemSleeping, !isTerminating, isBluetoothInitialized, reconnectAutomatically,
+    func retryControlsIfNeeded(allowingSuppressedReconnect: Bool = false) -> Bool {
+        guard !displayOnly, !isSystemSleeping, !isTerminating, isBluetoothInitialized,
+              reconnectAutomatically || allowingSuppressedReconnect,
               isDeviceConnected, powerOffState == nil, !isRunningHeadphoneTest,
               stage == .idle, channel == nil, bleTransport == nil, classicConnectionID == nil,
               serviceDiscoveries.isEmpty, recoveryUsesBLE == nil,
@@ -5875,16 +5879,20 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             Task { @MainActor in
                 guard let self, self.transmissionID == identifier else { return }
                 let payload = frame.payload.prefix(4).map { String(format: "%02X", $0) }.joined(separator: " ")
-                if allowRetry, isStartupRead || (self.protocolInformation?.generation == .v2 && frame.type == 0x0C
+                let isBatteryRead = frame.type == 0x0C && (self.batteryReads[frame.payload]?.transmitted == true
+                    || self.legacyControls?.batteryQueries.contains(frame.payload) == true)
+                if allowRetry, isStartupRead || isBatteryRead || (self.protocolInformation?.generation == .v2 && frame.type == 0x0C
                     && [[0xF6, 0x0F], [0xF6, 0x0C], [0x22, 0x05], [0xF2, 0x05], [0xA6, 0x01]].contains(frame.payload)) {
-                    Self.logger.notice("Retrying unacknowledged read; sequence=\(frame.sequence) session=\(session) payload=\(payload, privacy: .private)")
+                    let command = frame.payload.prefix(2).map { String(format: "%02X", $0) }.joined(separator: " ")
+                    Self.logger.notice("Retrying unacknowledged read; sequence=\(frame.sequence) session=\(session) command=\(command, privacy: .public) payload=\(payload, privacy: .private)")
                     _ = self.write(frame, completion: { [weak self] in
                         guard let self, self.transmissionID == identifier else { return }
                         self.scheduleAcknowledgmentTimeout(frame, identifier: identifier, session: session, allowRetry: false)
                     })
                     return
                 }
-                Self.logger.error("Command ACK timeout; type=\(frame.type, format: .hex) sequence=\(frame.sequence) session=\(session) length=\(frame.payload.count) payloadPrefix=\(payload, privacy: .private)")
+                let command = frame.payload.prefix(2).map { String(format: "%02X", $0) }.joined(separator: " ")
+                Self.logger.error("Command ACK timeout; type=\(frame.type, format: .hex) sequence=\(frame.sequence) session=\(session) length=\(frame.payload.count) command=\(command, privacy: .public) payloadPrefix=\(payload, privacy: .private)")
                 if frame.type == 0x0E, frame.payload == SonySoundPressure.levelQueryPayload {
                     self.soundPressureAutomaticRefreshSuspended = true
                 }
@@ -6012,9 +6020,19 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             let frame = received.frame
             if frame.type == 0x01 {
                 guard frame.payload.isEmpty, let sent = transmittedFrame,
-                      received.transmissionID == transmissionID, sent == commandQueue.pending else { continue }
+                      received.transmissionID == transmissionID, sent == commandQueue.pending else {
+                    if isLDACStreaming {
+                        Self.logger.notice("Ignored control ACK; sequence=\(frame.sequence) session=\(session) owned=\(received.transmissionID == self.transmissionID) transmitted=\(self.transmittedFrame != nil) pending=\(self.commandQueue.pending != nil)")
+                    }
+                    continue
+                }
                 let acknowledgment = commandQueue.handleAcknowledgment(sequence: frame.sequence)
-                guard acknowledgment.accepted else { continue }
+                guard acknowledgment.accepted else {
+                    if isLDACStreaming {
+                        Self.logger.notice("Ignored control ACK sequence; received=\(frame.sequence) expected=\(1 - sent.sequence) session=\(session)")
+                    }
+                    continue
+                }
                 if multipointTransition?.isFinished == false, sent.type == 0x0C,
                    sent.payload.count >= 2, [0xD8, 0xD6].contains(sent.payload[0]),
                    sent.payload[1] == systemFeatures.multipointSlot {

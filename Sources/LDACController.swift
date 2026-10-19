@@ -1020,6 +1020,9 @@ final class LDACController: ObservableObject {
             case .connecting:
                 self.record("connecting", reason: "owned raw transport setup")
                 if self.state != .stopping { self.state = .connecting }
+            case .controlsRequired:
+                guard self.state != .stopping else { return }
+                self.prepareControlsForMedia(address)
             case let .active(format):
                 if self.state != .stopping {
                     self.transportFormat = format
@@ -1032,7 +1035,9 @@ final class LDACController: ObservableObject {
                     if case .active = self.state { self.state = .active(format) }
                 }
             case .latencyFrames: break
-            case let .health(health): self.transportHealth = health
+            case var .health(health):
+                health.lastReason = self.transportHealth.lastReason ?? health.lastReason
+                self.transportHealth = health
             case let .compatibility(status): self.runtimeStatus = status
             case let .capabilities(rates, channels):
                 let store = LDACSupportStore(defaults: self.defaults)
@@ -1173,9 +1178,74 @@ final class LDACController: ObservableObject {
         return "ready=\(headphones?.isReady == true) connected=\(headphones?.isDeviceConnected == true) ownedContext=\(hasOwnedMusicContext) fresh=\(headphones?.hasFreshMusicVolumeReadback == true) canWrite=\(headphones?.canControlMusicVolume == true) canConfirm=\(headphones?.canPerformConfirmedSettingChange(.playbackVolume) == true) newReadback=\(newReadback) controlSession=\(currentSession) bound=\(controlSession != nil) source=\(selectedSource) volume=\(volume.map(String.init) ?? "unknown") range=\(rangeDescription) pendingVolume=\(pendingVolume.map(String.init) ?? "none") writing=\(volumeTask != nil) userMuted=\(nativeOutput?.controls.muted ?? true)"
     }
 
+    private func prepareControlsForMedia(_ address: String) {
+        let identifier = sessionID
+        readinessTask?.cancel()
+        readinessTask = Task { [weak self] in
+            guard let self, let headphones = self.headphones else { return }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(45))
+            var refreshedSession: UInt64?
+            var volumeReadback: UUID?
+            var statusReadback: UUID?
+            var retriedControls = false
+            var idleSince: ContinuousClock.Instant?
+            self.record("prestream-controls-wait", reason: self.musicControlStatus)
+            if IOBluetoothDevice(addressString: address)?.isClassicConnected() == true { headphones.refresh() }
+            do {
+                while true {
+                    try Task.checkCancellation()
+                    guard self.sessionID == identifier, self.requestedAddress == address, self.state != .stopping else { return }
+                    guard self.devices?.controller(for: address) === headphones else {
+                        throw ControlError(String(localized: "The headphone connection changed. Try LDAC again."))
+                    }
+                    if self.hasOtherMusicSource {
+                        self.stopForChange("other-music-source")
+                        return
+                    }
+                    guard ContinuousClock.now < deadline else {
+                        throw ControlError(String(localized: "The headphone volume could not be read. Connect the headphone controls in Acouplet and select this Mac as their audio source, then try LDAC again."))
+                    }
+                    if !retriedControls, headphones.retryControlsIfNeeded(allowingSuppressedReconnect: true) { retriedControls = true }
+                    if refreshedSession != headphones.notificationSession {
+                        idleSince = nil
+                        let previousVolume = headphones.musicVolumeReadbackID
+                        let previousStatus = headphones.musicStatusReadbackID
+                        if headphones.refreshMusicVolume() {
+                            refreshedSession = headphones.notificationSession
+                            volumeReadback = previousVolume
+                            statusReadback = previousStatus
+                        }
+                    }
+                    if headphones.isControlChannelIdle {
+                        if idleSince == nil { idleSince = ContinuousClock.now }
+                    } else { idleSince = nil }
+                    if refreshedSession == headphones.notificationSession, headphones.isReady,
+                       headphones.playback.hasReceivedCapabilities, headphones.playback.musicVolumeRange != nil,
+                       headphones.playback.volume != nil,
+                       headphones.musicVolumeReadbackID != nil, headphones.musicVolumeReadbackID != volumeReadback,
+                       headphones.musicStatusReadbackID != nil, headphones.musicStatusReadbackID != statusReadback,
+                       let idleSince, ContinuousClock.now >= idleSince.advanced(by: .milliseconds(500)) {
+                        self.record("prestream-controls-ready", reason: self.musicControlStatus)
+                        self.readinessTask = nil
+                        headphones.isLDACStreaming = true
+                        self.session?.allowMediaSetup()
+                        return
+                    }
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+            } catch is CancellationError {
+            } catch {
+                guard self.sessionID == identifier, self.state != .stopping else { return }
+                self.beginRecovery(reason: error.localizedDescription)
+                self.session?.recoverConnection(reason: error.localizedDescription)
+            }
+        }
+    }
+
     private func waitForControls(_ address: String) {
         let identifier = sessionID
-        if (headphones?.playback.generation != .v1 || headphones?.isReady != true),
+        if (headphones?.isReady != true || headphones?.hasFreshMusicVolumeReadback != true
+            || headphones?.playback.generation != .v1 && headphones?.musicVolumeReadbackID == initialReadbackID),
            IOBluetoothDevice(addressString: address)?.isClassicConnected() == true { headphones?.refresh() }
         readinessTask = Task { [weak self] in
             guard let self else { return }
@@ -1183,6 +1253,7 @@ final class LDACController: ObservableObject {
             var previousStatus = ""
             var refreshedLegacySession: UInt64?
             var initialStatusReadbackID: UUID?
+            var retriedControls = false
             do {
                 while !self.usable {
                     try Task.checkCancellation()
@@ -1190,6 +1261,8 @@ final class LDACController: ObservableObject {
                     let status = self.musicControlStatus
                     if status != previousStatus { self.record("volume-wait", reason: status); previousStatus = status }
                     guard Date() < deadline else { throw ControlError(String(localized: "The headphone volume could not be confirmed after LDAC started. Reconnect the headphone controls and try LDAC again.")) }
+                    if self.controlSession == nil, !retriedControls,
+                       self.headphones?.retryControlsIfNeeded(allowingSuppressedReconnect: true) == true { retriedControls = true }
                     if let headphones = self.headphones, headphones.playback.generation == .v1,
                        refreshedLegacySession != headphones.notificationSession {
                         let volumeReadback = headphones.musicVolumeReadbackID
@@ -1256,7 +1329,7 @@ final class LDACController: ObservableObject {
             } catch is CancellationError {
             } catch {
                 guard self.sessionID == identifier else { return }
-                if error is ControlError, self.isRecovering, !self.hasOtherMusicSource {
+                if error is ControlError, !self.hasOtherMusicSource {
                     self.beginRecovery(reason: error.localizedDescription)
                     self.session?.recoverConnection(reason: error.localizedDescription)
                 } else { self.fail(error.localizedDescription) }

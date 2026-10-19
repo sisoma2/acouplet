@@ -19,6 +19,7 @@ private enum LDACOwnerCommand: Codable, Sendable {
     case recover(String)
     case verify(String)
     case allowHandoff
+    case allowMediaSetup
     case gain(Double)
     case release(Bool)
     case restore(LDACRouteRecovery)
@@ -374,6 +375,7 @@ final class LDACOwnerSession {
     func recoverConnection(reason: String) { output.send(.recover(reason)) }
     func verifyConnectionLoss(reason: String) { output.send(.verify(reason)) }
     func allowHandoff() { output.send(.allowHandoff) }
+    func allowMediaSetup() { output.send(.allowMediaSetup) }
     func updateGain(_ gain: Double) { output.send(.gain(gain)) }
 }
 
@@ -549,6 +551,7 @@ enum LDACOwnerWorker {
                 case let .recover(reason): session?.recoverConnection(reason: reason)
                 case let .verify(reason): session?.verifyConnectionLoss(reason: reason)
                 case .allowHandoff: session?.allowHandoff()
+                case .allowMediaSetup: session?.allowMediaSetup()
                 case let .gain(gain): session?.updateGain(gain)
                 case let .restore(recovery):
                     guard output == nil else { throw LDACOwnerError(message: String(localized: "LDAC did not stop completely.")) }

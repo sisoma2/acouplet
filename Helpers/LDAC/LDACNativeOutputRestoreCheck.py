@@ -24,6 +24,7 @@ selectors = source[source.index("    private var handoffSelectors:"):source.inde
 volume = source[source.index("struct LDACNativeVolume:"):source.index("\n@MainActor\nfinal class LDACNativeOutput")]
 native = (Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift").read_text()
 latency_types = native[native.index('struct LDACFormat:'):native.index('enum LDACState:')]
+latency_types = re.sub(r'(?<![\w.])Date\b', 'Foundation.Date', latency_types)
 fixture = r'''
 import Foundation
 import CoreAudio

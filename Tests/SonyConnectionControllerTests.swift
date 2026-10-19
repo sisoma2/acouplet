@@ -644,6 +644,21 @@ final class SonyConnectionControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testVisibleControlsRetryCanOverrideTemporaryReconnectSuppression() {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        controller.simulateBluetoothInitialization()
+        let device = ServiceDiscoveryDevice()
+        device.service = ServiceDiscoveryRecord()
+        controller.simulateSonyLink(to: device)
+        controller.simulateControlLoss()
+        controller.setReconnectAutomatically(false)
+        XCTAssertFalse(controller.retryControlsIfNeeded())
+        XCTAssertTrue(controller.retryControlsIfNeeded(allowingSuppressedReconnect: true))
+        XCTAssertEqual(device.openedChannels, [7, 7])
+    }
+
+    @MainActor
     func testVisibleControlsRetryPreservesCooldownSuppressionAndUserOperations() throws {
         for scenario in 0..<10 {
             let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
@@ -1808,11 +1823,13 @@ final class SonyConnectionControllerTests: XCTestCase {
         var count = 0
         while controller.simulatedPendingFrame != nil, count < 80 { acknowledge(controller); count += 1 }
         XCTAssertNil(controller.simulatedPendingFrame)
+        XCTAssertTrue(controller.isControlChannelIdle)
         controller.isLDACStreaming = true
         for _ in 0..<19 { controller.simulateAutomaticRefresh() }
         XCTAssertNil(controller.simulatedPendingFrame, "LDAC streaming sent reads before the 60 s battery poll")
         controller.simulateAutomaticRefresh()
         XCTAssertEqual(controller.simulatedPendingFrame?.payload.first, 0x22, "LDAC streaming stopped refreshing the battery")
+        XCTAssertFalse(controller.isControlChannelIdle)
         count = 0
         while let frame = controller.simulatedPendingFrame, count < 20 {
             XCTAssertEqual(frame.payload.first, 0x22, "LDAC streaming sent a settings read besides the battery")
@@ -1822,6 +1839,39 @@ final class SonyConnectionControllerTests: XCTestCase {
         controller.isLDACStreaming = false
         for _ in 0..<5 { controller.simulateAutomaticRefresh() }
         XCTAssertNotNil(controller.simulatedPendingFrame)
+    }
+
+    @MainActor
+    func testLDACBatteryReadRetriesOnceWithoutChangingItsSequence() async throws {
+        for receivesRetryAcknowledgment in [true, false] {
+            let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+            controller.simulateDeviceConnection(named: "WF-1000XM5")
+            var count = 0
+            while controller.simulatedPendingFrame != nil, count < 80 { acknowledge(controller); count += 1 }
+            XCTAssertTrue(controller.isControlChannelIdle)
+            controller.isLDACStreaming = true
+            for _ in 0..<20 { controller.simulateAutomaticRefresh() }
+            let frame = try XCTUnwrap(controller.simulatedPendingFrame)
+            XCTAssertEqual(frame.payload.first, 0x22)
+            let writes = controller.simulatedTransmittedFrames.count
+            controller.simulateAcknowledgmentTimeout()
+            for _ in 0..<30 { await Task.yield() }
+            XCTAssertTrue(controller.isReady)
+            XCTAssertEqual(controller.simulatedPendingFrame, frame)
+            XCTAssertEqual(controller.simulatedTransmittedFrames.count, writes + 1)
+            XCTAssertEqual(controller.simulatedTransmittedFrames.last, frame)
+            if receivesRetryAcknowledgment {
+                acknowledge(controller)
+                XCTAssertTrue(controller.isReady)
+                XCTAssertNotEqual(controller.simulatedPendingFrame, frame)
+            } else {
+                controller.simulateAcknowledgmentTimeout()
+                for _ in 0..<30 { await Task.yield() }
+                XCTAssertFalse(controller.isReady)
+                XCTAssertEqual(controller.simulatedTransmittedFrames.count, writes + 1)
+            }
+            controller.simulateControlLoss()
+        }
     }
 
     @MainActor

@@ -218,3 +218,118 @@ for probe_only in ['0', '1']:
     subprocess.run(['xcrun', 'clang', '-fobjc-arc', '-fblocks', '-Werror', '-fsyntax-only',
                     '-mmacosx-version-min=15.4', '-DACOUPLET_LDAC_PROBE_ONLY=' + probe_only,
                     str(base / 'Helpers/LDAC/DirectAVDTPSustainedPlaybackProbe.m')], check=True)
+
+writer = source[source.index('static BOOL SendSignal('):source.index('static NSData *ServiceBytes(')]
+writer_fixture = r'''#import <Foundation/Foundation.h>
+#include <assert.h>
+#include <signal.h>
+#include <sys/event.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <unistd.h>
+@interface FixtureChannel : NSObject
+@property UInt16 outgoingMTU;
+@property int socketFD;
+@end
+@implementation FixtureChannel
+@end
+@interface FixtureOutput : NSObject
+@property int descriptor;
+@property BOOL shortWrite;
+@property NSError *streamError;
+- (NSInteger)write:(const uint8_t *)bytes maxLength:(NSUInteger)length;
+@end
+@implementation FixtureOutput
+- (NSInteger)write:(const uint8_t *)bytes maxLength:(NSUInteger)length {
+    return write(self.descriptor, bytes, self.shortWrite ? length - 1 : length);
+}
+@end
+@interface DirectPlaybackProbe : NSObject
+@property BOOL closed, failed;
+@property FixtureChannel *channel;
+@property FixtureOutput *output;
+- (void)pollInput;
+@end
+@implementation DirectPlaybackProbe
+- (void)pollInput {}
+@end
+static DirectPlaybackProbe *cancelOnTick;
+static void RunLoopFor(double seconds) {
+    if (cancelOnTick) { cancelOnTick.closed = YES; cancelOnTick = nil; }
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, seconds, false);
+}
+static double MonotonicTime(void) { return clock_gettime_nsec_np(CLOCK_MONOTONIC) / 1000000000.0; }
+''' + writer.replace('MonotonicTime() + 2', 'MonotonicTime() + 0.2') + r'''
+static DirectPlaybackProbe *Reset(int descriptors[2]) {
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, descriptors) == 0);
+    DirectPlaybackProbe *probe = [DirectPlaybackProbe new];
+    probe.channel = [FixtureChannel new];
+    probe.channel.outgoingMTU = 895;
+    probe.channel.socketFD = descriptors[0];
+    probe.output = [FixtureOutput new];
+    probe.output.descriptor = descriptors[0];
+    return probe;
+}
+int main(void) {
+    @autoreleasepool {
+        signal(SIGPIPE, SIG_IGN);
+        static const uint8_t reply[] = {0x62, 0x0D}, request[] = {0x60, 0x06, 0x0C};
+        NSData *ack = [NSData dataWithBytes:reply length:sizeof(reply)];
+        NSData *open = [NSData dataWithBytes:request length:sizeof(request)];
+        int descriptors[2];
+        assert(socketpair(AF_UNIX, SOCK_STREAM, 0, descriptors) == 0);
+        assert(write(descriptors[0], reply, 2) == 2 && write(descriptors[0], request, 3) == 3);
+        uint8_t merged[8];
+        assert(read(descriptors[1], merged, sizeof(merged)) == 5);
+        close(descriptors[0]); close(descriptors[1]);
+        for (unsigned attempt = 0; attempt < 20; ++attempt) {
+            DirectPlaybackProbe *probe = Reset(descriptors);
+            int reader = descriptors[1];
+            dispatch_group_t group = dispatch_group_create();
+            dispatch_group_async(group, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                uint8_t buffer[8];
+                usleep(10000);
+                ssize_t count = read(reader, buffer, sizeof(buffer));
+                assert(count == 2 && memcmp(buffer, reply, 2) == 0);
+                usleep(10000);
+                count = read(reader, buffer, sizeof(buffer));
+                assert(count == 3 && memcmp(buffer, request, 3) == 0);
+            });
+            assert(SendSignal(probe, ack) && SendSignal(probe, open));
+            assert(dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC)) == 0);
+            close(descriptors[0]); close(descriptors[1]);
+        }
+        DirectPlaybackProbe *probe = Reset(descriptors);
+        double start = MonotonicTime();
+        assert(!SendSignal(probe, ack) && probe.failed && MonotonicTime() - start < 0.3);
+        close(descriptors[0]); close(descriptors[1]);
+        probe = Reset(descriptors);
+        cancelOnTick = probe;
+        assert(!SendSignal(probe, ack) && probe.closed);
+        close(descriptors[0]); close(descriptors[1]);
+        probe = Reset(descriptors);
+        probe.channel.socketFD = -1;
+        assert(!SendSignal(probe, ack) && probe.failed);
+        close(descriptors[0]); close(descriptors[1]);
+        probe = Reset(descriptors);
+        probe.output.shortWrite = YES;
+        assert(!SendSignal(probe, ack) && probe.failed);
+        close(descriptors[0]); close(descriptors[1]);
+        probe = Reset(descriptors);
+        close(descriptors[1]);
+        assert(!SendSignal(probe, ack) && probe.failed);
+        close(descriptors[0]);
+        probe = Reset(descriptors);
+        probe.channel.outgoingMTU = 2;
+        assert(!SendSignal(probe, open));
+        close(descriptors[0]); close(descriptors[1]);
+        puts("PASS signaling writes: 20 delayed socket readers keep delay replies and OPEN requests separate; merged byte-stream negative control; stalled/closed/invalid/short writes, MTU and cancellation fail safely");
+    }
+}
+'''
+with tempfile.TemporaryDirectory(prefix='acouplet-signaling-writes-') as directory:
+    path = Path(directory) / 'Writer.m'
+    binary = path.with_suffix('')
+    path.write_text(writer_fixture)
+    subprocess.run(['xcrun', 'clang', '-fobjc-arc', '-fblocks', '-Werror', '-framework', 'Foundation', str(path), '-o', str(binary)], check=True)
+    subprocess.run([str(binary)], check=True, timeout=10)

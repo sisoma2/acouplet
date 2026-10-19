@@ -11,6 +11,7 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
+#include <sys/event.h>
 
 #ifndef ACOUPLET_LDAC_PROBE_ONLY
 #define ACOUPLET_LDAC_PROBE_ONLY 1
@@ -366,20 +367,47 @@ static NSArray<NSNumber *> *DecodeReply(NSData *reply, uint8_t transaction, uint
 static BOOL SendSignal(DirectPlaybackProbe *probe, NSData *packet) {
     if (probe.closed || probe.failed || !probe.output || packet.length > (NSUInteger)MIN(probe.channel.outgoingMTU, 2570))
         return NO;
+    int queue = kqueue();
+    struct kevent change, state;
+    struct timespec immediate = {0, 0};
+    EV_SET(&change, probe.channel.socketFD, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
+    int count = queue < 0 ? -1 : kevent(queue, &change, 1, &state, 1, &immediate);
+    if (count != 1 || state.flags & (EV_ERROR | EV_EOF) || state.data < (intptr_t)packet.length) {
+        printf("SIGNAL_WRITE_CAPACITY_FAILED errno=%d\n", errno);
+        if (queue >= 0) close(queue);
+        probe.failed = YES;
+        return NO;
+    }
+    intptr_t baseline = state.data;
     const uint8_t *bytes = packet.bytes;
     printf("TX_BEGIN time=%.6f bytes=", NSDate.date.timeIntervalSince1970);
     for (NSUInteger i = 0; i < packet.length; i++) printf("%s%02X", i ? " " : "", bytes[i]);
     printf("\n");
     NSInteger sent = [probe.output write:bytes maxLength:packet.length];
-    printf("TX_RETURN time=%.6f sent=%ld expected=%lu errno=%d inStatus=%lu outStatus=%lu\n",
-           NSDate.date.timeIntervalSince1970, sent, packet.length, sent < 0 ? errno : 0,
-           probe.input.streamStatus, probe.output.streamStatus);
+    printf("TX_RETURN time=%.6f sent=%ld expected=%lu errno=%d mode=drained-stream\n",
+           NSDate.date.timeIntervalSince1970, sent, packet.length, sent < 0 ? errno : 0);
     if (sent != (NSInteger)packet.length) {
         printf("PUBLIC_STREAM_WRITE_FAILED error=%s\n", probe.output.streamError.description.UTF8String);
+        close(queue);
         probe.failed = YES;
         return NO;
     }
-    return YES;
+    BOOL drained = NO;
+    double deadline = MonotonicTime() + 2;
+    while (!probe.closed && !probe.failed && MonotonicTime() < deadline) {
+        count = kevent(queue, NULL, 0, &state, 1, &immediate);
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0 || (count == 1 && state.flags & (EV_ERROR | EV_EOF))) break;
+        if (count == 1 && state.data >= baseline) { drained = YES; break; }
+        [probe pollInput];
+        RunLoopFor(0.001);
+    }
+    close(queue);
+    if (!drained) {
+        printf("SIGNAL_WRITE_DRAIN_FAILED baseline=%ld errno=%d closed=%d\n", (long)baseline, errno, probe.closed);
+        probe.failed = YES;
+    }
+    return drained && !probe.closed && !probe.failed;
 }
 
 static NSData *ServiceBytes(uint32_t sampleRate, BOOL delayReporting) {
@@ -515,7 +543,7 @@ static NSData *Query(DirectPlaybackProbe *probe, uint8_t *transaction, uint8_t s
 static BOOL EmptyAcceptance(NSData *reply) { return reply != nil && reply.length == 2; }
 
 static BOOL WaitControl(DirectPlaybackProbe *probe, NSString *command) {
-    NSTimeInterval timeout = [command isEqualToString:@"media-finished"] ? 70 : 30;
+    NSTimeInterval timeout = [command isEqualToString:@"media-finished"] ? 70 : [command isEqualToString:@"media-ready"] ? 60 : 30;
 #if ACOUPLET_LDAC_PROBE_ONLY
     BOOL continuous = probe.continuous && [command isEqualToString:@"media-finished"];
 #else
@@ -1050,7 +1078,7 @@ int main(int argc, const char *argv[]) {
             probe.output = channel.outputStream;
             [probe.input open];
             [probe.output open];
-            printf("SIGNAL_WRITER fd=%d MTU=%u mode=public-stream\n", channel.socketFD, channel.outgoingMTU);
+            printf("SIGNAL_WRITER fd=%d MTU=%u mode=drained-stream\n", channel.socketFD, channel.outgoingMTU);
 #if ACOUPLET_LDAC_PROBE_ONLY
             if (playback) {
                 result = PlaybackSequence(probe) ? 0 : 5;
@@ -1091,7 +1119,7 @@ int main(int argc, const char *argv[]) {
 #else
             result = PlaybackSequence(probe) ? 0 : 5;
 #endif
-            printf("SIGNAL_WRITER_RESTORE restored=1 closed=%d mode=public-stream optionsChanged=0\n", probe.closed);
+            printf("SIGNAL_WRITER_RESTORE restored=1 closed=%d mode=drained-stream optionsChanged=0\n", probe.closed);
         } else {
             printf("NO_PLAYBACK realCID=%04X owned=%p openExpired=%d openError=%ld\n",
                    probe.realCID, (__bridge void *)channel, openExpired, openError);

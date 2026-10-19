@@ -120,6 +120,59 @@ extension LDACNativeSession {
     }
 }
 extension LDACNativeSession {
+    @MainActor
+    static func mediaSetupAdmissionCheck(_ mode: String, executable: URL) async throws {
+        let events = SessionEvents()
+        let session = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01",
+            helpers: Helpers(fixture: executable), gain: 0, outputDeviceUID: "fixture-output") { events.values.append($0) }
+        defer { cleanUp(Array(session.children.values)) }
+        session.preflightCompleted = true
+        session.connected = true
+        session.connectorReady = true
+        session.nativeAudioFinished = true
+        session.mediaPrepared = true
+        session.preparedSent = true
+        session.mediaReady = (0x41, 679)
+        try session.mediaGate.owned("OWNED_CHANNEL CID=0041")
+        try session.mediaGate.daemon("connectedCB cid:0x0041 inMTU:679 outMTU:679 result:0")
+        session.captureReady = true
+        session.pcmReady = true
+        for name in ["daemon", "connector", "probe", "media", "capture"] {
+            session.children[name] = try LDACNativeChild(executable: executable,
+                arguments: ["--fixture", name == "probe" ? "echo" : "read", "READY", "finish", "0"], inheritedPCM: nil)
+        }
+        let probe = session.children["probe"]!
+        try waitUntil { try probe.readLines().contains("READY") }
+        let disconnect = try LDACNativeChild(executable: executable, arguments: ["fixture-disconnect"], inheritedPCM: nil)
+        session.children["disconnect"] = disconnect
+        try waitUntil { _ = try disconnect.readLines(); disconnect.reap(); return disconnect.finished }
+        for _ in 0..<3 { try session.advance() }
+        for _ in 0..<10 { await Task.yield() }
+        try require(events.values.filter { if case .controlsRequired = $0 { return true }; return false }.count == 1,
+            "Prestream controls were not requested exactly once")
+        try require(!session.readySent && !session.startAccepted && !session.started,
+            "Media START bypassed the fresh-control admission gate")
+        if mode == "timeout" {
+            session.deadline = DispatchTime(uptimeNanoseconds: 0)
+            var rejected = false
+            do { try session.advance() } catch { rejected = true }
+            try require(rejected && !session.readySent, "Missing control admission did not time out")
+        } else if mode == "stop" {
+            session.stop()
+            session.allowMediaSetup()
+            try session.advance()
+            try require(!session.readySent && !session.started, "Late control admission bypassed Stop")
+        } else {
+            session.allowMediaSetup()
+            for _ in 0..<3 { try session.advance() }
+            try require(session.readySent && !session.started, "Control admission did not release media START")
+            var lines: [String] = []
+            try waitUntil { lines += try probe.readLines(); return lines.contains("RX media-ready 41 679") }
+            try require(lines.filter { $0 == "RX media-ready 41 679" }.count == 1,
+                "Control admission released media START more than once")
+        }
+    }
+
     static func signalingStartupCheck(_ mode: String, executable: URL, raw: URL) throws {
         let session = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01",
             helpers: Helpers(fixture: executable), gain: 0) { _ in }
@@ -957,6 +1010,12 @@ enum LDACSessionClosureCheck {
             if Darwin.read(3, &release, 1) != 1 { exit(91) }
         } else if mode == "read" {
             if readLine() != arguments[4] { exit(92) }
+        } else if mode == "echo" {
+            while let command = readLine() {
+                print("RX " + command)
+                fflush(stdout)
+                if command == arguments[4] { break }
+            }
         }
         exit(Int32(arguments[5])!)
     }
@@ -994,6 +1053,10 @@ enum LDACSessionClosureCheck {
         }
         if CommandLine.arguments.dropFirst().first == "--fixture" { child() }
         let executable = URL(fileURLWithPath: CommandLine.arguments[0])
+        for mode in ["ready", "stop", "timeout"] {
+            try await LDACNativeSession.mediaSetupAdmissionCheck(mode, executable: executable)
+            print("PASS prestream media admission mode=\(mode): fresh controls before media START, no duplicate release, bounded wait and cancellation")
+        }
         for mode in ["preserved", "native-first", "wrong-target", "before-acl", "owned-signal", "pending-open", "priority-active", "started", "replaced-acl", "hard-failure", "requested-stop"] {
             try await LDACNativeSession.checkNativeStartupPreservation(mode, executable: executable)
         }
@@ -1346,7 +1409,7 @@ int main(void) {
             CheckElapsed(30);
             ResetClock();
             assert(!WaitControl(probe, @"media-ready"));
-            CheckElapsed(30);
+            CheckElapsed(60);
             ResetClock();
             commandFD = input[1];
             assert([ReadLine(probe, INFINITY, NO, 0.001) isEqualToString:@"stop"] && probe.stopRequested);

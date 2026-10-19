@@ -541,6 +541,13 @@ static uint32_t MachTicks(double seconds) {
     return (uint32_t)llround(seconds * 1000000000.0 * timebase.denom / timebase.numer);
 }
 
+static void WaitForSenderService(double seconds) {
+    if (seconds <= 0) return;
+    uint64_t deadline = mach_absolute_time() + MachTicks(seconds);
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true);
+    while (mach_absolute_time() < deadline && mach_wait_until(deadline) == KERN_ABORTED) {}
+}
+
 static kern_return_t ApplySenderRealtime(SenderRealtimeBudget budget) {
     thread_time_constraint_policy_data_t policy = {MachTicks(budget.period), MachTicks(budget.computation),
         MachTicks(budget.constraint), TRUE};
@@ -586,7 +593,7 @@ static void *RealtimeCheckThread(void *argument) {
     if (!SelectProfile(96000, @"high", &profile)) return NULL;
     check->applied = ApplySenderRealtime(SenderRealtimeBudgetFor(profile, 679)) == KERN_SUCCESS;
     check->effective = SenderRealtimeEffective(&check->priority);
-    usleep(2000);
+    WaitForSenderService(0.002);
     check->effectiveAfterSleep = SenderRealtimeEffective(&check->priority);
     int released = 0;
     check->released = ReleaseSenderRealtime() == KERN_SUCCESS && !SenderRealtimeEffective(&released);
@@ -750,7 +757,7 @@ static void LiveQueuePopDrained(LiveQueue *queue) {
 
 /// The oldest unsent packet, if the socket has room for all of it (a stream write of that size is not split).
 static LiveQueuePacket *LiveQueueNextToSend(LiveQueue *queue, long writable) {
-    if (queue->send >= queue->tail) return NULL;
+    if (queue->send >= queue->tail || queue->send != queue->head || writable < queue->capacity) return NULL;
     LiveQueuePacket *packet = LiveQueueAt(queue, queue->send);
     return writable >= (long)packet->length ? packet : NULL;
 }
@@ -987,6 +994,25 @@ static BOOL LiveQueueChecks(void) {
     passed &= LiveQueueSimulate(1000, 70, &blocked, &peak) && !blocked;
     // A 600 ms stall passes the 250 ms cap: the sender must wait (PCM_SKIP territory), still in order, nothing lost.
     passed &= LiveQueueSimulate(1000, 600, &blocked, &peak) && blocked && peak <= 12000 + 144;
+    LiveQueue queue;
+    if (!LiveQueueInit(&queue, 8192)) return NO;
+    for (NSUInteger index = 0; index < 2; index++) {
+        LiveQueuePacket *slot = LiveQueueSlot(&queue);
+        memset(slot, 0, sizeof(*slot));
+        slot->length = 300;
+        slot->samples = 144;
+        LiveQueueCommit(&queue);
+    }
+    passed &= LiveQueueNextToSend(&queue, 8192) != NULL;
+    LiveQueueMarkSent(&queue);
+    passed &= LiveQueueNextToSend(&queue, 7892) == NULL && LiveQueueNextToSend(&queue, 8192) == NULL;
+    LiveQueueObserve(&queue, 8000);
+    passed &= LiveQueueNextDrained(&queue) == NULL && LiveQueueNextToSend(&queue, 8000) == NULL;
+    LiveQueueObserve(&queue, 8192);
+    passed &= LiveQueueNextDrained(&queue) != NULL;
+    LiveQueuePopDrained(&queue);
+    passed &= LiveQueueNextToSend(&queue, 8191) == NULL && LiveQueueNextToSend(&queue, 8192) != NULL;
+    LiveQueueFree(&queue);
     return passed;
 }
 
@@ -1824,7 +1850,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                         }
                     }
                     RecordSenderStage(&timing, SenderPacing);
-                    RunLoopFor(0.001);
+                    WaitForSenderService(0.001);
                     RecordSenderStage(&timing, SenderOther);
                     if (service()) { serviceStopped = YES; break; }
                 }
@@ -1880,7 +1906,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
             LDACFrameFormat packetFormat = {profile.frameBytes, profile.bitrateKbps};
             uint64_t timestamp = generatedSamples + probe.pcmSkippedBytes / 8;
             RecordSenderStage(&timing, SenderEncode);
-            if (!EncodePacket(probe.encoder, profile, flushing ? NULL : pcm, sentPackets, timestamp,
+            if (!EncodePacket(probe.encoder, profile, flushing ? NULL : pcm, sendQueue.tail, timestamp,
                     owned.outgoingMTU, (NSUInteger)baseline, packet, &packetLength, &frames, &packetFormat)) break;
             RecordSenderStage(&timing, SenderOther);
             if (!flushing) {
@@ -1914,7 +1940,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                 RecordSenderStage(&timing, SenderPCM);
                 [probe pollPCM];
                 RecordSenderStage(&timing, SenderPacing);
-                RunLoopFor(0.001);
+                WaitForSenderService(fmin(0.001, due - MonotonicTime()));
                 RecordSenderStage(&timing, SenderOther);
                 if (service()) { serviceStopped = YES; break; }
             }
@@ -1992,7 +2018,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                 PollLiveControls(probe);
                 [probe pollInput];
                 [probe pollPCM];
-                RunLoopFor(0.001);
+                WaitForSenderService(0.001);
                 stopSending = service() != 0;
             }
             if (stopSending) { printf("DRAIN_STOP packet=%lu elapsed=%.6f\n", sentPackets ? sentPackets - 1 : 0, MonotonicTime() - started); break; }
@@ -2000,7 +2026,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
         while (flushed && !probe.closed && !probe.failed && !probe.inputEnded && !limitStopped && !serviceStopped &&
                owned.socketFD == fd && sendQueue.head < sendQueue.tail) {
             if (service()) break;
-            RunLoopFor(0.001);
+            WaitForSenderService(0.001);
         }
         FlushBreachStreaks(breachStreaks, MonotonicTime(), YES);
         if (!probe.closed && !probe.failed && !probe.inputEnded && !limitStopped && flushed && sourceSamples == targetSamples && generatedSamples == sentSamples && drainedPackets == sentPackets)

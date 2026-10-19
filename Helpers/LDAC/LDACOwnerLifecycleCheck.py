@@ -209,6 +209,7 @@ final class LDACNativeSession: @unchecked Sendable {
     func recoverConnection(reason: String) {}
     func verifyConnectionLoss(reason: String) {}
     func allowHandoff() {}
+    func allowMediaSetup() {}
     func updateGain(_ gain: Double) {}
 }
 

@@ -1,9 +1,88 @@
 import Foundation
+import Darwin
 @preconcurrency import IOBluetooth
 import XCTest
 @testable import Acouplet
 
 final class RFCOMMChannelIOTests: XCTestCase {
+    @MainActor
+    func testSocketWritesRemainSeparateUntilThePeerConsumesEachFrame() async throws {
+        for _ in 0..<20 {
+            var descriptors: [Int32] = [-1, -1]
+            XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors), 0)
+            let sender = descriptors[0]
+            let receiver = descriptors[1]
+            defer { Darwin.close(sender); Darwin.close(receiver) }
+            var timeout = timeval(tv_sec: 1, tv_usec: 0)
+            XCTAssertEqual(setsockopt(receiver, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)), 0)
+            let channel = SocketChannel(descriptor: sender)
+            let io = RFCOMMChannelIO(channel: channel)
+            let completed = expectation(description: "Separated writes completed")
+            completed.expectedFulfillmentCount = 2
+            let received = expectation(description: "Peer read separate frames")
+            for data in [Data([1, 2]), Data([3, 4, 5])] {
+                io.write(data) { status in
+                    XCTAssertEqual(status, kIOReturnSuccess)
+                    completed.fulfill()
+                }
+            }
+            DispatchQueue.global().async {
+                Thread.sleep(forTimeInterval: 0.02)
+                var bytes = [UInt8](repeating: 0, count: 8)
+                XCTAssertEqual(read(receiver, &bytes, bytes.count), 2)
+                XCTAssertEqual(Array(bytes.prefix(2)), [1, 2])
+                Thread.sleep(forTimeInterval: 0.01)
+                XCTAssertEqual(read(receiver, &bytes, bytes.count), 3)
+                XCTAssertEqual(Array(bytes.prefix(3)), [3, 4, 5])
+                received.fulfill()
+            }
+            await fulfillment(of: [received, completed], timeout: 4)
+        }
+    }
+
+    @MainActor
+    func testSocketDrainFailsClosedForInvalidClosedAndStalledPeers() async {
+        for failure in ["invalid", "closed", "stalled"] {
+            var descriptors: [Int32] = [-1, -1]
+            XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors), 0)
+            defer { Darwin.close(descriptors[0]); if descriptors[1] >= 0 { Darwin.close(descriptors[1]) } }
+            if failure == "closed" { Darwin.close(descriptors[1]); descriptors[1] = -1 }
+            let channel = SocketChannel(descriptor: failure == "invalid" ? -1 : descriptors[0])
+            let io = RFCOMMChannelIO(channel: channel)
+            let completed = expectation(description: "Unsafe write rejected")
+            io.write(Data([1, 2])) { status in
+                XCTAssertEqual(status, failure == "stalled" ? kIOReturnTimeout : kIOReturnNotOpen)
+                completed.fulfill()
+            }
+            await fulfillment(of: [completed], timeout: 4)
+        }
+    }
+
+    @MainActor
+    func testCloseCancelsAnUndrainedSocketWrite() async {
+        var descriptors: [Int32] = [-1, -1]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors), 0)
+        let sender = descriptors[0]
+        let receiver = descriptors[1]
+        defer { Darwin.close(sender); Darwin.close(receiver) }
+        let io = RFCOMMChannelIO(channel: SocketChannel(descriptor: sender))
+        let received = expectation(description: "Write reached peer buffer")
+        let completed = expectation(description: "Undrained write cancelled")
+        let closed = expectation(description: "Transport closed")
+        io.write(Data([1, 2])) { status in
+            XCTAssertEqual(status, kIOReturnAborted)
+            completed.fulfill()
+        }
+        DispatchQueue.global().async {
+            var descriptor = pollfd(fd: receiver, events: Int16(POLLIN), revents: 0)
+            XCTAssertEqual(poll(&descriptor, 1, 1000), 1)
+            received.fulfill()
+        }
+        await fulfillment(of: [received], timeout: 2)
+        io.close { closed.fulfill() }
+        await fulfillment(of: [completed, closed], timeout: 1)
+    }
+
     @MainActor
     func testBlockedWriteRetainsChannelAndDataWithoutBlockingMain() async {
         let started = expectation(description: "Write started")
@@ -184,6 +263,19 @@ final class RFCOMMChannelIOTests: XCTestCase {
         XCTAssertEqual(channel.writes, [Data([1]), try XCTUnwrap(FastPairRingCommand.stop.message.encoded)])
         XCTAssertEqual(session.receive(.acknowledgement(stopped)), [.close])
         XCTAssertFalse(session.mayBeRinging)
+    }
+
+    final class SocketChannel: RFCOMMChannel, @unchecked Sendable {
+        let writeSocketDescriptor: Int32?
+
+        init(descriptor: Int32) { writeSocketDescriptor = descriptor }
+        func isOpen() -> Bool { true }
+        func getMTU() -> BluetoothRFCOMMMTU { 127 }
+        func setDelegate(_ delegate: Any!) -> IOReturn { kIOReturnSuccess }
+        func close() -> IOReturn { kIOReturnSuccess }
+        func writeSync(_ data: UnsafeMutableRawPointer!, length: UInt16) -> IOReturn {
+            Darwin.write(writeSocketDescriptor!, data, Int(length)) == Int(length) ? kIOReturnSuccess : kIOReturnError
+        }
     }
 
     final class TestChannel: FastPairChannel, @unchecked Sendable {
