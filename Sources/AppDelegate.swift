@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isSystemTerminating = false
     private var restartsAfterTermination = false
     private var isMigratingBackgroundService = false
-    private var deferredLaunch: (notification: Notification, launchType: OSType?)?
+    private var hasDeferredLaunch = false
 
     /// Asks the running copy whose process ID is the notification's object to open Settings.
     static let reopenNotification = Notification.Name("dev.baglayan.Acouplet.reopen")
@@ -118,18 +118,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !isDuplicateLaunch else { return }
-        let launchType = NSAppleEventManager.shared().currentAppleEvent?
-            .paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue
-        // While the LaunchAgent's copy migrates its job, it neither starts the headphones nor counts the first
-        // launch of the build: if the migration succeeds, launchd stops this process and starts the new one.
         guard !isMigratingBackgroundService else {
-            deferredLaunch = (notification, launchType)
+            hasDeferredLaunch = true
             return
         }
-        finishLaunching(notification, launchType: launchType)
+        finishLaunching()
     }
 
-    private func finishLaunching(_ notification: Notification, launchType: OSType?) {
+    private func finishLaunching() {
         environment.settings.backgroundServiceMigrationError = backgroundServiceMigrationError
         environment.settings.retryBackgroundServiceMigration = { [weak self] in
             guard let self, self.backgroundServiceMigrationError != nil else { return }
@@ -177,15 +173,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             uiTestWindow = window
         }
         #endif
-        let isDefaultLaunch = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool == true
-        let isFirstLaunchOfBuild = !isRunningTests && environment.settings.consumeFirstLaunch(
-            ofBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
-        if isFirstLaunchOfBuild || !CommandLine.arguments.contains("--background-service")
-            && (isDefaultLaunch || CommandLine.arguments.contains("--manual-launch"))
-            && (!isRunningTests || CommandLine.arguments.contains("--manual-launch"))
-            && launchType != keyAELaunchedAsLogInItem && launchType != keyAELaunchedAsServiceItem {
-            showSettings()
-        }
         environment.devices.$controllers
             .sink { [weak self] controllers in self?.observeDeviceAlerts(controllers) }
             .store(in: &cancellables)
@@ -367,9 +354,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backgroundServiceMigrationError = Self.backgroundServiceMigrationMessage
         }
         isMigratingBackgroundService = false
-        guard let launch = deferredLaunch else { return }
-        deferredLaunch = nil
-        finishLaunching(launch.notification, launchType: launch.launchType)
+        guard hasDeferredLaunch else { return }
+        hasDeferredLaunch = false
+        finishLaunching()
     }
     #endif
 

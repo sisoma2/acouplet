@@ -580,7 +580,7 @@ if [[ "$service_should_start" == true ]]; then
         exit 1
     fi
     print "Acouplet is installed and running in the background (process $agent_pid)."
-    print "It opens its settings the first time a new version runs. After that, its menu-bar icon appears when a supported Sony device is connected."
+    print "Its menu-bar icon appears when a supported Sony device is connected. Reopen Acouplet to open Settings."
 else
     print "Acouplet is updated. Its previously stopped background service remains stopped."
     print "Its menu-bar icon appears when a supported Sony device is connected."

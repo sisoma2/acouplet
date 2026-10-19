@@ -1744,8 +1744,8 @@ final class AppUITests: XCTestCase {
         app.terminate()
         app.launchArguments += ["--manual-launch"]
         app.launch()
-        XCTAssertTrue(app.descendants(matching: .any)["settings.form"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.statusItems.firstMatch.exists)
+        XCTAssertTrue(app.statusItems.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(app.windows.count, 0)
         app.terminate()
         app.launchArguments += ["--background-service"]
         app.launch()
@@ -2011,9 +2011,12 @@ final class AppUITests: XCTestCase {
     @MainActor
     func testSettingsPanesRememberSelectionWhenReopened() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-ui-testing", "--manual-launch", "-AppleLanguages", "(en)"]
+        app.launchArguments = ["-ui-testing", "--ui-test-host", "-AppleLanguages", "(en)"]
         app.launch()
         defer { app.terminate() }
+        let panel = app.windows["Headphone Controls"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        panel.buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         XCTAssertTrue(settingsWindow.waitForExistence(timeout: 5))
         XCTAssertEqual(settingsWindow.title, "General")

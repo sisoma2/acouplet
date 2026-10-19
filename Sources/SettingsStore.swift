@@ -254,12 +254,6 @@ final class SettingsStore: ObservableObject {
     }
     #endif
 
-    func consumeFirstLaunch(ofBuild build: String?) -> Bool {
-        guard let build, !build.isEmpty, defaults.string(forKey: Keys.lastLaunchedBuild) != build else { return false }
-        defaults.set(build, forKey: Keys.lastLaunchedBuild)
-        return true
-    }
-
     func setAppLanguage(_ language: AppLanguage) {
         appLanguage = language
         if language == .system {
@@ -443,7 +437,6 @@ final class SettingsStore: ObservableObject {
         #endif
         static let reconnectAutomatically = "preferences.reconnectAutomatically"
         static let launchAtLoginDefaultApplied = "preferences.launchAtLoginDefaultApplied"
-        static let lastLaunchedBuild = "lifecycle.lastLaunchedBuild"
         static let globalShortcutEnabled = "preferences.globalShortcutEnabled"
         static let customEqualizerDraft = "preferences.customEqualizerDraft"
         static let equalizerDraftsByDevice = "preferences.equalizerDraftsByDevice"

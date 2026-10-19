@@ -91,33 +91,13 @@ enum AcoupletMain {
     }
 
     #if !DEBUG && !ACOUPLET_PUBLIC_APIS_ONLY
-    /// Hands a plain launch of the installed app over to its background service and returns true when this
-    /// copy should quit (decision D9).
-    ///
-    /// Sparkle relaunches the app without arguments after an update, and Finder opens it the same way. Left
-    /// running, that copy has no KeepAlive and offers Launch at login, which would start a second copy at
-    /// login. When the LaunchAgent is loaded, this starts it with `launchctl kickstart`, asks it to open
-    /// Settings once it has finished launching, and lets this copy quit before `NSApplication` exists.
     private static func handOffPlainLaunchToService(arguments: [String] = CommandLine.arguments) -> Bool {
         typealias Service = LegacyBackgroundService
         let target = "\(Service.domain)/\(Service.label)"
         guard arguments.count == 1, Bundle.main.bundleIdentifier == "dev.baglayan.Acouplet",
               Bundle.main.executableURL?.path == Service.executablePath,
               (try? Service.launchctl(["print", target], quiet: true)) != nil else { return false }
-        let started = (try? Service.launchctl(["kickstart", target], quiet: true)) != nil
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            if let service = NSRunningApplication.runningApplications(withBundleIdentifier: "dev.baglayan.Acouplet")
-                .first(where: { $0.processIdentifier != getpid() && $0.isFinishedLaunching && !$0.isTerminated }) {
-                DistributedNotificationCenter.default().postNotificationName(
-                    AppDelegate.reopenNotification, object: String(service.processIdentifier), userInfo: nil, deliverImmediately: true)
-                return true
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        }
-        // The service did not appear. If launchd accepted the start, it owns the service now; otherwise this
-        // copy keeps running so the app is not left closed.
-        return started
+        return (try? Service.launchctl(["kickstart", target], quiet: true)) != nil
     }
     #endif
 
