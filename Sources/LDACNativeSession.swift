@@ -413,8 +413,8 @@ final class LDACNativeSession: @unchecked Sendable {
         let waitForReconnect: Bool
     }
 
-    private static let daemonEventExpression = try! NSRegularExpression(pattern: "connectedCB cid:0x|l2capDisconnected for CID: 0x|l2capDataInd for CID: 0x|ACL connected:|ACL disconnected:|Received connection result for \"A2DP Source\" profile on device ", options: .caseInsensitive)
-    static let daemonPredicate = #"process == "bluetoothd" AND (eventMessage CONTAINS[c] "connectedCB cid:0x" OR eventMessage CONTAINS[c] "l2capDisconnected for CID: 0x" OR eventMessage CONTAINS[c] "l2capDataInd for CID: 0x" OR eventMessage CONTAINS[c] "ACL connected:" OR eventMessage CONTAINS[c] "ACL disconnected:" OR eventMessage CONTAINS[c] "Received connection result for \"A2DP Source\" profile on device ")"#
+    private static let daemonEventExpression = try! NSRegularExpression(pattern: "connectedCB cid:0x|l2capDisconnected for CID: 0x|l2capDataInd for CID: 0x|ACL connected:|ACL disconnected:|Received connection result for \"A2DP Source\" profile on device |Power state changed: PoweredOff", options: .caseInsensitive)
+    static let daemonPredicate = #"process == "bluetoothd" AND (eventMessage CONTAINS[c] "connectedCB cid:0x" OR eventMessage CONTAINS[c] "l2capDisconnected for CID: 0x" OR eventMessage CONTAINS[c] "l2capDataInd for CID: 0x" OR eventMessage CONTAINS[c] "ACL connected:" OR eventMessage CONTAINS[c] "ACL disconnected:" OR eventMessage CONTAINS[c] "Received connection result for \"A2DP Source\" profile on device " OR eventMessage CONTAINS[c] "Power state changed: PoweredOff")"#
 
     let id: UUID
     private let address: String
@@ -463,6 +463,7 @@ final class LDACNativeSession: @unchecked Sendable {
     private var ownerExitDeadline = DispatchTime.distantFuture
     private var shutdownChecked = false
     private var shutdownUnverified = false
+    private var bluetoothPowerOffConfirmed = false
     private var unverifiedAcquisitions: Set<String> = []
     private var connected = false
     private var signalingArmed = false
@@ -773,6 +774,15 @@ final class LDACNativeSession: @unchecked Sendable {
             }
             guard line.hasPrefix("Filtering the log data") || line.hasPrefix("Timestamp") ||
                   Self.daemonEventExpression.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) != nil else { return }
+            if !restoring, !bluetoothPowerOffConfirmed,
+               LDACChannelGate.captures("\\bPower state changed: PoweredOff\\s*$", line) != nil {
+                bluetoothPowerOffConfirmed = true
+                ownedACLEnded = true
+                originalConnectionEnded = true
+                record("BLUETOOTH_POWER_OFF ownedChannelsClosed=1 \(line)")
+                if !shouldStop { connectionLost("The Bluetooth radio powered off.") }
+            }
+            if bluetoothPowerOffConfirmed { return }
             if let values = LDACChannelGate.captures("(?:connectedCB cid:0x|l2capDisconnected for CID: 0x|l2capDataInd for CID: 0x)([0-9a-f]+)\\b", line),
                let cid = Int(values[0], radix: 16), signalingGate.cid == nil || mediaGate.cid == nil || cid == signalingGate.cid || cid == mediaGate.cid {
                 record("daemon \(line)")
@@ -1285,13 +1295,13 @@ final class LDACNativeSession: @unchecked Sendable {
                 }
             }
         }
-        if waitingMediaTransportClosed && mediaGate.closed && !mediaTransportClosedSent {
+        if waitingMediaTransportClosed && (mediaGate.closed || bluetoothPowerOffConfirmed) && !mediaTransportClosedSent {
             mediaTransportClosedSent = try sendClosureAcknowledgment("media", "transport-closed")
         }
         if waitingMediaClosed && !mediaClosedSent && (children["media"] == nil || children["media"]?.finished == true) {
             mediaClosedSent = try sendClosureAcknowledgment("probe", "media-closed")
         }
-        if waitingSignalingClosed && signalingGate.closed && !signalingClosedSent {
+        if waitingSignalingClosed && (signalingGate.closed || bluetoothPowerOffConfirmed) && !signalingClosedSent {
             signalingClosedSent = try sendClosureAcknowledgment("probe", "transport-closed")
         }
         if priorityCanClose, children["probe"]?.finished == true, let media = children["media"], media.status == nil, !mediaCloseSent {
@@ -1370,17 +1380,17 @@ final class LDACNativeSession: @unchecked Sendable {
         if !shutdownChecked {
             shutdownChecked = true
             if children["probe"] != nil {
-                shutdownUnverified = (signalingGate.cid != nil && !signalingGate.closed) ||
+                shutdownUnverified = !bluetoothPowerOffConfirmed && ((signalingGate.cid != nil && !signalingGate.closed) ||
                     (mediaGate.cid != nil && !mediaGate.closed) ||
                     (signalingGate.cid == nil && unverifiedAcquisitions.contains("probe")) ||
-                    (mediaGate.cid == nil && unverifiedAcquisitions.contains("media"))
+                    (mediaGate.cid == nil && unverifiedAcquisitions.contains("media")))
                 if shutdownUnverified {
                     let message = "Bluetooth did not confirm closure of the owned LDAC channels."
                     record("SHUTDOWN_UNVERIFIED \(message)")
                     fail(message)
                 }
                 do {
-                    if !shutdownUnverified, let rawURL, signalingGate.cid != nil {
+                    if !shutdownUnverified, !bluetoothPowerOffConfirmed, let rawURL, signalingGate.cid != nil {
                         let bytes = try Data(contentsOf: rawURL)
                         try signalingGate.reconcile(bytes.count)
                     }

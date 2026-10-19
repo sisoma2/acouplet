@@ -14,13 +14,15 @@ final class MacAudioRouteTests: XCTestCase {
             "l2capDataInd for CID: 0x0040, len: 0x0002",
             "ACL connected: 02-00-00-00-00-01, result 0",
             "ACL disconnected: 02-00-00-00-00-01, result 0, reason 10722",
-            "Received connection result for \"A2DP Source\" profile on device 02-00-00-00-00-01 result was 0"
+            "Received connection result for \"A2DP Source\" profile on device 02-00-00-00-00-01 result was 0",
+            "Power state changed: PoweredOff"
         ] {
             XCTAssertTrue(predicate.evaluate(with: ["process": "bluetoothd", "eventMessage": message]))
             XCTAssertTrue(predicate.evaluate(with: ["process": "bluetoothd", "eventMessage": message.uppercased()]))
             XCTAssertFalse(predicate.evaluate(with: ["process": "unrelated", "eventMessage": message]))
         }
-        for message in ["PipeMgr: Write completed", "Advertising state changed", "Device scan result"] {
+        for message in ["PipeMgr: Write completed", "Advertising state changed", "Device scan result",
+                        "SetPowerState: PoweredOff", "Power state changed: PoweredOn"] {
             XCTAssertFalse(predicate.evaluate(with: ["process": "bluetoothd", "eventMessage": message]))
         }
     }

@@ -695,9 +695,9 @@ extension LDACNativeSession {
     }
 
     @MainActor
-    private static func lossSession(active: Bool, events: SessionEvents) throws -> LDACNativeSession {
+    private static func lossSession(active: Bool, events: SessionEvents, priority: LDACPriorityControl? = nil) throws -> LDACNativeSession {
         let session = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01",
-            helpers: Helpers(bundle: .main), gain: 1,
+            helpers: Helpers(bundle: .main), gain: 1, priority: priority,
             configuration: LDACConfiguration(quality: .adaptive), receive: { events.values.append($0) })
         session.active = active
         session.started = true
@@ -808,30 +808,70 @@ extension LDACNativeSession {
     }
 
     @MainActor
+    static func powerOffEvidenceCheck() async throws {
+        let events = SessionEvents()
+        let session = try lossSession(active: true, events: events)
+        for line in ["SetPowerState: PoweredOff", "Beginning asynchronous power off", "Power state changed: PoweredOn",
+                     "Power state changed: PoweredOff pending"] {
+            try session.handle("daemon", line: line)
+        }
+        try session.handle("media", line: "Power state changed: PoweredOff")
+        try require(!session.bluetoothPowerOffConfirmed && !session.shouldStop,
+            "An unconfirmed power request or helper output was accepted as radio shutdown")
+        try session.handle("daemon", line: "2026-10-19 14:23:25.206+0200 localhost bluetoothd[403]: [com.apple.bluetooth:CBStackController] Power state changed: PoweredOff")
+        try require(session.bluetoothPowerOffConfirmed && session.originalConnectionEnded && session.ownedACLEnded,
+            "Confirmed radio shutdown did not retire the owned Bluetooth connection")
+        for line in ["Power state changed: PoweredOff", "connectedCB cid:0x0040 inMTU:1000 outMTU:1000 result:0",
+                     "l2capDisconnected for CID: 0x0040", "l2capDisconnected for CID: 0x0040",
+                     "ACL connected: 02:00:00:00:00:01, result 0"] {
+            try session.handle("daemon", line: line)
+        }
+        for _ in 0..<100 { await Task.yield() }
+        try require(session.recoverableFailure && !session.hardFailure && events.names == ["connectionLost"],
+            "Late or repeated Bluetooth events changed power-off recovery")
+    }
+
+    @MainActor
     static func recoveryExitCheck(_ mode: String, executable: URL, raw: URL) async throws {
         let events = SessionEvents()
-        let session = try lossSession(active: mode != "unclassified" && mode != "requested-stop-before-active", events: events)
+        let priority = mode == "power-off-priority-recovered" ? LDACPriorityControl(request: { enabled, disconnected in
+            try require(!enabled && disconnected, "Power-off cleanup did not confirm old ACL disconnection to the driver")
+        }, state: { .init(phase: "idle", error: nil) }) : nil
+        let session = try lossSession(active: mode != "unclassified" && mode != "requested-stop-before-active", events: events, priority: priority)
         session.rawURL = raw
         if mode == "unclassified" || mode.hasPrefix("requested-stop") { session.stop(restoreAudio: false) }
-        else { try session.handle("probe", line: "STREAM_CLOSED peerSignal=08") }
+        else if mode != "power-off" { try session.handle("probe", line: "STREAM_CLOSED peerSignal=08") }
+        let powerOff = mode.hasPrefix("power-off")
+        if powerOff { try session.handle("daemon", line: "Power state changed: PoweredOff") }
         if mode == "requested-stop-before-active" {
             try session.handle("probe", line: "STOP_COMPLETE protocolCleanup=1")
         }
-        session.originalConnectionEnded = mode == "acl-first"
+        session.originalConnectionEnded = mode == "acl-first" || powerOff
         if mode == "restore-disconnected" || mode == "forced-disconnect" || mode == "native-replaced" {
             try session.handle("restore-disconnect", line: "BEFORE time=1791160325.072411 address=02-00-00-00-00-01 paired=1 connected=\(mode == "forced-disconnect" ? 1 : 0)")
             try session.handle("restore-disconnect", line: "RESTORE_DISCONNECTED disconnected=1")
         }
         session.nativeAudioRestored = mode == "native-replaced"
-        if mode == "encoder-error" || mode == "requested-stop-encoder-error" {
+        if mode == "encoder-error" || mode == "requested-stop-encoder-error" || mode == "power-off-encoder-error" {
             try session.handle("media", line: "ENCODER_FAILED reason=packet-boundary")
         }
         if mode.hasPrefix("requested-stop-cleanup") {
             session.priorityCleanupFailed("Target publication was lost; confirm the old Bluetooth connection is disconnected.")
             if mode == "requested-stop-cleanup-recovered" { session.priorityPhase = .removed }
         }
+        if mode == "power-off-priority-pending" { session.priorityPhase = .uncertain }
+        if mode == "power-off-priority-recovered" {
+            session.priorityCleanupFailed("Target publication was lost; confirm the old Bluetooth connection is disconnected.")
+            session.children["disconnect"] = try LDACNativeChild(executable: executable,
+                arguments: ["fixture-disconnect"], inheritedPCM: nil)
+        }
+        if mode == "power-off-unverified-open" { session.unverifiedAcquisitions.insert("media") }
+        if mode == "power-off-capture-failed" {
+            session.children["capture"] = try LDACNativeChild(executable: executable,
+                arguments: ["--fixture", "exit", "FIXTURE_EXIT", "", "1"], inheritedPCM: nil)
+        }
         for (name, cid) in [("probe", "0040"), ("media", "0041")] {
-            if !["missing-closure", "requested-stop-missing-closure"].contains(mode) || name != "media" {
+            if !powerOff && (!["missing-closure", "requested-stop-missing-closure"].contains(mode) || name != "media") {
                 try session.handle("daemon", line: "l2capDisconnected for CID: 0x\(cid)")
             }
             session.children[name] = try LDACNativeChild(executable: executable,
@@ -848,17 +888,25 @@ extension LDACNativeSession {
         }
         try require(session.canRestore, "Recovery did not wait for transport children to finish")
         try session.beginRestore()
+        if mode == "power-off-priority-recovered" {
+            try require(session.priorityPhase == .removing && session.children["restore-disconnect"] == nil,
+                "Confirmed power-off did not remove old playback priority without disconnecting a replacement")
+            try require(session.priorityRemovalFinished, "Driver cleanup did not complete")
+            session.finish()
+        }
         for _ in 0..<100 { await Task.yield() }
         guard case let .finished(completion)? = events.values.last else {
             throw ClosureCheckError(description: "Recovery did not publish its completion")
         }
-        let safe = ["channels-first", "acl-first", "restore-disconnected", "forced-disconnect"].contains(mode)
-        let clean = safe || ["requested-stop", "requested-stop-before-active", "requested-stop-cleanup-recovered", "native-replaced"].contains(mode)
+        let safe = ["channels-first", "acl-first", "restore-disconnected", "forced-disconnect", "power-off", "power-off-after-loss",
+                    "power-off-priority-recovered"].contains(mode)
+        let clean = safe || ["requested-stop", "requested-stop-before-active", "requested-stop-cleanup-recovered", "native-replaced",
+                             "power-off-unverified-open", "power-off-capture-failed"].contains(mode)
         try require(completion.canRetry == safe, "Recovery accepted an unsafe exit or rejected verified closure: \(mode)")
         try require(completion.requiresAttention == !safe, "Recovery reported the wrong attention requirement: \(mode)")
-        try require(completion.targetDisconnected == ["acl-first", "restore-disconnected", "forced-disconnect"].contains(mode),
+        try require(completion.targetDisconnected == (powerOff || ["acl-first", "restore-disconnected", "forced-disconnect"].contains(mode)),
             "Channel closure was confused with confirmed target disconnection: \(mode)")
-        try require(completion.waitForReconnect == ["acl-first", "restore-disconnected"].contains(mode),
+        try require(completion.waitForReconnect == (powerOff || ["acl-first", "restore-disconnected"].contains(mode)),
             "A deliberate recovery disconnection was confused with an unavailable peer: \(mode)")
         try require(events.names.filter { $0 == "failed" }.isEmpty == clean,
             "Expected connection loss was promoted to a transport error: \(mode)")
@@ -879,12 +927,13 @@ extension LDACNativeSession {
             var gate = LDACChannelGate()
             try gate.owned("OWNED_CHANNEL CID=\(cid)")
             try gate.daemon("connectedCB cid:0x\(cid) inMTU:672 outMTU:672 result:0")
-            if fault != "missing-closure" || name != (site == "media-transport" ? "media" : "probe") {
+            if fault != "power-off" && (fault != "missing-closure" || name != (site == "media-transport" ? "media" : "probe")) {
                 try gate.daemon("l2capDisconnected for CID: 0x\(cid)")
             }
             if name == "probe" { session.signalingGate = gate }
             else { session.mediaGate = gate }
         }
+        if fault == "power-off" { try session.handle("daemon", line: "Power state changed: PoweredOff") }
         let name = site == "media-transport" ? "media" : "probe"
         let other = name == "media" ? "probe" : "media"
         let command = site == "media-closed" ? "media-closed" : "transport-closed"
@@ -958,7 +1007,7 @@ extension LDACNativeSession {
             try require(session.failure == nil && !session.hardFailure,
                 "Terminal acknowledgment failed: \(session.failure ?? "unknown")")
         }
-        if fault == "none" {
+        if fault == "none" || fault == "power-off" {
             let sent = site == "media-transport" ? session.mediaTransportClosedSent :
                 site == "media-closed" ? session.mediaClosedSent : session.signalingClosedSent
             try require(sent == (mode == "read"), "Terminal acknowledgment delivery was recorded incorrectly")
@@ -1138,7 +1187,7 @@ enum LDACSessionClosureCheck {
         }
         var failures = 0
         for site in ["media-transport", "media-closed", "signaling-transport"] {
-            for (mode, fault) in [("exit", "none"), ("broken", "none"), ("read", "none"),
+            for (mode, fault) in [("exit", "none"), ("broken", "none"), ("read", "none"), ("read", "power-off"),
                                   ("exit", "missing-closure"), ("exit", "failed-exit"),
                                   ("broken", "hung"), ("exit", "nonterminal"), ("broken", "nonterminal"),
                                   ("exit", "missing-recipient"), ("broken", "bad-descriptor")] {
@@ -1151,9 +1200,11 @@ enum LDACSessionClosureCheck {
                 }
             }
         }
-        print("Actual LDAC session shutdown checks: \(30 - failures)/30 passed; local fixture children only")
+        print("Actual LDAC session shutdown checks: \(33 - failures)/33 passed; local fixture children only")
         let closureFailures = failures
         var ownershipChecks = 0
+        try await LDACNativeSession.powerOffEvidenceCheck()
+        print("PASS Bluetooth power-off evidence: confirmed shutdown only, repeated events and replacement channels")
         for line in ["PEER_COMMAND_UNSUPPORTED", "CONTROL_FAILED expected=media-finished closed=0", "LDAC_UNAVAILABLE rate=48000 channels=2"] {
             for source in ["probe", "media", "daemon"] {
                 for active in [false, true] {
@@ -1182,6 +1233,8 @@ enum LDACSessionClosureCheck {
             }
         }
         for mode in ["channels-first", "acl-first", "restore-disconnected", "forced-disconnect", "native-replaced", "unexpected-exit",
+                     "power-off", "power-off-after-loss", "power-off-encoder-error", "power-off-priority-pending", "power-off-priority-recovered",
+                     "power-off-unverified-open", "power-off-capture-failed",
                      "missing-closure", "encoder-error", "unclassified", "requested-stop", "requested-stop-before-active",
                      "requested-stop-encoder-error", "requested-stop-missing-closure", "requested-stop-cleanup-recovered",
                      "requested-stop-cleanup-pending"] {
