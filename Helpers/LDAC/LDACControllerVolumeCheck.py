@@ -137,6 +137,8 @@ final class SonyHeadphonesController: ObservableObject {
     var hasFreshMusicVolumeReadback: Bool { hasCurrentMusicVolumeControl && canControlMusicVolume }
     var canControlMusicVolume: Bool { hasCurrentMusicVolumeControl && !blocksPlaybackCommands && queuedWrite == nil }
     func hasCurrentMusicSourceContext(for address: String?) -> Bool { localSource }
+    var connections: [Bool] = []
+    func connect(preferLDAC: Bool = true) { connections.append(preferLDAC) }
     func setConnectionMode(_ mode: SonyConnectionMode) {
         guard mode != connectionMode, connectionTransition?.isFinished != false else { return }
         connectionRequests.append(mode)
@@ -222,6 +224,7 @@ final class SonyDeviceCoordinator: ObservableObject {
     var controllers: [String: SonyHeadphonesController] = [:]
     @Published var isSystemSleeping = false
     var selectedAddress: String? = "02:00:00:00:00:01"
+    var isTerminating = false
     func controller(for address: String) -> SonyHeadphonesController? { controllers[address] }
 }
 
@@ -229,8 +232,10 @@ final class SonyDeviceCoordinator: ObservableObject {
 final class LDACNativeOutput {
     nonisolated static let uid = "fixture-output"
 __TRANSFER_CONTROLS__
+    static var failNextClaim = false
     var controls = LDACNativeVolume(scalar: 0.8, muted: false)
     var ready = false
+    var hasInitialVolume = true
     var selected = false
     var preparations = 0
     var silences = 0
@@ -239,7 +244,12 @@ __TRANSFER_CONTROLS__
     var restores: [Bool] = []
     var restoreError: String?
     init(id: UUID, address: String, changed: @escaping (Result<LDACNativeVolume, Error>) -> Void) {}
-    func claim(model: String, targetAddress: String, sampleRate: Int) async throws {}
+    func claim(model: String, targetAddress: String, sampleRate: Int) async throws {
+        if Self.failNextClaim {
+            Self.failNextClaim = false
+            throw LDACOwnerTimeoutError()
+        }
+    }
     func priorityControl() async throws {}
     var configureTimeouts = 0
     func configure(volume: Int, range: ClosedRange<Int>, preservingUserChange: Bool = false) async throws {
@@ -248,7 +258,7 @@ __TRANSFER_CONTROLS__
             configureTimeouts -= 1
             throw LDACOwnerTimeoutError()
         }
-        if !preservingUserChange { _ = controls.update(volume: volume, range: range) }
+        if !preservingUserChange || !hasInitialVolume { _ = controls.update(volume: volume, range: range) }
     }
     func configureRouting(_ routing: LDACApplicationRouting) async throws {}
     func validateForRecovery() async throws {}
@@ -320,6 +330,9 @@ final class Controller: ObservableObject {
     var sessionID = UUID()
     var requestedAddress: String?
     var requestedConfiguration = LDACConfiguration()
+    var startingDirectly = false
+    var directStartRequested = false
+    var connectOrdinaryAfterCleanup = false
     var nativeOutput: LDACNativeOutput?
     var outputID: UUID?
     var headphones: SonyHeadphonesController?
@@ -449,6 +462,68 @@ enum Check {
     @MainActor
     static func main() async throws {
         precondition(ProcessInfo.processInfo.environment["ACOUPLET_TESTING"] == "1")
+        for generation in [Generation.v1, .v2] {
+            let direct = Controller()
+            let device = SonyHeadphonesController()
+            device.isReady = false
+            device.isDeviceConnected = false
+            device.playback.generation = generation
+            device.playback.musicVolumeRange = nil
+            device.playback.volume = nil
+            device.localSource = false
+            direct.devices?.controllers[device.address] = device
+            direct.requestedAddress = device.address
+            direct.start(device.address, directly: true)
+            try await waitUntil { direct.session != nil }
+            let raw = direct.session!
+            let endpoint = direct.nativeOutput!
+            endpoint.hasInitialVolume = false
+            precondition(endpoint.configurations == 0 && !endpoint.ready && raw.gains == [0])
+            raw.emit(.handoffReady)
+            try await waitUntil { raw.handoffs == 1 }
+            precondition(endpoint.selected && !endpoint.ready && device.refreshes == 0)
+            device.isDeviceConnected = true
+            raw.emit(.controlsRequired)
+            try await waitUntil { device.controlRetries == 1 }
+            precondition(raw.mediaSetups == 0 && !endpoint.ready)
+            device.playback.musicVolumeRange = 0...30
+            device.playback.volume = 7
+            device.completeControlRetry()
+            try await waitUntil { device.volumeRefreshes == 1 }
+            device.receiveVolume(7)
+            try await Task.sleep(for: .milliseconds(150))
+            precondition(raw.mediaSetups == 0 && !endpoint.ready)
+            device.receiveStatus()
+            try await waitUntil { raw.mediaSetups == 1 }
+            precondition(endpoint.controls.volume(in: 0...30) == 7 && !endpoint.ready && raw.gains == [0])
+            device.localSource = true
+            raw.emit(.active(LDACFormat()))
+            if generation == .v1 {
+                try await waitUntil { device.volumeRefreshes == 2 }
+                device.receiveVolume(7)
+                device.receiveStatus()
+            }
+            try await waitUntil { direct.usable }
+            precondition(endpoint.ready && device.playback.volume == 7 && raw.gains.last == 1)
+            try await stop(direct)
+        }
+        print("PASS direct startup: both generations connect without initial controls, source, volume or native audio; fresh status and volume keep output silent until admission")
+
+        let rejectedDirect = Controller()
+        let rejectedDevice = SonyHeadphonesController()
+        rejectedDevice.isReady = false
+        rejectedDevice.isDeviceConnected = false
+        rejectedDirect.devices?.controllers[rejectedDevice.address] = rejectedDevice
+        rejectedDirect.requestedAddress = rejectedDevice.address
+        rejectedDirect.isClassicConnected = { _ in false }
+        LDACNativeOutput.failNextClaim = true
+        rejectedDirect.start(rejectedDevice.address, directly: true)
+        let rejectedOutput = rejectedDirect.nativeOutput!
+        try await waitUntil { !rejectedDirect.isSessionRunning }
+        precondition(rejectedOutput.restores == [false] && rejectedDevice.connections == [false])
+        precondition(rejectedDirect.requestedAddress == nil && rejectedDirect.session == nil)
+        print("PASS direct preparation failure restores the output and attempts ordinary connection once without retrying LDAC")
+
         let (controller, headphones, output, session) = try await started()
         precondition(controller.hasMusicVolumeForHandoff && !controller.hasOwnedMusicContext,
                      "Legacy raw ownership admitted before active")
@@ -933,7 +1008,7 @@ enum Check {
     }
 }
 '''
-names = ["needsStopBeforeTermination", "deviceUnavailableReason", "refreshDriverState", "start", "launch", "sessionFinished",
+names = ["canStartDirectly", "needsStopBeforeTermination", "deviceUnavailableReason", "refreshDriverState", "start", "launch", "sessionFinished",
          "fallBackToOrdinaryAudio", "hasMusicVolumeForHandoff", "hasOwnedMusicContext",
          "hasOtherMusicSource", "bindingIsCurrent", "bindingCheck", "musicControlStatus", "prepareControlsForMedia", "waitForControls", "controlsChanged",
          "holdBinding", "recoverBinding", "stopForChange", "sendPendingVolume", "setOutputGain", "fail", "beginRecovery",

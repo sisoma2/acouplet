@@ -8208,6 +8208,23 @@
         }
       }
     },
+    "Turn off multipoint before starting LDAC.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn off multipoint before starting LDAC."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC’yi başlatmadan önce çoklu bağlantıyı kapatın."
+          }
+        }
+      }
+    },
     "Turn off multipoint for LDAC?": {
       "extractionState": "manual",
       "localizations": {

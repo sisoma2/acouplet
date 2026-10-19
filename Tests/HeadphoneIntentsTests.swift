@@ -4,6 +4,13 @@ import XCTest
 
 @available(macOS 27.0, *)
 final class HeadphoneIntentsTests: XCTestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        try XCTSkipUnless(ProcessInfo.processInfo.isOperatingSystemAtLeast(
+            OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 0)),
+            "These tests require macOS 27 or later.")
+    }
+
     @MainActor
     private final class Destinations {
         var values: [HeadphoneDestination] = []

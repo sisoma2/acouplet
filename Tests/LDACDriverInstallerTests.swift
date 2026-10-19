@@ -201,6 +201,71 @@ final class LDACDefaultCodecTests: XCTestCase {
         XCTAssertEqual(ldac.simulatedStarts, [address])
     }
 
+    func testConnectStartsLDACBeforeClassicAudioOrControlsAreAvailable() async throws {
+        let (ldac, headphones, route) = try prepared(isClassicConnected: { _ in false }, prepareDevices: { devices in
+            devices.selectedController.simulateControlLoss(deviceConnected: false)
+        })
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        route.simulateRoute(output(uid: "built-in-output", transport: kAudioDeviceTransportTypeBuiltIn))
+        XCTAssertFalse(headphones.isReady)
+        XCTAssertFalse(headphones.isDeviceConnected)
+        headphones.connect()
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+        XCTAssertTrue(ldac.simulatedStartingDirectly)
+        headphones.connect()
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+    }
+
+    func testAutomaticDirectStartDoesNotWaitForTheNativeHeadphoneOutput() async throws {
+        let (ldac, headphones, route) = try prepared(isClassicConnected: { _ in false }, prepareDevices: { devices in
+            devices.selectedController.simulateControlLoss(deviceConnected: false)
+        })
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        route.simulateRoute(output(uid: "built-in-output", transport: kAudioDeviceTransportTypeBuiltIn))
+        headphones.simulateDeviceConnection(named: "WF-1000XM5", simulatedAddress: address, galleryModel: .wfXM5)
+        headphones.simulateControlLoss(deviceConnected: true)
+        await drainTasks()
+        XCTAssertFalse(headphones.isReady)
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+        XCTAssertTrue(ldac.simulatedStartingDirectly)
+    }
+
+    func testAlreadyConnectedHeadphonesDoNotTakeOverAnotherOutputDuringControlStartup() async throws {
+        let (ldac, headphones, route) = try prepared(prepareDevices: { devices in
+            devices.selectedController.simulateControlLoss(deviceConnected: true)
+        })
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        route.simulateRoute(output(uid: "built-in-output", transport: kAudioDeviceTransportTypeBuiltIn))
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [])
+        route.simulateRoute(sonyOutput)
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+    }
+
+    func testDirectConnectRespectsOptOutDriverAvailabilityAndUnsupportedModels() async throws {
+        let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set([address: false], forKey: "ldac.codecPreferences")
+        for model in [SonyDeviceModel.wfXM3, .whCH720N, .wfXM5] {
+            let (ldac, headphones, _) = try prepared(defaults: model == .wfXM5 ? defaults : nil, model: model,
+                isClassicConnected: { _ in false }, prepareDevices: { devices in
+                    devices.selectedController.simulateControlLoss(deviceConnected: false)
+                })
+            defer { ldac.stop(); headphones.simulateControlLoss() }
+            XCTAssertFalse(ldac.connectDirectly(forAddress: address))
+            XCTAssertEqual(ldac.simulatedStarts, [])
+        }
+        let (ldac, headphones, _) = try prepared(inspectDriver: { _ in .missing }, isClassicConnected: { _ in false },
+            prepareDevices: { $0.selectedController.simulateControlLoss(deviceConnected: false) })
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        XCTAssertFalse(ldac.connectDirectly(forAddress: address))
+        XCTAssertEqual(ldac.simulatedStarts, [])
+        XCTAssertFalse(ldac.isOpeningDriverInstaller)
+    }
+
     func testWaitsForTheDriverWithoutOpeningTheInstaller() async throws {
         var driver = LDACDriverInstaller.State.missing
         let (ldac, headphones, _) = try prepared(inspectDriver: { _ in driver })
@@ -255,7 +320,7 @@ final class LDACDefaultCodecTests: XCTestCase {
         XCTAssertEqual(defaults.dictionary(forKey: "ldac.codecPreferences")?[address] as? Bool, true)
     }
 
-    func testUnavailableModelsAndLostControlsDoNotStartLDAC() async throws {
+    func testUnavailableModelsDoNotStartLDACAndControlStartupCanBeDeferred() async throws {
         for model in [SonyDeviceModel.wfXM3, .whCH720N] {
             let (ldac, headphones, _) = try prepared(model: model)
             defer { ldac.stop(); headphones.simulateControlLoss() }
@@ -266,7 +331,8 @@ final class LDACDefaultCodecTests: XCTestCase {
         defer { ldac.stop(); headphones.simulateControlLoss() }
         headphones.simulateControlLoss()
         await drainTasks()
-        XCTAssertEqual(ldac.simulatedStarts, [])
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+        XCTAssertTrue(ldac.simulatedStartingDirectly)
     }
 
     func testAnOptOutForAnotherSonyDeviceDoesNotChangeTheDefault() async throws {
@@ -338,6 +404,7 @@ final class LDACDefaultCodecTests: XCTestCase {
                           inspectDriver: @escaping (Bundle) -> LDACDriverInstaller.State = { _ in .current },
                           preferredConfiguration: @escaping (String) -> LDACConfiguration? = { _ in LDACConfiguration() },
                           localBluetoothAddress: @escaping () -> String? = { "02:00:00:00:00:01" },
+                          isClassicConnected: @escaping (String) -> Bool = { _ in true },
                           prepareDevices: (SonyDeviceCoordinator) -> Void = { _ in }) throws -> (LDACController, SonyHeadphonesController, MacAudioRouteObserver) {
         let devices = SonyDeviceCoordinator(fallbackController: SonyHeadphonesController(startAutomatically: false, simulated: true)) { device in
             let headphones = SonyHeadphonesController(startAutomatically: false, simulatedReady: true,
@@ -351,7 +418,8 @@ final class LDACDefaultCodecTests: XCTestCase {
         let route = MacAudioRouteObserver(startAutomatically: false)
         route.simulateRoute(sonyOutput)
         let ldac = LDACController(devices: devices, audioRoute: route, defaults: defaults, inspectDriver: inspectDriver,
-                                  preferredConfiguration: preferredConfiguration, localBluetoothAddress: localBluetoothAddress)
+                                  preferredConfiguration: preferredConfiguration, localBluetoothAddress: localBluetoothAddress,
+                                  isClassicConnected: isClassicConnected)
         ldac.simulateHelpers()
         return (ldac, headphones, route)
     }

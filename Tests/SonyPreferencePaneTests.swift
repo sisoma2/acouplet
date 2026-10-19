@@ -6,6 +6,13 @@ import XCTest
 final class SonyPreferencePaneTests: XCTestCase {
     private let socketPath = FileManager.default.temporaryDirectory.path + "/pane-\(UUID().uuidString.prefix(8)).sock"
 
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        try XCTSkipUnless(ProcessInfo.processInfo.isOperatingSystemAtLeast(
+            OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 0)),
+            "These tests require macOS 27 or later.")
+    }
+
     func testSocketPathFollowsTheDistribution() {
         XCTAssertEqual(SonyPreferencePaneWire.socketPath(sandboxed: true, home: "/Users/someone"),
                        "/Users/someone/Library/Containers/dev.baglayan.Acouplet/Data/tmp/sony-pane.sock")

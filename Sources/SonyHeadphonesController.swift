@@ -193,6 +193,9 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     @Published private(set) var powerOffState: PowerOffState?
     @Published private(set) var isDisconnectedByUser = false
     let disconnectionRequests = PassthroughSubject<Void, Never>()
+    #if !ACOUPLET_PUBLIC_APIS_ONLY
+    var preferredAudioConnection: (() -> Bool)?
+    #endif
     @Published private(set) var noiseControlMode: NoiseControlMode?
     @Published private(set) var ambientLevel = 10
     @Published private(set) var focusOnVoice = false
@@ -2853,7 +2856,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         powerOffRequestSession = nil
     }
 
-    func connect() {
+    func connect(preferLDAC: Bool = true) {
         guard !displayOnly, !isSystemSleeping, classicConnectionID == nil else { return }
         guard clearHeadphoneTestsForExplicitConnection() else { return }
         isDisconnectedByUser = false
@@ -2879,6 +2882,12 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             }
             return
         }
+        #if !ACOUPLET_PUBLIC_APIS_ONLY
+        if preferLDAC, connectionTransition?.isFinished != false, recoveryUsesBLE == nil, preferredAudioConnection?() == true {
+            cancelScheduledRetry(resetAttempts: true)
+            return
+        }
+        #endif
         if bleTransport != nil { closeSonyLink() }
         cancelScheduledRetry(resetAttempts: true)
         if connectionTransition?.phase == .recovering || recoveryUsesBLE != nil {

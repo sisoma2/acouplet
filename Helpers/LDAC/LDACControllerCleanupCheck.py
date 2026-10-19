@@ -74,6 +74,9 @@ final class Device: ObservableObject {
     var systemFeatures = SystemFeatures()
     @Published var isReady: Bool
     var isReconnectPaused = false
+    var pendingControlTransition: String?
+    struct Multipoint { var selectedSource: String? }
+    var multipoint = Multipoint()
     var notificationSession: UInt64 = 1
     @Published var isDeviceConnected = true
     var localSource = true
@@ -94,6 +97,8 @@ final class Device: ObservableObject {
         isReady = ready
         self.playback = Playback(isSupported: playback)
     }
+    var connections: [Bool] = []
+    func connect(preferLDAC: Bool = true) { connections.append(preferLDAC) }
     func setConnectionMode(_ mode: SonyConnectionMode) {
         guard mode != connectionMode, connectionTransition?.isFinished != false else { return }
         requests.append(mode)
@@ -119,6 +124,7 @@ typealias SonyHeadphonesController = Device
 final class Devices: ObservableObject {
     @Published var controllers = ["02:00:00:00:00:01": Device(), "02:00:00:00:00:02": Device(), "02:00:00:00:00:03": Device()]
     @Published var isSystemSleeping = false
+    var isTerminating = false
     var selectedAddress: String? = "02:00:00:00:00:01"
     func controller(for address: String) -> Device? { controllers[address] }
 }
@@ -160,6 +166,7 @@ final class Session {
 @MainActor
 final class Controller: ObservableObject {
     var codecPreferences: [String: Bool] = [:]
+    var directStartCandidates = Set<String>()
     var automaticStartAttempts: [ObjectIdentifier: UInt64] = [:]
     let localBluetoothAddress: () -> String? = { IOBluetoothHostController.default()?.addressAsString() }
     var isSuspendedForMicrophone = false
@@ -174,6 +181,9 @@ final class Controller: ObservableObject {
     var isClassicConnected: (String) -> Bool = { _ in true }
     var devices: Devices? = Devices()
     var requestedConfiguration = LDACConfiguration()
+    var startingDirectly = false
+    var directStartRequested = false
+    var connectOrdinaryAfterCleanup = false
     var audioRoute: MacAudioRouteObserver? = MacAudioRouteObserver()
     var resumeOutputUID: String? = "fixture-headphones"
     var lastResumeBlockers: String?
@@ -253,7 +263,7 @@ final class Controller: ObservableObject {
     }
     func availabilityChanged() { resumeIfReady() }
     func launch(_ address: String, restoringOnly: Bool) { restores.append(address) }
-    func start(_ address: String) {
+    func start(_ address: String, directly: Bool = false) {
         lastResumeBlockers = nil
         starts.append(address)
         targetAddress = address
@@ -311,6 +321,31 @@ enum LDACControllerCleanupCheck {
     @MainActor
     static func main() async {
         let address = "02:00:00:00:00:01"
+        let pendingDirect = Controller()
+        let directDevice = pendingDirect.devices!.controller(for: address)!
+        directDevice.isReady = false
+        directDevice.isDeviceConnected = false
+        directDevice.localSource = false
+        pendingDirect.callAudio = LDACCallAudio(activity: .unknown)
+        pendingDirect.setEnabled(true, forAddress: address, directly: true)
+        precondition(pendingDirect.starts.isEmpty && pendingDirect.state == .waitingForDevice)
+        pendingDirect.callAudio = LDACCallAudio(activity: .idle)
+        pendingDirect.availabilityChanged()
+        precondition(pendingDirect.starts == [address] && !directDevice.isReady && !directDevice.isDeviceConnected)
+        print("PASS direct microphone check waits for idle, then connects without ordinary audio or music source readiness")
+        let fallbackOutput = Output()
+        let cancelledFallback = Controller(output: fallbackOutput)
+        let fallbackDevice = cancelledFallback.devices!.controller(for: address)!
+        cancelledFallback.isClassicConnected = { _ in false }
+        cancelledFallback.requestedAddress = nil
+        cancelledFallback.connectOrdinaryAfterCleanup = true
+        cancelledFallback.sessionFinished("Direct startup failed.")
+        await waitUntil { fallbackOutput.continuation != nil }
+        cancelledFallback.stop(restoreAudio: false)
+        fallbackOutput.continuation?.resume(returning: nil)
+        await waitUntil { cancelledFallback.cleanupTask == nil }
+        precondition(fallbackDevice.connections.isEmpty)
+        print("PASS cancelling direct startup cleanup prevents a late ordinary reconnection")
         for policy in [LDACMicrophonePolicy.headset, .external, .manual] {
             let microphone = Controller()
             microphone.requestedAddress = address
@@ -846,7 +881,7 @@ enum LDACControllerCleanupCheck {
         print("PASS actual finder admission: active finding and unconfirmed Stop block LDAC; manual driver installation is independent of headphones and preserves busy/driver-state checks")
     }
 }
-'''.replace("__METHODS__", "\n".join(method(name) for name in ["synchronizeMicrophoneHandoff", "sampleRateUnavailableReason", "support", "capabilityContext", "recordDiscoveredSupport", "checkSupportAgain", "needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "openDriverInstaller", "setEnabled", "stop", "suspend", "resumeIfReady", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
+'''.replace("__METHODS__", "\n".join(method(name) for name in ["canStartDirectly", "synchronizeMicrophoneHandoff", "sampleRateUnavailableReason", "support", "capabilityContext", "recordDiscoveredSupport", "checkSupportAgain", "needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "openDriverInstaller", "setEnabled", "stop", "suspend", "resumeIfReady", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
 
 native_types = (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift").read_text()
 fixture = fixture.replace("__TYPES__", native_types[native_types.index("struct LDACFormat:"):native_types.index("enum LDACState:")])

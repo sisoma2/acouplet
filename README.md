@@ -24,12 +24,15 @@ macOS Bluetooth settings first. If another headphone-control app is
 running, close it before connecting through Acouplet.
 
 Automatic LDAC is enabled by default for every recognized Sony model that
-supports it when selected as the Mac’s audio output and its headphone controls
-are ready. Setup currently requires a macOS administrator account.
+supports it. When connecting through Acouplet, the app attempts LDAC directly
+without first establishing ordinary Bluetooth audio. It can also begin setup
+as the selected headphones connect, before their normal audio output is ready.
+Setup currently requires a macOS administrator account.
 Turn on LDAC in the menu to open the included audio driver installer, then
 restart the Mac after installation. Restarting only the app does not reload
-the driver. After setup, LDAC starts automatically when the headphone controls
-and audio connection are ready. Turning LDAC off remembers that choice for
+the driver. Playback stays silent until the headphone controls and volume are
+confirmed. If setup fails, Acouplet restores ordinary Bluetooth audio and the
+previous Mac output. Turning LDAC off remembers that choice for
 that device, including after restarting Acouplet. Existing choices to hide LDAC
 controls are also preserved.
 
