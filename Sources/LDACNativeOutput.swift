@@ -72,6 +72,7 @@ final class LDACNativeOutput {
     private(set) var userVolumeChanged = false
     private(set) var hasInitialVolume = false
     private var ready = false
+    private var hasFinishedPreparation = false
     private var restoring = false
     private var ownsLease = false
     private var observesPriority = false
@@ -368,7 +369,7 @@ final class LDACNativeOutput {
         for selector in handoffSelectors {
             let current: AudioObjectID = try Self.read(Self.system, selector: selector, initial: 0)
             guard try LDACNativeVolume.canHandoff(currentUID: Self.readString(current, selector: kAudioDevicePropertyDeviceUID),
-                                                 savedUID: savedDefaults[selector]) else {
+                                                 savedUID: savedDefaults[selector]) || isTargetOutput(current) else {
                 throw OutputError("The Mac audio output changed before LDAC handoff. Retry LDAC.", userFacing: String(localized: "The Mac audio output changed before LDAC started. Try again."))
             }
         }
@@ -385,6 +386,12 @@ final class LDACNativeOutput {
         record("selected", reason: "silent endpoint selected")
     }
 
+    private func isTargetOutput(_ output: AudioObjectID) throws -> Bool {
+        try Self.canTransferControls(uid: Self.readString(output, selector: kAudioDevicePropertyDeviceUID),
+                                     transport: Self.read(output, selector: kAudioDevicePropertyTransportType, initial: UInt32(0)),
+                                     address: address)
+    }
+
     func validateForRecovery() throws {
         try verifyRoute()
     }
@@ -397,6 +404,7 @@ final class LDACNativeOutput {
     func finishPreparation() throws {
         try verifyRoute()
         ready = true
+        hasFinishedPreparation = true
         try applyControls()
         record("prepared", reason: "scalar=\(controls.scalar) userMuted=\(controls.muted)")
     }
@@ -501,10 +509,21 @@ final class LDACNativeOutput {
         guard try leaseIsOwned(), try Self.isSelectableEndpoint(device) else { throw OutputError("The experimental LDAC output became unavailable.", userFacing: String(localized: "LDAC audio became unavailable. Try again.")) }
         guard try hasSelectedFormat() else { throw OutputError(String(localized: "The Mac audio format changed. LDAC stopped.")) }
         if isSelected {
+            var reclaim: [AudioObjectPropertySelector] = []
             for selector in handoffSelectors {
                 let current: AudioObjectID = try Self.read(Self.system, selector: selector, initial: 0)
                 let currentUID = try Self.readString(current, selector: kAudioDevicePropertyDeviceUID)
-                guard currentUID == (handoffOutputUID ?? Self.uid) else { throw OutputError(String(localized: "The Mac audio output changed. LDAC stopped.")) }
+                if currentUID != (handoffOutputUID ?? Self.uid) {
+                    guard !hasFinishedPreparation, !restoring, !restoringOwner, handoffOutputUID == nil,
+                          try isTargetOutput(current) else { throw OutputError(String(localized: "The Mac audio output changed. LDAC stopped.")) }
+                    reclaim.append(selector)
+                }
+            }
+            for selector in reclaim {
+                try Self.write(Self.system, selector: selector, value: device)
+            }
+            if !reclaim.isEmpty {
+                record("startup-route-reclaimed", reason: "native headphone output selected during LDAC startup")
             }
         }
     }

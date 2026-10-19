@@ -209,6 +209,10 @@ availability. Existing profiles with LDAC manually enabled also adopt automatic
 activation once when upgrading. Connected headphones selected in Acouplet start
 LDAC automatically at launch even when another Mac audio output is selected.
 Direct startup waits for headphone controls and volume readback before playback.
+During startup, LDAC takes precedence when macOS automatically selects the same
+headphones as its ordinary Bluetooth output, including a late switch after handoff.
+Other output choices and output changes after playback starts remain respected.
+A failed automatic start can be attempted again on the next headphone connection.
 Activation requires a current driver and respects another active music source. Manual Off persists
 its suppression across reconnects; another multipoint source taking ownership
 also suppresses automatic activation until the user explicitly enables LDAC.

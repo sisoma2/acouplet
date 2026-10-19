@@ -278,6 +278,7 @@ final class LDACNativeOutput {
     var encodingSampleRateHz = 48000.0
     var expected = LDACNativeVolume(scalar: 0, muted: true)
     var ready = false
+    var hasFinishedPreparation = false
     var userVolumeChanged = false
     var hasInitialVolume = false
     var restoring = false
@@ -580,6 +581,81 @@ enum Check {
         }
         try! Output.writeHAL(5, selector: kAudioDevicePropertyMute, scope: kAudioObjectPropertyScopeOutput, value: UInt32(1), requiringLease: true)
         try! Output.writeHAL(5, selector: kAudioDevicePropertyMute, scope: kAudioObjectPropertyScopeOutput, value: UInt32(1))
+
+        for shared in [false, true] {
+            for suffix in ["", ":output"] {
+                Output.reset()
+                Output.identities[6] = Output.targetUID.replacingOccurrences(of: ":", with: "-").lowercased() + suffix
+                Output.current = [Output.defaultSelectors[0]: 7, Output.defaultSelectors[1]: shared ? 7 : 8]
+                Output.available = [Output.uid: 5, "speakers": 7, "user-output": 8]
+                let output = Output()
+                output.isSelected = false
+                try! await output.claim(model: "Sony", targetAddress: Output.targetUID)
+                Output.current[Output.defaultSelectors[0]] = 6
+                if shared { Output.current[Output.defaultSelectors[1]] = 6 }
+                try! output.selectForHandoff()
+                precondition(Output.current[Output.defaultSelectors[0]] == 5)
+                precondition(Output.current[Output.defaultSelectors[1]] == (shared ? 5 : 8))
+                Output.current[Output.defaultSelectors[0]] = 6
+                if shared { Output.current[Output.defaultSelectors[1]] = 6 }
+                Output.writes = []
+                try! output.validateForRecovery()
+                precondition(Output.writes.count == (shared ? 2 : 1))
+                precondition(Output.current[Output.defaultSelectors[0]] == 5)
+                precondition(Output.current[Output.defaultSelectors[1]] == (shared ? 5 : 8))
+                try! output.finishPreparation()
+                _ = output.silence()
+                Output.current[Output.defaultSelectors[0]] = 6
+                Output.writes = []
+                do {
+                    try output.validateForRecovery()
+                    preconditionFailure("Active playback overrode a later headphone output choice")
+                } catch {}
+                precondition(Output.writes.isEmpty)
+                _ = await output.restoreAndRelease()
+            }
+        }
+        for mismatch in ["other-headphones", "same-address-usb", "invalid-address"] {
+            Output.reset()
+            Output.current = Dictionary(uniqueKeysWithValues: Output.defaultSelectors.map { ($0, 7) })
+            Output.available = [Output.uid: 5, "speakers": 7]
+            let output = Output()
+            output.isSelected = false
+            try! await output.claim(model: "Sony", targetAddress: Output.targetUID)
+            Output.identities[6] = mismatch == "other-headphones" ? Output.previousAddress : mismatch == "invalid-address" ? "invalid" : Output.targetUID
+            if mismatch == "same-address-usb" { Output.transports[6] = kAudioDeviceTransportTypeUSB }
+            Output.current[Output.defaultSelectors[0]] = 6
+            do {
+                try output.selectForHandoff()
+                preconditionFailure("Startup overrode an unrelated output: \(mismatch)")
+            } catch {}
+            precondition(Output.writes.isEmpty && !output.isSelected)
+            Output.current = Dictionary(uniqueKeysWithValues: Output.defaultSelectors.map { ($0, 5) })
+            output.isSelected = true
+            Output.current[Output.defaultSelectors[0]] = 6
+            do {
+                try output.validateForRecovery()
+                preconditionFailure("Startup reclaimed an unrelated output: \(mismatch)")
+            } catch {}
+            precondition(Output.writes.isEmpty)
+            _ = await output.restoreAndRelease()
+        }
+        for restriction in ["mixed-routes", "restoring", "owner-recovery", "selective-routing", "lost-lease"] {
+            Output.reset()
+            let output = Output()
+            Output.current[Output.defaultSelectors[0]] = 6
+            if restriction == "mixed-routes" { Output.current[Output.defaultSelectors[1]] = 8 }
+            output.restoring = restriction == "restoring"
+            output.restoringOwner = restriction == "owner-recovery"
+            if restriction == "selective-routing" { output.handoffOutputUID = "speakers" }
+            if restriction == "lost-lease" { Output.lease.replaceOwner() }
+            do {
+                try output.validateForRecovery()
+                preconditionFailure("Startup reclaimed a route despite \(restriction)")
+            } catch {}
+            precondition(Output.writes.isEmpty)
+        }
+        print("PASS reconnect handoff accepts the target Sony output, reclaims late native selection only during startup, and preserves unrelated routes and active playback choices")
 
         for shared in [false, true] {
             Output.reset()

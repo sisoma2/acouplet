@@ -473,8 +473,13 @@ final class LDACController: ObservableObject {
     }
 
     func refreshPreferredCodec(resetAttempts: Bool = false) {
-        if resetAttempts { automaticStartAttempts.removeAll() }
-        guard state == .off, !isSessionRunning, requestedAddress == nil,
+        switch state {
+        case .off:
+            if resetAttempts { automaticStartAttempts.removeAll() }
+        case .failed: break
+        default: return
+        }
+        guard !isSessionRunning, requestedAddress == nil,
               cleanupTask == nil, recoveryTask == nil,
               multipointConflictAddress == nil, multipointShutdownAddress == nil,
               let devices, !devices.isSystemSleeping, !devices.isTerminating,
