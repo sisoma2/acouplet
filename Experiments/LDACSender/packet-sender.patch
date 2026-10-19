@@ -1,0 +1,119 @@
+--- a/Helpers/LDAC/DirectAVDTPLiveMediaProbe.m
++++ b/Helpers/LDAC/DirectAVDTPLiveMediaProbe.m
+@@ -27 +27 @@
+-#include "LDACPacketTrace.h"
++#include "LDACSenderExperiment.h"
+@@ -47,0 +48 @@
++- (void)sendData:(NSData *)data withCompletion:(void (^)(NSError *error))completion;
+@@ -694,2 +695,2 @@
+-    double enqueuedAt, sentAt, lateness;
+-    BOOL gainAck, held;
++    double enqueuedAt, sentAt, lateness, completedAt;
++    BOOL gainAck, held, apiCompleted;
+@@ -763,0 +765,5 @@
++}
++
++static LiveQueuePacket *LiveQueueNextPacketToSubmit(LiveQueue *queue, NSUInteger window) {
++    if (!window || window > LDACPacketWindowMaximum || queue->send >= queue->tail || queue->send - queue->head >= window) return NULL;
++    return LiveQueueAt(queue, queue->send);
+@@ -1103,0 +1110,3 @@
++@property BOOL packetSender;
++@property BOOL classicTransport;
++@property NSUInteger packetWindow;
+@@ -1547,0 +1557,3 @@
++    BOOL packetSender = probe.packetSender && !probe.classicTransport;
++    NSUInteger packetWindow = packetSender ? (probe.packetWindow ?: 1) : 1;
++    LDACPacketCompletions *completions = packetSender ? [LDACPacketCompletions new] : nil;
+@@ -1572,0 +1585,8 @@
++        if (probe.packetSender && probe.classicTransport) {
++            printf("SENDER_FALLBACK requestedMode=packet requestedWindow=%lu effectiveMode=socket effectiveWindow=1 reason=classic-packet-request-unimplemented\n",
++                probe.packetWindow ?: 1);
++        }
++        if (packetSender && ![owned respondsToSelector:@selector(sendData:withCompletion:)]) {
++            printf("SENDER_UNAVAILABLE mode=packet reason=missing-packet-api\n");
++            break;
++        }
+@@ -1606,2 +1626,3 @@
+-                "SENDER_CONFIG mode=socket window=1 localCompletion=socket-drain controllerCompletion=external-hci traceSeconds=%u sampleRate=%u bitrateKbps=%d adaptive=%d reserveMs=%.3f\n",
+-                probe.traceSeconds, profile.sampleRate, profile.bitrateKbps,
++                "SENDER_CONFIG mode=%s window=%lu requestedMode=%s requestedWindow=%lu localCompletion=%s controllerCompletion=external-hci traceSeconds=%u sampleRate=%u bitrateKbps=%d adaptive=%d reserveMs=%.3f\n",
++                packetSender ? "packet" : "socket", packetWindow, probe.packetSender ? "packet" : "socket", probe.packetWindow ?: 1,
++                packetSender ? "api-reply" : "socket-drain", probe.traceSeconds, profile.sampleRate, profile.bitrateKbps,
+@@ -1662 +1683 @@
+-                if (LiveQueueObserve(sendq, writable)) {
++                if (!packetSender && LiveQueueObserve(sendq, writable)) {
+@@ -1668,0 +1690,18 @@
++            if (packetSender) {
++                for (uint64_t index = sendq->head; index < sendq->send; index++) {
++                    LiveQueuePacket *submitted = LiveQueueAt(sendq, index);
++                    LDACPacketCompletion completion;
++                    if (submitted->apiCompleted || ![completions takePacket:index completion:&completion]) continue;
++                    LDACPacketTraceAppend(&trace, LDACTraceAPIComplete, index, submitted->bytes, submitted->length,
++                        completion.at, completion.status);
++                    if (completion.status) {
++                        printf("PACKET_API_FAILED packet=%llu status=%ld domain=%s\n", index, completion.status, completion.domain);
++                        probe.failed = YES;
++                        return 1;
++                    }
++                    submitted->apiCompleted = YES;
++                    submitted->completedAt = completion.at;
++                    lastProgressAt = now;
++                    drainBreached = NO;
++                }
++            }
+@@ -1670,3 +1709,4 @@
+-            while ((done = LiveQueueNextDrained(sendq))) {
+-                LDACPacketTraceAppend(&trace, LDACTraceSocketDrain, sendq->head, done->bytes, done->length, now, 0);
+-                double drainDuration = now - done->sentAt;
++            while ((done = packetSender ? (sendq->head < sendq->send && LiveQueueAt(sendq, sendq->head)->apiCompleted ?
++                    LiveQueueAt(sendq, sendq->head) : NULL) : LiveQueueNextDrained(sendq))) {
++                if (!packetSender) LDACPacketTraceAppend(&trace, LDACTraceSocketDrain, sendq->head, done->bytes, done->length, now, 0);
++                double drainDuration = (packetSender ? done->completedAt : now) - done->sentAt;
+@@ -1746 +1786 @@
+-            while ((next = LiveQueueNextToSend(sendq, writable))) {
++            while ((next = packetSender ? LiveQueueNextPacketToSubmit(sendq, packetWindow) : LiveQueueNextToSend(sendq, writable))) {
+@@ -1750 +1790,15 @@
+-                ssize_t sent = send(fd, next->bytes, next->length, 0);
++                ssize_t sent;
++                if (packetSender) {
++                    if (next->length > owned.outgoingMTU || ![completions registerPacket:packetIndex]) {
++                        probe.failed = YES;
++                        return 1;
++                    }
++                    NSData *data = [NSData dataWithBytes:next->bytes length:next->length];
++                    [owned sendData:data withCompletion:^(NSError *error) {
++                        (void)data;
++                        [completions completePacket:packetIndex at:MonotonicTime() status:error ? (error.code ?: -1) : 0 domain:error.domain];
++                    }];
++                    sent = (ssize_t)next->length;
++                } else {
++                    sent = send(fd, next->bytes, next->length, 0);
++                }
+@@ -2028,0 +2083,2 @@
++            slot->apiCompleted = NO;
++            slot->completedAt = 0;
+@@ -2102,2 +2158,3 @@
+-        uint32_t traceSeconds = 0;
+-        BOOL traceSeen = NO;
++        NSString *sender = @"socket";
++        uint32_t packetWindow = 1, traceSeconds = 0;
++        BOOL senderSeen = NO, windowSeen = NO, traceSeen = NO;
+@@ -2127,0 +2185,6 @@
++            } else if (!strcmp(argv[index], "--sender") && !senderSeen && index + 1 < argc) {
++                sender = [NSString stringWithUTF8String:argv[++index]];
++                senderSeen = YES;
++            } else if (!strcmp(argv[index], "--packet-window") && !windowSeen && index + 1 < argc) {
++                argumentsValid = ParseUnsigned([NSString stringWithUTF8String:argv[++index]], &packetWindow);
++                windowSeen = YES;
+@@ -2139 +2202,3 @@
+-        argumentsValid = argumentsValid && traceSeconds <= 60 && (!traceFileSeen || traceSeconds > 0);
++        argumentsValid = argumentsValid && ([sender isEqualToString:@"socket"] || [sender isEqualToString:@"packet"]) &&
++            packetWindow >= 1 && packetWindow <= LDACPacketWindowMaximum && traceSeconds <= 60 &&
++            ([sender isEqualToString:@"packet"] || packetWindow == 1) && (!traceFileSeen || traceSeconds > 0);
+@@ -2146 +2211 @@
+-                    "       optional packet timing: --trace-seconds 0..60\n"
++                    "       sender experiment: --sender socket|packet --packet-window 1..16 --trace-seconds 0..60\n"
+@@ -2175,0 +2241,3 @@
++        probe.packetSender = [sender isEqualToString:@"packet"];
++        probe.classicTransport = YES;
++        probe.packetWindow = packetWindow;

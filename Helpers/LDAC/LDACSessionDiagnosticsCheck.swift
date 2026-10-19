@@ -143,6 +143,26 @@ enum LDACSessionDiagnosticsCheck {
         let suite = "LDACSessionDiagnosticsCheck.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
+        let defaultTraceArguments = try LDACSenderDiagnostics.arguments(in: defaults)
+        precondition(defaultTraceArguments.isEmpty)
+        defaults.set("packet", forKey: "LDACSenderExperimentMode")
+        defaults.set(4, forKey: "LDACSenderExperimentWindow")
+        let legacyExperimentArguments = try LDACSenderDiagnostics.arguments(in: defaults)
+        precondition(legacyExperimentArguments.isEmpty)
+        for seconds in [0, 1, 15, 60] {
+            defaults.set(seconds, forKey: LDACSenderDiagnostics.traceKey)
+            let arguments = try LDACSenderDiagnostics.arguments(in: defaults)
+            precondition(arguments == ["--trace-seconds", String(seconds)])
+        }
+        for value: Any in [-1, 61, true, 1.5, "15", Double.infinity] {
+            defaults.set(value, forKey: LDACSenderDiagnostics.traceKey)
+            do {
+                _ = try LDACSenderDiagnostics.arguments(in: defaults)
+                preconditionFailure("Invalid trace duration accepted")
+            } catch {}
+        }
+        defaults.removeObject(forKey: LDACSenderDiagnostics.traceKey)
+        print("LDAC packet timing defaults off; trace duration validated; retired sender preferences ignored")
         let control = LDACPriorityControl(request: { _, _ in }, state: { .init(phase: "idle", error: nil) })
         var made = 0
         precondition(!LDACPlaybackPriority.isDisabled(in: defaults))

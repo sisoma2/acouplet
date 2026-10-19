@@ -532,6 +532,7 @@ final class LDACNativeSession: @unchecked Sendable {
     private var logURL: URL?
     private var diagnosticsLock: FileHandle?
     private var loggedBytes = 0
+    private var senderDiagnosticArguments: [String] = []
 
     init(id: UUID, address: String, helpers: Helpers, gain: Double, outputDeviceUID: String? = nil,
          priority: LDACPriorityControl? = nil,
@@ -624,6 +625,7 @@ final class LDACNativeSession: @unchecked Sendable {
             diagnosticsLock = nil
         }
         do {
+            senderDiagnosticArguments = try LDACSenderDiagnostics.arguments()
             let sessions = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("LDAC Sessions")
             try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true,
@@ -636,6 +638,10 @@ final class LDACNativeSession: @unchecked Sendable {
             FileManager.default.createFile(atPath: logURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
             log = try FileHandle(forWritingTo: logURL)
             self.logURL = logURL
+            if let index = senderDiagnosticArguments.firstIndex(of: "--trace-seconds"),
+               Int(senderDiagnosticArguments[index + 1]).map({ $0 > 0 }) == true {
+                senderDiagnosticArguments += ["--trace-file", directory.appendingPathComponent("packet-trace.log").path]
+            }
             if restoringOnly {
                 shutdownChecked = true
                 restoring = true
@@ -898,7 +904,7 @@ final class LDACNativeSession: @unchecked Sendable {
                 guard pipe(&descriptors) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
                 pcmRead = descriptors[0]
                 pcmWrite = descriptors[1]
-                try launch("media", executable: helpers.media, arguments: ["--media", "--pcm-fd", "3", "--address", address] + configuration.mediaArguments, pcm: pcmRead)
+                try launch("media", executable: helpers.media, arguments: ["--media", "--pcm-fd", "3", "--address", address] + configuration.mediaArguments + senderDiagnosticArguments, pcm: pcmRead)
                 Darwin.close(pcmRead)
                 pcmRead = -1
             } else if line.hasPrefix("OPEN_ACCEPTED") && !shouldStop {
@@ -1719,6 +1725,20 @@ final class LDACNativeSession: @unchecked Sendable {
             loggedBytes += data.count
         } catch {}
         return loggedBytes
+    }
+}
+
+enum LDACSenderDiagnostics {
+    static let traceKey = "LDACSenderTraceSeconds"
+
+    static func arguments(in defaults: UserDefaults = .standard) throws -> [String] {
+        guard let object = defaults.object(forKey: traceKey) else { return [] }
+        guard let number = object as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite, number.doubleValue.rounded() == number.doubleValue,
+              (0...60).contains(number.intValue) else {
+            throw LDACSessionError("Invalid LDAC sender trace duration.")
+        }
+        return ["--trace-seconds", String(number.intValue)]
     }
 }
 

@@ -24,6 +24,7 @@
 #include "ldacBT.h"
 #include "ldacBT_ex.h"
 #include "AdaptiveLDAC/LDACAdaptivePolicy.h"
+#include "LDACPacketTrace.h"
 
 #ifndef ACOUPLET_LDAC_PROBE_ONLY
 #define ACOUPLET_LDAC_PROBE_ONLY 1
@@ -1100,6 +1101,8 @@ static BOOL SelfTest(void) {
 @property NSUInteger received;
 @property UInt16 realCID;
 @property LDACProfile profile;
+@property unsigned int traceSeconds;
+@property FILE *traceOutput;
 @property int pcmFD;
 @property uint8_t *pcmRing;
 @property NSUInteger pcmHead;
@@ -1139,6 +1142,7 @@ static BOOL SelfTest(void) {
 
 @implementation DirectMediaProbe
 - (void)dealloc {
+    if (_traceOutput) fclose(_traceOutput);
     if (_encoder) ldacBT_free_handle(_encoder);
     free(_pcmRing);
     if (_pcmFD >= 0) close(_pcmFD);
@@ -1540,6 +1544,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
     uint64_t generatedSamples = 0;
     __block uint64_t sentRTPSamples = 0;
     LiveQueue sendQueue = {0};
+    __block LDACPacketTrace trace = {0};
 #if ACOUPLET_LDAC_PROBE_ONLY
     uint64_t targetSamples = (uint64_t)seconds * profile.sampleRate;
     const BOOL continuous = seconds == 0;
@@ -1593,6 +1598,15 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
         printf("SOCKET fd=%d CID=%04X outgoingMTU=%u type=%d baseline=%d\n",
                fd, owned.cid, owned.outgoingMTU, socketType, baseline);
         started = MonotonicTime();
+        if (!LDACPacketTraceInit(&trace, probe.traceSeconds, started, NSDate.date.timeIntervalSince1970)) break;
+        FILE *configurationOutputs[] = {stdout, probe.traceOutput};
+        for (NSUInteger index = 0; index < 2; index++) {
+            if (!configurationOutputs[index]) continue;
+            fprintf(configurationOutputs[index],
+                "SENDER_CONFIG mode=socket window=1 localCompletion=socket-drain controllerCompletion=external-hci traceSeconds=%u sampleRate=%u bitrateKbps=%d adaptive=%d reserveMs=%.3f\n",
+                probe.traceSeconds, profile.sampleRate, profile.bitrateKbps,
+                profile.adaptive, 1000.0 * probe.pcmReserveBytes / (profile.sampleRate * 8));
+        }
         double paceStart = started;
         probe.degradation = NewDegradation(started, profile.sampleRate, probe.pcmSkippedBytes);
         double deadline = continuous ? INFINITY : started + seconds + 1;
@@ -1654,6 +1668,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
             }
             LiveQueuePacket *done;
             while ((done = LiveQueueNextDrained(sendq))) {
+                LDACPacketTraceAppend(&trace, LDACTraceSocketDrain, sendq->head, done->bytes, done->length, now, 0);
                 double drainDuration = now - done->sentAt;
                 maximumDrainSinceProgress = fmax(maximumDrainSinceProgress, drainDuration);
                 statsMaxDrain = fmax(statsMaxDrain, drainDuration);
@@ -1729,10 +1744,14 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
             }
             LiveQueuePacket *next;
             while ((next = LiveQueueNextToSend(sendq, writable))) {
+                uint64_t packetIndex = sendq->send;
                 double beforeSend = MonotonicTime();
+                LDACPacketTraceAppend(&trace, LDACTraceSubmit, packetIndex, next->bytes, next->length, beforeSend, 0);
                 ssize_t sent = send(fd, next->bytes, next->length, 0);
                 double afterSend = MonotonicTime();
                 int sendError = sent < 0 ? errno : 0;
+                LDACPacketTraceAppend(&trace, LDACTraceReturn, packetIndex, next->bytes, next->length, afterSend,
+                    sent == (ssize_t)next->length ? 0 : (sendError ?: -1));
                 if (sent < 0 && (sendError == EAGAIN || sendError == EWOULDBLOCK)) {
                     writable = 0;
                     break;
@@ -2010,6 +2029,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
             slot->gainAck = probe.gainAckReady;
             probe.gainAckReady = NO;
             if (sendQueue.tail == sendQueue.head) lastProgressAt = slot->enqueuedAt;
+            LDACPacketTraceAppend(&trace, LDACTraceEnqueue, sendQueue.tail, slot->bytes, slot->length, slot->enqueuedAt, 0);
             LiveQueueCommit(&sendQueue);
             BOOL stopSending = service() != 0;
             while (!stopSending && LiveQueueFull(&sendQueue, capSamples)) {
@@ -2064,6 +2084,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
            sourceResync);
     if (realtimeStatus == KERN_SUCCESS) printf("REALTIME_POLICY_RELEASED status=%d\n", ReleaseSenderRealtime());
     [NSProcessInfo.processInfo endActivity:activity];
+    LDACPacketTraceFinish(&trace, probe.traceOutput ?: stdout);
     return result == 0;
 }
 
@@ -2078,6 +2099,10 @@ int main(int argc, const char *argv[]) {
         uint32_t sampleRate = 48000;
         uint32_t reserveMilliseconds = 250;
         BOOL reserveSeen = NO;
+        uint32_t traceSeconds = 0;
+        BOOL traceSeen = NO;
+        NSString *traceFile = nil;
+        BOOL traceFileSeen = NO;
         NSString *quality = @"low";
         NSString *address = nil;
         BOOL pcmSeen = NO, addressSeen = NO, rateSeen = NO, qualitySeen = NO;
@@ -2100,16 +2125,26 @@ int main(int argc, const char *argv[]) {
             } else if (!strcmp(argv[index], "--quality") && !qualitySeen && index + 1 < argc) {
                 quality = [NSString stringWithUTF8String:argv[++index]];
                 qualitySeen = YES;
+            } else if (!strcmp(argv[index], "--trace-seconds") && !traceSeen && index + 1 < argc) {
+                argumentsValid = ParseUnsigned([NSString stringWithUTF8String:argv[++index]], &traceSeconds);
+                traceSeen = YES;
+            } else if (!strcmp(argv[index], "--trace-file") && !traceFileSeen && index + 1 < argc) {
+                traceFile = [NSString stringWithUTF8String:argv[++index]];
+                traceFileSeen = YES;
+                argumentsValid = traceFile.length > 0 && [traceFile lengthOfBytesUsingEncoding:NSUTF8StringEncoding] <= 4096;
             } else argumentsValid = NO;
         }
         LDACProfile profile;
         argumentsValid = argumentsValid && pcmSeen && addressSeen && SelectProfile(sampleRate, quality, &profile) && SelectPCMReserve(reserveMilliseconds, &profile);
+        argumentsValid = argumentsValid && traceSeconds <= 60 && (!traceFileSeen || traceSeconds > 0);
         if (!argumentsValid) {
 #if ACOUPLET_LDAC_PROBE_ONLY
             fprintf(stderr, "Usage: %s --media --pcm-fd FD --address ADDRESS [--sample-rate 44100|48000|88200|96000] [--quality auto|low|mid|high] [--pcm-reserve-ms 50..500]; stdin: open, start live GAIN SECONDS (0=continuous, 1..60), gain VALUE, stop, close, transport-closed\n"
 #else
             fprintf(stderr, "Usage: %s --media --pcm-fd FD --address ADDRESS [--sample-rate 44100|48000|88200|96000] [--quality auto|low|mid|high] [--pcm-reserve-ms 50..500]; stdin: open, start live GAIN 0, gain VALUE, stop, close, transport-closed\n"
 #endif
+                    "       optional packet timing: --trace-seconds 0..60\n"
+                    "       optional trace destination: --trace-file NEW_FILE\n"
                     "       %s --self-test\n", argv[0], argv[0]);
             return 2;
         }
@@ -2138,6 +2173,16 @@ int main(int argc, const char *argv[]) {
                peer.identifier.UUIDString.UTF8String);
         DirectMediaProbe *probe __attribute__((objc_precise_lifetime)) = [DirectMediaProbe new];
         probe.profile = profile;
+        probe.traceSeconds = traceSeconds;
+        if (traceFile) {
+            int traceFD = open(traceFile.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+            if (traceFD >= 0) probe.traceOutput = fdopen(traceFD, "w");
+            if (!probe.traceOutput) {
+                if (traceFD >= 0) close(traceFD);
+                printf("PACKET_TRACE_OPEN_FAILED errno=%d\n", errno);
+                return 4;
+            }
+        }
         probe.controlPending = [NSMutableData data];
         probe.pcmFD = (int)pcmDescriptor;
         probe.pcmRing = malloc(profile.capacityBytes);

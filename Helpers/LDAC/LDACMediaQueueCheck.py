@@ -38,6 +38,11 @@ static void Check(uint32_t rate, NSString *quality) {
         LDACProfile profile;
         Require(SelectProfile(rate, quality, &profile), "Invalid fixture profile");
         probe.profile = profile;
+        if ([quality isEqualToString:@"high"]) {
+            probe.traceSeconds = 3;
+            probe.traceOutput = tmpfile();
+            Require(probe.traceOutput != NULL, "Could not allocate packet trace");
+        }
         probe.pcmFD = pcm[0];
         probe.pcmRing = calloc(1, profile.capacityBytes);
         Require(probe.pcmRing != NULL, "Could not allocate PCM ring");
@@ -88,6 +93,20 @@ static void Check(uint32_t rate, NSString *quality) {
             Require(write(controlWriter, "stop\n", 5) == 5, "Stop command failed");
         });
         BOOL succeeded = FeedLive(probe, (CBL2CAPChannel *)channel, 0, 0);
+        if (probe.traceOutput) {
+            rewind(probe.traceOutput);
+            char line[1024];
+            BOOL anchor = NO, footer = NO, enqueue = NO, submit = NO, returned = NO, drain = NO;
+            while (fgets(line, sizeof(line), probe.traceOutput)) {
+                anchor |= strstr(line, "PACKET_TRACE_BEGIN") != NULL;
+                footer |= strstr(line, "PACKET_TRACE_END") != NULL;
+                enqueue |= strstr(line, "event=enqueue") != NULL;
+                submit |= strstr(line, "event=submit") != NULL;
+                returned |= strstr(line, "event=return") != NULL;
+                drain |= strstr(line, "event=socket-drain") != NULL;
+            }
+            Require(anchor && footer && enqueue && submit && returned && drain, "Packet timing trace was incomplete");
+        }
         shutdown(sockets[0], SHUT_WR);
         Require(dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) == 0, "Fixture workers did not finish");
         Require(succeeded && !probe.failed && !probe.pcmSkippedBytes, "Sender did not recover the simulated link stall without skipping PCM");
