@@ -12,10 +12,12 @@ private enum LDACOwnerCommand: Codable, Sendable {
     case handoff
     case validate
     case reconnect
+    case reconfigure(LDACSampleRate)
     case prepared
     case silence
     case start(UUID, LDACConfiguration, Bool, Bool)
     case stop(Bool)
+    case restart
     case recover(String)
     case verify(String)
     case allowHandoff
@@ -289,6 +291,7 @@ final class LDACOwnerOutput {
     func selectForHandoff() async throws { try await request(.handoff) }
     func validateForRecovery() async throws { try await request(.validate) }
     func prepareForReconnect() async throws { try await request(.reconnect) }
+    func reconfigure(sampleRate: LDACSampleRate) async throws { try await request(.reconfigure(sampleRate)) }
     func finishPreparation() async throws { try await request(.prepared) }
 
     func silence() {
@@ -354,6 +357,9 @@ final class LDACOwnerOutput {
 
 @MainActor
 final class LDACOwnerSession {
+    #if DEBUG
+    var simulatedStop: ((Bool) -> Void)?
+    #endif
     let id: UUID
     private let output: LDACOwnerOutput
     private let configuration: LDACConfiguration
@@ -371,7 +377,18 @@ final class LDACOwnerSession {
     }
 
     func start() { output.send(.start(id, configuration, recoveryAttempt, restoringOnly)) }
-    func stop(restoreAudio: Bool) { output.send(.stop(restoreAudio)) }
+    func stop(restoreAudio: Bool) {
+        #if DEBUG
+        if let simulatedStop { simulatedStop(restoreAudio); return }
+        #endif
+        output.send(.stop(restoreAudio))
+    }
+    func stopForRestart() {
+        #if DEBUG
+        if let simulatedStop { simulatedStop(false); return }
+        #endif
+        output.send(.restart)
+    }
     func recoverConnection(reason: String) { output.send(.recover(reason)) }
     func verifyConnectionLoss(reason: String) { output.send(.verify(reason)) }
     func allowHandoff() { output.send(.allowHandoff) }
@@ -419,6 +436,7 @@ enum LDACOwnerWorker {
         private var address: String?
         private var stoppingRestore = true
         private var restoreAfterSession = false
+        private var restartingPlayback = false
         private var targetDisconnected = false
 
         func watchParent(_ parent: pid_t) {
@@ -524,10 +542,24 @@ enum LDACOwnerWorker {
                 case .reconnect:
                     priority = try LDACPlaybackPriority.control { try output?.prepareForReconnect() }
                     if priority == nil { try output?.validateForRecovery() }
+                case let .reconfigure(sampleRate):
+                    guard session == nil, claimTask == nil, let output else { throw LDACOwnerError(message: String(localized: "LDAC did not stop completely.")) }
+                    claimTask = Task {
+                        do {
+                            try await output.reconfigure(sampleRate: sampleRate)
+                            try Task.checkCancellation()
+                            send(.recovery(output.routeRecovery))
+                            reply(request)
+                        } catch { reply(request, error: error.localizedDescription) }
+                        claimTask = nil
+                        if parentEnded { await restoreAfterParentExit() }
+                    }
+                    return
                 case .prepared: try output?.finishPreparation()
                 case .silence: output?.silence()
                 case let .start(id, configuration, recovery, restore):
                     guard session == nil, let address, claimTask == nil else { throw LDACOwnerError(message: String(localized: "LDAC did not stop completely.")) }
+                    restartingPlayback = false
                     if !restore { try output?.updateLatency(frames: LDACPipelineLatency(configuration: configuration).frames) }
                     let session = LDACNativeSession(id: id, address: address, helpers: .init(bundle: .main), gain: 0,
                         outputDeviceUID: LDACNativeOutput.uid, priority: restore ? nil : priority, configuration: configuration,
@@ -539,7 +571,7 @@ enum LDACOwnerWorker {
                         }
                         if case let .finished(completion) = event {
                             self.session = nil
-                            self.restoreAfterSession = completion.canRetry && !completion.waitForReconnect
+                            self.restoreAfterSession = (completion.canRetry || self.restartingPlayback && completion.targetDisconnected) && !completion.waitForReconnect
                             self.targetDisconnected = completion.targetDisconnected
                         }
                         self.send(.session(id, event))
@@ -548,6 +580,7 @@ enum LDACOwnerWorker {
                     self.session = session
                     session.start()
                 case let .stop(restore): stoppingRestore = stoppingRestore && restore; session?.stop(restoreAudio: stoppingRestore)
+                case .restart: restartingPlayback = true; session?.stopForRestart()
                 case let .recover(reason): session?.recoverConnection(reason: reason)
                 case let .verify(reason): session?.verifyConnectionLoss(reason: reason)
                 case .allowHandoff: session?.allowHandoff()

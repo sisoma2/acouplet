@@ -134,6 +134,19 @@ struct ContinuousClock {
 func AudioObjectRemovePropertyListenerBlock(_ object: UInt32, _ property: inout AudioObjectPropertyAddress,
     _ queue: DispatchQueue, _ block: () -> Void) -> Int32 { noErr }
 func AudioObjectHasProperty(_ object: UInt32, _ property: inout AudioObjectPropertyAddress) -> Bool { true }
+func AudioObjectGetPropertyDataSize(_ object: UInt32, _ property: inout AudioObjectPropertyAddress,
+                                    _ qualifierSize: UInt32, _ qualifier: UnsafeRawPointer?, _ size: inout UInt32) -> OSStatus {
+    precondition(property.mSelector == kAudioDevicePropertyAvailableNominalSampleRates)
+    size = UInt32(MemoryLayout<AudioValueRange>.stride)
+    return noErr
+}
+func AudioObjectGetPropertyData(_ object: UInt32, _ property: inout AudioObjectPropertyAddress,
+                               _ qualifierSize: UInt32, _ qualifier: UnsafeRawPointer?, _ size: inout UInt32,
+                               _ data: UnsafeMutableRawPointer) -> OSStatus {
+    precondition(property.mSelector == kAudioDevicePropertyAvailableNominalSampleRates)
+    data.storeBytes(of: AudioValueRange(mMinimum: 44100, mMaximum: 96000), as: AudioValueRange.self)
+    return noErr
+}
 func AudioObjectIsPropertySettable(_ object: UInt32, _ property: inout AudioObjectPropertyAddress,
     _ settable: inout DarwinBoolean) -> OSStatus { settable = true; return noErr }
 func leaseClaim(_ value: CFDictionary) -> Bool {
@@ -235,6 +248,8 @@ final class LDACNativeOutput {
     nonisolated(unsafe) static var endpointMuteWrites: [UInt32] = []
     nonisolated(unsafe) static var endpointVolumeWrites: [Float32] = []
     nonisolated(unsafe) static var defaultReads = 0
+    nonisolated(unsafe) static var nominalRate = Float64(48000)
+    nonisolated(unsafe) static var latencyWrites: [UInt32] = []
     nonisolated static let targetUID = "02:00:00:00:00:01"
     nonisolated static let previousAddress = "02:00:00:00:00:02"
     nonisolated(unsafe) static var priorityReply: [String: Any] = [:]
@@ -260,6 +275,7 @@ final class LDACNativeOutput {
     let address = LDACNativeOutput.targetUID
     var stream: UInt32 = 0
     var sampleRateHz = 48000.0
+    var encodingSampleRateHz = 48000.0
     var expected = LDACNativeVolume(scalar: 0, muted: true)
     var ready = false
     var userVolumeChanged = false
@@ -354,7 +370,7 @@ __SELECTORS__
         else if selector == kAudioObjectPropertyClass { value = UInt32(0) }
         else if selector == kAudioDevicePropertyVolumeScalar { value = volumes[object]! }
         else if selector == kAudioDevicePropertyMute { value = mutes[object]! }
-        else if selector == kAudioDevicePropertyNominalSampleRate { value = Float64(48000) }
+        else if selector == kAudioDevicePropertyNominalSampleRate { value = nominalRate }
         else if selector == kAudioDevicePropertyStreams { value = UInt32(9) }
         else { preconditionFailure("Unexpected property read: \(selector)") }
         return value as! T
@@ -394,6 +410,8 @@ __SELECTORS__
             return
         }
         if failWrite { throw RouteError() }
+        if selector == kAudioDevicePropertyNominalSampleRate { nominalRate = value as! Float64 }
+        if selector == 0x786D6C74 { latencyWrites.append((value as! NSNumber).uint32Value) }
         if object == 5 && (selector == kAudioDevicePropertyMute || selector == kAudioDevicePropertyVolumeScalar) {
             if replaceOnControlWrite {
                 replaceOnControlWrite = false
@@ -577,6 +595,24 @@ enum Check {
                 precondition(Output.writes.count == (shared ? 2 : 1))
                 if !shared { Output.current[Output.defaultSelectors[1]] = 8 }
                 try output.validateForRecovery()
+                let controls = output.controls
+                let routes = Output.current
+                let captureRate = output.routeRecovery.sampleRate
+                let nominalRate = Output.nominalRate
+                for rate in LDACSampleRate.allCases {
+                    try await output.reconfigure(sampleRate: rate)
+                    precondition(output.routeRecovery.sampleRate == captureRate)
+                    precondition(Output.nominalRate == nominalRate)
+                    precondition(output.encodingSampleRateHz == Float64(rate.rawValue))
+                    let latency = LDACPipelineLatency(configuration: LDACConfiguration(sampleRate: rate)).frames
+                    precondition(Output.latencyWrites.last == UInt32(ceil(Double(latency) * nominalRate / Double(rate.rawValue))))
+                    precondition(output.ownsLease && !output.leaseReleased)
+                    precondition(output.controls == controls && Output.current == routes)
+                    try output.validateForRecovery()
+                    let routeWrites = Output.writes.count
+                    try output.selectForHandoff()
+                    precondition(Output.writes.count == routeWrites)
+                }
                 Output.writes = []
                 Output.muteWrites = []
                 let result = await output.restoreAndRelease()

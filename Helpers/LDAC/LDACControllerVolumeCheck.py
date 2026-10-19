@@ -311,6 +311,7 @@ final class LDACNativeSession {
     func allowMediaSetup() { mediaSetups += 1 }
     func updateGain(_ gain: Double) { gains.append(gain) }
     func stop(restoreAudio: Bool) { stops += 1; audioRestorations.append(restoreAudio) }
+    func stopForRestart() { stop(restoreAudio: false) }
     var recoveries: [String] = []
     func recoverConnection(reason: String) { recoveries.append(reason) }
     func verifyConnectionLoss(reason: String) {}
@@ -330,6 +331,9 @@ final class Controller: ObservableObject {
     var sessionID = UUID()
     var requestedAddress: String?
     var requestedConfiguration = LDACConfiguration()
+    var playbackSettingsRestartAddress: String?
+    func restartPlayback(_ address: String) { preconditionFailure("Unexpected playback restart") }
+    func restoreAfterPlaybackRestart(_ address: String) { preconditionFailure("Unexpected playback restart restoration") }
     var startingDirectly = false
     var directStartRequested = false
     var connectOrdinaryAfterCleanup = false

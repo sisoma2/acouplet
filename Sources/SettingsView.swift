@@ -187,7 +187,7 @@ struct SettingsView: View {
                                 .help(ldac.sampleRateUnavailableReason(rate, forAddress: headphones.address) ?? "")
                         }
                     }
-                    .disabled(ldac.isSessionRunning || ldac.state == .waitingForDevice)
+                    .disabled(!ldac.canChangePlaybackSettings(forAddress: headphones.address))
                     .accessibilityIdentifier("ldac.sampleRate")
                     Picker("Playback Quality", selection: $settings.ldacConfiguration.quality) {
                         ForEach(LDACQuality.allCases, id: \.self) { quality in
@@ -195,7 +195,7 @@ struct SettingsView: View {
                             Text(configuration.qualityDisplayName).tag(quality)
                         }
                     }
-                    .disabled(ldac.isSessionRunning || ldac.state == .waitingForDevice)
+                    .disabled(!ldac.canChangePlaybackSettings(forAddress: headphones.address))
                     .accessibilityIdentifier("ldac.quality")
                     Stepper(value: Binding(
                         get: { settings.ldacConfiguration(forAddress: headphones.address).latencyOffsetMilliseconds },

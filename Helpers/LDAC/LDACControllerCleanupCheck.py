@@ -161,6 +161,7 @@ final class Output {
 final class Session {
     var stops: [Bool] = []
     func stop(restoreAudio: Bool) { stops.append(restoreAudio) }
+    func stopForRestart() { stops.append(false) }
 }
 
 @MainActor
@@ -183,6 +184,7 @@ final class Controller: ObservableObject {
     var requestedConfiguration = LDACConfiguration()
     var startingDirectly = false
     var directStartRequested = false
+    var playbackSettingsRestartAddress: String?
     var connectOrdinaryAfterCleanup = false
     var audioRoute: MacAudioRouteObserver? = MacAudioRouteObserver()
     var resumeOutputUID: String? = "fixture-headphones"

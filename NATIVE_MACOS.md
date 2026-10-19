@@ -39,6 +39,51 @@ Quit the installed app, then open `Install.command` in
 `.build/local-update/Acouplet/`. See that package's README for removal instructions.
 Do not rebuild while installation is running.
 
+## Install and run local changes
+
+After finishing edits, run these commands from the repository root to test the
+updated app in `/Applications`. The build uses the installed app's signing team
+and an existing Apple Development certificate from that team. This preserves
+the installed app's identity and settings, including LDAC driver authentication.
+
+```sh
+CODE_SIGN_IDENTITY='Apple Development' \
+DEVELOPMENT_TEAM="$(codesign -dv --verbose=2 /Applications/Acouplet.app 2>&1 | sed -n 's/^TeamIdentifier=//p')" \
+DEVELOPER_DIR="$(xcode-select -p)" Packaging/package.sh --local
+```
+
+Once the build succeeds, quit any separate Debug copy, install the packaged
+Release build, and launch the app from Applications:
+
+```sh
+osascript \
+  -e 'if application id "dev.baglayan.Acouplet.debug" is running then' \
+  -e 'tell application id "dev.baglayan.Acouplet.debug" to quit' \
+  -e 'end if'
+.build/local-update/Acouplet/Install.command --require-stopped
+open /Applications/Acouplet.app
+```
+
+The installer quits the installed app, stops its background service, replaces
+the app, and checks that the installed binaries match the new Release build.
+It preserves whether the background service was running. Use the installer
+for replacement so these steps finish before the new version starts.
+
+Confirm that the running app is under `/Applications` and that its executable
+matches the freshly compiled Release build:
+
+```sh
+pgrep -fl 'Acouplet.app/Contents/MacOS/Acouplet'
+cmp .build/Build/Products/Release/Acouplet.app/Contents/MacOS/Acouplet \
+  /Applications/Acouplet.app/Contents/MacOS/Acouplet
+/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /Applications/Acouplet.app/Contents/Info.plist
+```
+
+`cmp` exits successfully without output when the executables match. There
+should be one app process under `/Applications`, optionally with `--background-service`,
+and no Debug copy. An additional `--ldac-owner` worker is expected during LDAC
+playback. The build and install receipts are saved under `.build/local-update/`.
+
 ## Artwork and build options
 
 The default build uses the repository's vector artwork. Product photographs

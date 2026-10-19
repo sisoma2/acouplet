@@ -447,6 +447,7 @@ final class LDACNativeSession: @unchecked Sendable {
     private var mediaSetupAllowed = false
     private var controlsRequested = false
     private var restoreAudio = true
+    private var restartingPlayback = false
     private var requestedGain: Double?
     private var gain: Double
     private var children: [String: LDACNativeChild] = [:]
@@ -561,8 +562,19 @@ final class LDACNativeSession: @unchecked Sendable {
         recoveryRequested = false
         recoveryReason = nil
         pendingPriorityObservation = nil
+        restartingPlayback = false
         self.restoreAudio = self.restoreAudio && restoreAudio
         lock.unlock()
+    }
+
+    func stopForRestart() {
+        lock.withLock {
+            requestedStop = true
+            recoveryRequested = false
+            recoveryReason = nil
+            pendingPriorityObservation = nil
+            restartingPlayback = true
+        }
     }
 
     func recoverConnection(reason: String) {
@@ -717,7 +729,7 @@ final class LDACNativeSession: @unchecked Sendable {
     private var captureDeviceArguments: [String] {
         let routing = configuration.routing
         let uid = routing.isSelective ? routing.outputDeviceUID : outputDeviceUID
-        return ["--sample-rate", String(configuration.sampleRate.rawValue)] + (uid.map { ["--device-uid", $0] } ?? [])
+        return ["--sample-rate", String(configuration.sampleRate.rawValue), "--allow-rate-conversion", "1"] + (uid.map { ["--device-uid", $0] } ?? [])
             + (routing.isSelective ? ["--include-bundles", routing.bundleIDs.joined(separator: ",")] : [])
     }
 
@@ -1417,7 +1429,7 @@ final class LDACNativeSession: @unchecked Sendable {
             }
         }
         lock.lock()
-        let restoreAudio = restoreAudio
+        let restoreAudio = restoreAudio && !restartingPlayback
         lock.unlock()
         let recover = lock.withLock { recoveryRequested }
         if pendingNativeStartupFailure, !nativeAudioConnected, !nativeAudioFinished, !daemonLost,

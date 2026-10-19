@@ -60,8 +60,14 @@ final class AppEnvironment {
         #endif
         #if !ACOUPLET_PUBLIC_APIS_ONLY
         settings.$ldacDeviceProfiles.dropFirst()
-            .sink { [weak ldac] _ in
-                Task { @MainActor [weak ldac] in ldac?.refreshPreferredCodec(resetAttempts: true) }
+            .sink { [weak ldac, weak settings] _ in
+                Task { @MainActor [weak ldac, weak settings] in
+                    guard let ldac else { return }
+                    if let address = ldac.targetAddress, let configuration = settings?.ldacConfiguration(forAddress: address) {
+                        ldac.updatePlaybackConfiguration(configuration, forAddress: address)
+                    }
+                    ldac.refreshPreferredCodec(resetAttempts: true)
+                }
             }.store(in: &cancellables)
         ldac.$state.combineLatest(ldac.$targetAddress)
             .map { state, address -> String? in if case .active = state { address } else { nil } }

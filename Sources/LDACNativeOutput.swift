@@ -60,6 +60,7 @@ final class LDACNativeOutput {
     private var device = AudioObjectID(kAudioObjectUnknown)
     private var stream = AudioObjectID(kAudioObjectUnknown)
     private var sampleRateHz = Float64(48000)
+    private var encodingSampleRateHz = Float64(48000)
     private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     private var renewTask: Task<Void, Never>?
     private var leaseActivity: NSObjectProtocol?
@@ -78,8 +79,9 @@ final class LDACNativeOutput {
     private var model = ""
 
     func updateLatency(frames: UInt32) throws {
-        guard frames <= UInt32(sampleRateHz * 4) else { throw OutputError("Invalid LDAC presentation latency.") }
-        try Self.write(device, selector: 0x786D6C74, value: NSNumber(value: frames) as CFNumber, requiringLease: true)
+        let outputFrames = ceil(Double(frames) * sampleRateHz / encodingSampleRateHz)
+        guard outputFrames <= sampleRateHz * 4 else { throw OutputError("Invalid LDAC presentation latency.") }
+        try Self.write(device, selector: 0x786D6C74, value: NSNumber(value: UInt32(outputFrames)) as CFNumber, requiringLease: true)
     }
 
     func configureRouting(_ routing: LDACApplicationRouting) throws {
@@ -225,6 +227,37 @@ final class LDACNativeOutput {
             try await Task.sleep(for: .milliseconds(100))
         }
         stream = try Self.read(device, selector: kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeOutput, initial: AudioObjectID(0))
+        try await configureSampleRate(sampleRate)
+        record("claim-ready", reason: "device=\(device) visible and eligible")
+        try listen(device, selector: kAudioDevicePropertyNominalSampleRate)
+        for selector in [kAudioStreamPropertyPhysicalFormat, kAudioStreamPropertyVirtualFormat] {
+            try listen(stream, selector: selector)
+        }
+        for selector in [kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyMute] {
+            try listen(device, selector: selector, scope: kAudioObjectPropertyScopeOutput)
+        }
+        for selector in [kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyIsHidden] {
+            try listen(device, selector: selector)
+        }
+        for selector in [kAudioDevicePropertyDeviceCanBeDefaultDevice, kAudioDevicePropertyDeviceCanBeDefaultSystemDevice] {
+            var property = Self.property(selector, scope: kAudioObjectPropertyScopeOutput)
+            if AudioObjectHasProperty(device, &property) { try listen(device, selector: selector, scope: kAudioObjectPropertyScopeOutput) }
+        }
+        for selector in Self.defaultSelectors { try listen(Self.system, selector: selector) }
+    }
+
+    func reconfigure(sampleRate: LDACSampleRate) async throws {
+        try verifyRoute()
+        if let error = silence() { throw OutputError(error) }
+        encodingSampleRateHz = Float64(sampleRate.rawValue)
+        try updateLatency(frames: LDACPipelineLatency(configuration: LDACConfiguration(sampleRate: sampleRate)).frames)
+        record("reconfigured", reason: "captureRate=\(sampleRateHz) encodingRate=\(encodingSampleRateHz)")
+    }
+
+    private func configureSampleRate(_ sampleRate: LDACSampleRate) async throws {
+        sampleRateHz = Float64(sampleRate.rawValue)
+        encodingSampleRateHz = sampleRateHz
+        let clock = ContinuousClock()
         let currentRate: Float64 = try Self.read(device, selector: kAudioDevicePropertyNominalSampleRate, initial: 0)
         if currentRate != sampleRateHz {
             var property = Self.property(kAudioDevicePropertyAvailableNominalSampleRates)
@@ -248,22 +281,6 @@ final class LDACNativeOutput {
             try await Task.sleep(for: .milliseconds(100))
         }
         try updateLatency(frames: LDACPipelineLatency(configuration: LDACConfiguration(sampleRate: sampleRate)).frames)
-        record("claim-ready", reason: "device=\(device) visible and eligible")
-        try listen(device, selector: kAudioDevicePropertyNominalSampleRate)
-        for selector in [kAudioStreamPropertyPhysicalFormat, kAudioStreamPropertyVirtualFormat] {
-            try listen(stream, selector: selector)
-        }
-        for selector in [kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyMute] {
-            try listen(device, selector: selector, scope: kAudioObjectPropertyScopeOutput)
-        }
-        for selector in [kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyIsHidden] {
-            try listen(device, selector: selector)
-        }
-        for selector in [kAudioDevicePropertyDeviceCanBeDefaultDevice, kAudioDevicePropertyDeviceCanBeDefaultSystemDevice] {
-            var property = Self.property(selector, scope: kAudioObjectPropertyScopeOutput)
-            if AudioObjectHasProperty(device, &property) { try listen(device, selector: selector, scope: kAudioObjectPropertyScopeOutput) }
-        }
-        for selector in Self.defaultSelectors { try listen(Self.system, selector: selector) }
     }
 
     var routeRecovery: LDACRouteRecovery {
@@ -347,6 +364,7 @@ final class LDACNativeOutput {
 
     func selectForHandoff() throws {
         try verifyRoute()
+        guard !isSelected else { return }
         for selector in handoffSelectors {
             let current: AudioObjectID = try Self.read(Self.system, selector: selector, initial: 0)
             guard try LDACNativeVolume.canHandoff(currentUID: Self.readString(current, selector: kAudioDevicePropertyDeviceUID),

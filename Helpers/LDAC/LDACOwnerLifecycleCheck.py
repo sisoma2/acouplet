@@ -108,6 +108,7 @@ final class LDACNativeOutput {
         _ = controls.update(volume: volume, range: range)
     }
     func priorityControl() throws -> LDACPriorityControl { LDACPriorityControl(request: { _, _ in }, state: { .init(phase: "idle", error: nil) }) }
+    func reconfigure(sampleRate: LDACSampleRate) async throws { SwiftRecord("reconfigure \(sampleRate.rawValue)") }
     func selectForHandoff() throws {
         isSelected = true
         Self.routes[Self.defaultSelectors[0]] = model == "changed" ? 9 : 5
@@ -190,6 +191,9 @@ final class LDACNativeSession: @unchecked Sendable {
         receive(.active(configuration.format))
     }
     @MainActor
+    func stopForRestart() { stop(restoreAudio: false) }
+
+    @MainActor
     func stop(restoreAudio: Bool) {
         if stopped { return }
         stopped = true
@@ -202,7 +206,7 @@ final class LDACNativeSession: @unchecked Sendable {
                 if restoreAudio { SwiftRecord("native-restored") }
                 let mode = ProcessInfo.processInfo.environment["OWNER_MODE"]!
                 receive(.finished(.init(message: nil, canRetry: mode == "gap", requiresAttention: false,
-                    targetDisconnected: mode == "missing", waitForReconnect: false)))
+                    targetDisconnected: mode == "missing" || mode == "restart-gap" && !restoreAudio, waitForReconnect: false)))
             }
         }
     }
@@ -319,7 +323,7 @@ enum Check {
             let holder = try output.duplicateInput()
             SwiftRecord("holder \(holder.pid)")
         }
-        let session = LDACOwnerSession(id: UUID(), output: output,
+        var session = LDACOwnerSession(id: UUID(), output: output,
             configuration: .init(sampleRate: .hz96000, quality: .adaptive), recoveryAttempt: false, restoringOnly: false) { event in
             switch event {
             case .handoffReady: Task { try! await output.selectForHandoff(); active = true }
@@ -364,6 +368,28 @@ enum Check {
         }
         if ["crash", "inherited", "missing", "changed"].contains(mode) {
             while true { try await Task.sleep(for: .seconds(1)) }
+        }
+        if mode == "normal" || mode == "restart-gap" {
+            session.stopForRestart()
+            while !completed { try await Task.sleep(for: .milliseconds(5)) }
+            if mode == "restart-gap" {
+                SwiftRecord("app-gap")
+                while true { try await Task.sleep(for: .seconds(1)) }
+            }
+            try await output.reconfigure(sampleRate: .hz44100)
+            active = false
+            completed = false
+            session = LDACOwnerSession(id: UUID(), output: output,
+                configuration: .init(sampleRate: .hz44100, quality: .balanced), recoveryAttempt: false, restoringOnly: false) { event in
+                switch event {
+                case .handoffReady: Task { try! await output.selectForHandoff(); active = true }
+                case .finished: completed = true
+                default: break
+                }
+            }
+            session.start()
+            while !active { try await Task.sleep(for: .milliseconds(5)) }
+            SwiftRecord("restart-active")
         }
         if mode != "delayed" && mode != "hung" { session.stop(restoreAudio: true) }
         while !completed { try await Task.sleep(for: .milliseconds(5)) }
@@ -431,7 +457,7 @@ with tempfile.TemporaryDirectory(prefix='acouplet-owner-check-') as temporary:
     rejected = subprocess.run([str(binary), '--ldac-owner'], check=False, capture_output=True, timeout=5)
     assert rejected.returncode != 0, 'A foreign parent invoked the signed owner entry point'
     print('PASS actual owner parent-signature check rejects direct foreign invocation')
-    for mode in ['normal', 'crash', 'inherited', 'slow', 'early', 'cancel', 'dropped', 'claimed', 'missing', 'changed', 'gap', 'owner-crash', 'owner-term', 'malformed', 'oversized', 'eof', 'delayed', 'hung', 'parent-hung', 'ordering']:
+    for mode in ['normal', 'crash', 'inherited', 'slow', 'early', 'cancel', 'dropped', 'claimed', 'missing', 'changed', 'gap', 'restart-gap', 'owner-crash', 'owner-term', 'malformed', 'oversized', 'eof', 'delayed', 'hung', 'parent-hung', 'ordering']:
         run = directory / ('run-' + mode + '-' + str(time.monotonic_ns()))
         run.mkdir()
         events = run / 'events'
@@ -442,7 +468,7 @@ with tempfile.TemporaryDirectory(prefix='acouplet-owner-check-') as temporary:
         helpers = []
         holder = None
         try:
-            marker = 'owner-configure-start' if mode == 'parent-hung' else 'claim ' if mode == 'slow' else ('app-complete' if mode in ['early', 'cancel', 'dropped', 'ordering'] else 'app-claimed' if mode == 'claimed' else 'app-gap' if mode == 'gap' else 'app-active')
+            marker = 'owner-configure-start' if mode == 'parent-hung' else 'claim ' if mode == 'slow' else ('app-complete' if mode in ['early', 'cancel', 'dropped', 'ordering'] else 'app-claimed' if mode == 'claimed' else 'app-gap' if mode in ['gap', 'restart-gap'] else 'app-active')
             wait_for(lambda marker=marker, events=events, process=process: marker in events.read_text() or process.poll() is not None)
             assert process.poll() is None or mode in ['normal', 'early', 'cancel', 'dropped', 'delayed', 'malformed', 'oversized', 'eof', 'hung', 'ordering'], process.communicate(timeout=1)
             lines = events.read_text().splitlines()
@@ -484,6 +510,13 @@ with tempfile.TemporaryDirectory(prefix='acouplet-owner-check-') as temporary:
             state = json.loads((run / 'state').read_text())
             lines = events.read_text().splitlines()
             assert state['lease'] is False
+            if mode == 'normal':
+                restart_index = lines.index('restart-active')
+                assert len([line for line in lines[:restart_index] if line.startswith('claim ')]) == 1
+                assert 'reconfigure 44100' in lines[:restart_index]
+                assert 'native-restored' not in lines[:restart_index]
+                assert 'stop-intent false' in lines[:restart_index]
+                assert 'native-restored' in lines[restart_index:]
             routes = list(state['routes'].values())
             assert 8 in routes, 'Independent system-sound choice was replaced'
             assert state['mutes'] == ([] if mode in ['slow', 'cancel', 'claimed', 'missing', 'changed', 'owner-crash', 'ordering'] else [6]), (mode, state, lines)

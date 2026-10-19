@@ -133,6 +133,177 @@ final class LDACDriverInstallerTests: XCTestCase {
 final class LDACDefaultCodecTests: XCTestCase {
     private let address = "02:53:4F:4E:59:01"
 
+    func testActivePlaybackSettingsRestartLDACAndPreserveOtherConfiguration() async throws {
+        for changeSampleRate in [true, false] {
+            let (ldac, headphones, _) = try prepared()
+            defer { ldac.stop(); headphones.simulateControlLoss() }
+            await drainTasks()
+            var original = LDACConfiguration(latencyOffsetMilliseconds: 70)
+            original.bufferProfile = .video
+            ldac.simulateActiveSession(headphones, configuration: original)
+            let outputID = ldac.simulatedOutputID
+            XCTAssertTrue(ldac.canChangePlaybackSettings(forAddress: address))
+            var updated = LDACConfiguration()
+            if changeSampleRate { updated.sampleRate = .hz96000 }
+            else { updated.quality = .quality }
+
+            ldac.updatePlaybackConfiguration(updated, forAddress: address)
+
+            XCTAssertEqual(ldac.state, .stopping)
+            XCTAssertFalse(ldac.canChangePlaybackSettings(forAddress: address))
+            XCTAssertEqual(ldac.simulatedRequestedAddress, address)
+            await drainTasks()
+            XCTAssertEqual(ldac.simulatedStarts, [address, address])
+            XCTAssertEqual(ldac.simulatedOutputID, outputID)
+            XCTAssertEqual(ldac.simulatedLaunches?.map(\.restoringOnly), [false])
+            XCTAssertEqual(ldac.currentConfiguration.sampleRate, updated.sampleRate)
+            XCTAssertEqual(ldac.currentConfiguration.quality, updated.quality)
+            XCTAssertEqual(ldac.currentConfiguration.latencyOffsetMilliseconds, 70)
+            XCTAssertEqual(ldac.currentConfiguration.bufferProfile, .video)
+        }
+    }
+
+    func testUnchangedPlaybackSettingsAndOtherDevicesDoNotRestartLDAC() async throws {
+        let (ldac, headphones, _) = try prepared()
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        ldac.simulateActiveSession(headphones)
+        var configuration = LDACConfiguration(latencyOffsetMilliseconds: 90)
+        configuration.bufferProfile = .video
+        ldac.updatePlaybackConfiguration(configuration, forAddress: address)
+        XCTAssertEqual(ldac.currentConfiguration, LDACConfiguration())
+
+        let otherAddress = "02:53:4F:4E:59:02"
+        XCTAssertFalse(ldac.canChangePlaybackSettings(forAddress: otherAddress))
+        configuration.sampleRate = .hz96000
+        ldac.updatePlaybackConfiguration(configuration, forAddress: otherAddress)
+        await drainTasks()
+        XCTAssertEqual(ldac.state, .active(LDACConfiguration().format))
+        XCTAssertEqual(ldac.currentConfiguration, LDACConfiguration())
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+    }
+
+    func testRepeatedPlaybackChangesKeepOneOutputAndOneRestartPerChange() async throws {
+        let (ldac, headphones, _) = try prepared()
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        let outputID = try XCTUnwrap(ldac.simulatedOutputID)
+        let configurations = [LDACConfiguration(sampleRate: .hz96000),
+                              LDACConfiguration(sampleRate: .hz96000, quality: .balanced),
+                              LDACConfiguration(sampleRate: .hz44100, quality: .balanced),
+                              LDACConfiguration(sampleRate: .hz44100, quality: .quality)]
+        for (index, configuration) in configurations.enumerated() {
+            ldac.simulateActiveSession(headphones, configuration: ldac.currentConfiguration)
+            ldac.updatePlaybackConfiguration(configuration, forAddress: address)
+            await drainTasks()
+            XCTAssertEqual(ldac.currentConfiguration, configuration)
+            XCTAssertEqual(ldac.simulatedOutputID, outputID)
+            XCTAssertEqual(ldac.simulatedStarts?.count, index + 2)
+            XCTAssertEqual(ldac.simulatedLaunches?.map(\.restoringOnly), Array(repeating: false, count: index + 1))
+        }
+    }
+
+    func testPlaybackSettingsRestartKeepsOutputWhileHeadphoneControlsReconnect() async throws {
+        for configuration in [LDACConfiguration(sampleRate: .hz96000), LDACConfiguration(quality: .quality)] {
+            let (ldac, headphones, route) = try prepared()
+            defer { ldac.stop(); headphones.simulateControlLoss() }
+            await drainTasks()
+            ldac.simulateActiveSession(headphones)
+            let outputID = ldac.simulatedOutputID
+
+            ldac.updatePlaybackConfiguration(configuration, forAddress: address)
+            headphones.simulateControlLoss(deviceConnected: false)
+            await drainTasks()
+
+            XCTAssertEqual(ldac.state, .connecting)
+            XCTAssertEqual(ldac.simulatedRequestedAddress, address)
+            XCTAssertTrue(ldac.isSessionRunning)
+            XCTAssertEqual(ldac.simulatedStarts, [address, address])
+            XCTAssertEqual(ldac.simulatedOutputID, outputID)
+            XCTAssertTrue(ldac.simulatedStartingDirectly)
+            XCTAssertEqual(ldac.simulatedLaunches?.map(\.restoringOnly), [false])
+            XCTAssertEqual(ldac.currentConfiguration, configuration)
+
+            headphones.simulateDeviceConnection(named: "WF-1000XM5", simulatedAddress: address, galleryModel: .wfXM5)
+            route.simulateRoute(sonyOutput)
+            await drainTasks()
+
+            XCTAssertEqual(ldac.simulatedStarts, [address, address])
+            XCTAssertTrue(ldac.isSessionRunning)
+            XCTAssertEqual(ldac.currentConfiguration, configuration)
+            route.simulateRoute(sonyOutput)
+            await drainTasks()
+            XCTAssertEqual(ldac.simulatedStarts, [address, address])
+        }
+    }
+
+    func testPlaybackSettingsRestartDoesNotTakeOverAnotherMacOutput() async throws {
+        let (ldac, headphones, route) = try prepared()
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        ldac.simulateActiveSession(headphones)
+        ldac.updatePlaybackConfiguration(LDACConfiguration(sampleRate: .hz96000), forAddress: address)
+        route.simulateRoute(output(uid: "built-in-output", transport: kAudioDeviceTransportTypeBuiltIn))
+        await drainTasks()
+
+        XCTAssertEqual(ldac.state, .waitingForDevice)
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+        route.simulateRoute(sonyOutput)
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [address, address])
+    }
+
+    func testDisablingLDACWhilePlaybackSettingsReconnectPreventsResume() async throws {
+        let (ldac, headphones, route) = try prepared()
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        ldac.simulateActiveSession(headphones)
+        ldac.updatePlaybackConfiguration(LDACConfiguration(quality: .quality), forAddress: address)
+        headphones.simulateControlLoss(deviceConnected: false)
+        await drainTasks()
+        XCTAssertEqual(ldac.state, .connecting)
+
+        ldac.setEnabled(false, forAddress: address)
+        headphones.simulateDeviceConnection(named: "WF-1000XM5", simulatedAddress: address, galleryModel: .wfXM5)
+        route.simulateRoute(sonyOutput)
+        await drainTasks()
+
+        XCTAssertEqual(ldac.state, .off)
+        XCTAssertNil(ldac.simulatedRequestedAddress)
+        XCTAssertEqual(ldac.simulatedStarts, [address, address])
+    }
+
+    func testPlaybackSettingsCannotChangeWhileConnecting() async throws {
+        let (ldac, headphones, _) = try prepared()
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        ldac.simulateRecoverySession(headphones)
+        XCTAssertFalse(ldac.canChangePlaybackSettings(forAddress: address))
+
+        ldac.updatePlaybackConfiguration(LDACConfiguration(sampleRate: .hz96000, quality: .quality), forAddress: address)
+
+        XCTAssertEqual(ldac.state, .connecting)
+        XCTAssertEqual(ldac.currentConfiguration, LDACConfiguration())
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+    }
+
+    func testDisablingLDACDuringPlaybackSettingsRestartPreventsResume() async throws {
+        let (ldac, headphones, _) = try prepared()
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        ldac.simulateActiveSession(headphones)
+        ldac.updatePlaybackConfiguration(LDACConfiguration(quality: .quality), forAddress: address)
+
+        ldac.setEnabled(false, forAddress: address)
+        await drainTasks()
+
+        XCTAssertEqual(ldac.state, .off)
+        XCTAssertNil(ldac.simulatedRequestedAddress)
+        XCTAssertFalse(ldac.isSessionRunning)
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+        XCTAssertTrue(ldac.canChangePlaybackSettings(forAddress: address))
+    }
+
     func testRecognizedSonyModelsAutomaticallyAttemptLDACWhenControlsAreAvailable() async throws {
         var automaticallyStartedModels: [SonyDeviceModel] = []
         for model in SonyDeviceModel.allCases where model != .unknown {

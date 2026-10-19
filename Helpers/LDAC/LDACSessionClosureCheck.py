@@ -99,6 +99,25 @@ extension LDACNativeSession.Helpers {
     }
 }
 extension LDACNativeSession {
+    static func playbackRestartCheck(executable: URL, cancelled: Bool) throws {
+        let session = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01",
+            helpers: Helpers(fixture: executable), gain: 0) { _ in }
+        defer { cleanUp(Array(session.children.values)) }
+        let disconnect = try LDACNativeChild(executable: executable, arguments: ["fixture-disconnect"], inheritedPCM: nil)
+        session.children["disconnect"] = disconnect
+        session.children["restore-disconnect"] = disconnect
+        try waitUntil { _ = try disconnect.readLines(); disconnect.reap(); return disconnect.finished }
+        session.restoreDisconnected = true
+        session.priorityPhase = .removed
+        session.stopForRestart()
+        try require(session.restoreAudio && session.restartingPlayback, "Playback restart disabled normal restoration")
+        if cancelled { session.stop(restoreAudio: true) }
+        try session.beginRestore()
+        try require((session.children["restore"] != nil) == cancelled,
+            "Playback restart restored ordinary audio or cancellation failed to restore it")
+        print("PASS actual playback restart cancelled=\(cancelled): no intermediate native reconnect, normal stop restores audio")
+    }
+
     static func finishChildrenCheck(executable: URL) throws {
         for stubborn in [false, true] {
             let session = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01", helpers: Helpers(fixture: executable), gain: 0) { _ in }
@@ -1111,6 +1130,9 @@ enum LDACSessionClosureCheck {
         }
         if CommandLine.arguments.dropFirst().first == "--fixture" { child() }
         let executable = URL(fileURLWithPath: CommandLine.arguments[0])
+        for cancelled in [false, true] {
+            try LDACNativeSession.playbackRestartCheck(executable: executable, cancelled: cancelled)
+        }
         for mode in ["ready", "stop", "timeout"] {
             try await LDACNativeSession.mediaSetupAdmissionCheck(mode, executable: executable)
             print("PASS prestream media admission mode=\(mode): fresh controls before media START, no duplicate release, bounded wait and cancellation")

@@ -513,6 +513,8 @@ int main(int argc, const char *argv[]) {
         NSArray<NSString *> *selectedBundles = nil;
         Float64 sampleRate = 48000;
         BOOL selectedRate = NO;
+        BOOL allowsRateConversion = NO;
+        BOOL selectedConversion = NO;
         while (argumentCount >= 3) {
             const char *option = argv[argumentCount - 2];
             const char *value = argv[argumentCount - 1];
@@ -530,6 +532,10 @@ int main(int argc, const char *argv[]) {
                 for (NSString *bundle in selectedBundles)
                     if (bundle.length > 255 || [bundle hasPrefix:@"dev.baglayan.Acouplet"] ||
                         ![syntax firstMatchInString:bundle options:0 range:NSMakeRange(0, bundle.length)]) return 2;
+            } else if (strcmp(option, "--allow-rate-conversion") == 0 && !selectedConversion) {
+                if (strcmp(value, "0") != 0 && strcmp(value, "1") != 0) return 2;
+                allowsRateConversion = strcmp(value, "1") == 0;
+                selectedConversion = YES;
             } else if (strcmp(option, "--sample-rate") == 0 && !selectedRate) {
                 char *end = NULL;
                 long rate = strtol(value, &end, 10);
@@ -646,7 +652,7 @@ int main(int argc, const char *argv[]) {
                     if (!Status(AudioObjectGetPropertyData(selectedDevice, &deviceAddress, 0, NULL,
                         &selectedSize, &nativeRate), "READ_CAPTURE_DEVICE_RATE")) break;
                     printf("CAPTURE_DEVICE_RATE actual=%.9g requested=%.9g\n", nativeRate, sampleRate);
-                    if (!selectedBundles && nativeRate != sampleRate) {
+                    if (!selectedBundles && !allowsRateConversion && nativeRate != sampleRate) {
                         fprintf(stderr, "The selected output device has not committed the requested sample rate.\n");
                         break;
                     }

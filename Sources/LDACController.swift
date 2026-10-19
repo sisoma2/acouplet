@@ -53,6 +53,7 @@ final class LDACController: ObservableObject {
     private let callAudio: LDACCallAudio?
     var microphoneHandoffIssue: String? { callAudio?.issue }
     private var requestedConfiguration = LDACConfiguration()
+    private var playbackSettingsRestartAddress: String?
     private var directStartRequested = false
     private var startingDirectly = false
     private var connectOrdinaryAfterCleanup = false
@@ -171,6 +172,23 @@ final class LDACController: ObservableObject {
 
     var needsStopBeforeTermination: Bool { isSessionRunning || !preferenceRestoreTasks.isEmpty }
 
+    func canChangePlaybackSettings(forAddress address: String) -> Bool {
+        if case .active = state { return targetAddress == SonyBLEIdentity.normalizedAddress(address) }
+        return !needsStopBeforeTermination && state != .waitingForDevice
+    }
+
+    func updatePlaybackConfiguration(_ configuration: LDACConfiguration, forAddress address: String) {
+        guard let address = SonyBLEIdentity.normalizedAddress(address), requestedAddress == address,
+              targetAddress == address, case .active = state,
+              sampleRateUnavailableReason(configuration.sampleRate, forAddress: address) == nil,
+              requestedConfiguration.sampleRate != configuration.sampleRate || requestedConfiguration.quality != configuration.quality else { return }
+        requestedConfiguration.sampleRate = configuration.sampleRate
+        requestedConfiguration.quality = configuration.quality
+        playbackSettingsRestartAddress = address
+        recoveryAttempt = 0
+        stopSession(reason: "playback settings changed")
+    }
+
     private func observeDisconnectionRequests(_ controllers: [SonyHeadphonesController]) {
         let identifiers = Set(controllers.map(ObjectIdentifier.init))
         disconnectionObservations = disconnectionObservations.filter { identifiers.contains($0.key) }
@@ -216,6 +234,27 @@ final class LDACController: ObservableObject {
         isSessionRunning = true
         state = .connecting
     }
+
+    func simulateActiveSession(_ headphones: SonyHeadphonesController, configuration: LDACConfiguration = LDACConfiguration()) {
+        simulateRecoverySession(headphones)
+        requestedConfiguration = configuration
+        state = .active(configuration.format)
+        if let output = nativeOutput, simulatedStarts != nil {
+            let identifier = sessionID
+            let session = LDACOwnerSession(id: identifier, output: output, configuration: configuration,
+                recoveryAttempt: false, restoringOnly: false, receive: { _ in })
+            session.simulatedStop = { [weak self] restoreAudio in
+                Task { @MainActor [weak self] in
+                    guard let self, self.session?.id == identifier else { return }
+                    self.simulateSessionFinished(.init(message: nil, canRetry: false, requiresAttention: false,
+                        targetDisconnected: !restoreAudio, waitForReconnect: false))
+                }
+            }
+            self.session = session
+        }
+    }
+
+    var simulatedOutputID: UUID? { outputID }
 
     var simulatedLaunches: [(address: String, restoringOnly: Bool)]?
     var simulatedStarts: [String]?
@@ -1166,6 +1205,19 @@ final class LDACController: ObservableObject {
     /// Routes a finished LDAC or restoration session. A recoverable abort always returns the headphones to
     /// ordinary Bluetooth audio first (D1); the headphones leaving on their own waits for them to return.
     private func sessionFinished(_ completion: LDACNativeSession.Completion, address: String) {
+        if playbackSettingsRestartAddress == address, state == .stopping, completion.message == nil, !completion.canRetry {
+            if requestedAddress == address, !suspensionRequested, !completion.waitForReconnect,
+               restoreAudioOnStop, canStartDirectly(forAddress: address) {
+                restartPlayback(address)
+                return
+            }
+            if requestedAddress == address { suspensionRequested = true }
+            if completion.targetDisconnected, restoreAudioOnStop, !completion.waitForReconnect {
+                restoreAfterPlaybackRestart(address)
+                return
+            }
+        }
+        playbackSettingsRestartAddress = nil
         if completion.waitForReconnect, completion.canRetry, requestedAddress == address {
             suspensionRequested = true
             finish(nil, targetDisconnected: true)
@@ -1178,6 +1230,84 @@ final class LDACController: ObservableObject {
         } else {
             finish(completion.requiresAttention ? completion.message : nil, targetDisconnected: completion.targetDisconnected)
         }
+    }
+
+    private func restartPlayback(_ address: String) {
+        guard let output = nativeOutput, let devices, let headphones = devices.controller(for: address) else {
+            suspensionRequested = requestedAddress == address
+            restoreAfterPlaybackRestart(address)
+            return
+        }
+        let outputUID = audioRoute?.route?.uid
+        guard outputUID == LDACNativeOutput.uid
+            || requestedConfiguration.routing.isSelective && outputUID == requestedConfiguration.routing.outputDeviceUID
+            || canResumeOnCurrentOutput(forAddress: address) else {
+            suspensionRequested = true
+            restoreAfterPlaybackRestart(address)
+            return
+        }
+        sessionID = UUID()
+        let identifier = sessionID
+        state = .connecting
+        startingDirectly = true
+        isRecovering = false
+        stableSince = nil
+        transportFormat = nil
+        controlSession = nil
+        sourceAddress = nil
+        volumeRange = nil
+        pendingVolume = nil
+        initialReadbackID = nil
+        transportHealth = LDACTransportHealth()
+        runtimeStatus = LDACRuntimeStatus()
+        record("playback-settings-restart", reason: "rate=\(requestedConfiguration.sampleRate.rawValue) quality=\(requestedConfiguration.quality.rawValue)")
+        #if DEBUG
+        if simulatedStarts != nil {
+            simulatedStarts?.append(address)
+            playbackSettingsRestartAddress = nil
+            launch(address)
+            return
+        }
+        #endif
+        startTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await output.reconfigure(sampleRate: self.requestedConfiguration.sampleRate)
+                try await output.prepareForReconnect()
+                try Task.checkCancellation()
+                guard self.sessionID == identifier, self.requestedAddress == address, self.state != .stopping,
+                      devices.controller(for: address) === headphones else { throw CancellationError() }
+                self.headphones = headphones
+                self.observeControls(headphones, devices: devices)
+                self.startTask = nil
+                self.playbackSettingsRestartAddress = nil
+                self.launch(address)
+            } catch {
+                guard self.sessionID == identifier else { return }
+                self.startTask = nil
+                if !(error is CancellationError) {
+                    self.volumeError = error.localizedDescription
+                    self.requestedAddress = nil
+                }
+                self.restoreAfterPlaybackRestart(address)
+            }
+        }
+    }
+
+    private func restoreAfterPlaybackRestart(_ address: String) {
+        playbackSettingsRestartAddress = nil
+        state = .stopping
+        if restoreAudioOnStop {
+            sessionID = UUID()
+            #if DEBUG
+            if simulatedLaunches != nil {
+                simulatedLaunches?.append((address, true))
+                finish(nil)
+                return
+            }
+            #endif
+            launch(address, restoringOnly: true)
+        } else { finish(nil, targetDisconnected: true) }
     }
 
     /// Returns the headphones to ordinary Bluetooth audio after a recoverable abort (D1). The first abort of a
@@ -1722,7 +1852,12 @@ final class LDACController: ObservableObject {
         volumeTask = nil
         volumeTaskID = nil
         controlObservation = nil
-        if let session { session.stop(restoreAudio: restoreAudio) }
+        if let session {
+            if let playbackSettingsRestartAddress, playbackSettingsRestartAddress == targetAddress, requestedAddress == targetAddress,
+               !suspensionRequested, restoreAudio {
+                session.stopForRestart()
+            } else { session.stop(restoreAudio: restoreAudio) }
+        }
         else if let startTask { startTask.cancel() }
         else if isRecovering, restoreAudioOnStop, let address = targetAddress {
             sessionID = UUID()
@@ -1788,11 +1923,13 @@ final class LDACController: ObservableObject {
             self.cleanupTask = nil
             let retry = self.retryAfterRestoration
             self.retryAfterRestoration = false
+            let playbackSettingsRestartAddress = self.playbackSettingsRestartAddress
+            self.playbackSettingsRestartAddress = nil
             if !messages.isEmpty {
                 self.requestedAddress = nil
                 self.state = .failed(messages.joined(separator: " "))
             } else if let next = self.requestedAddress {
-                if self.suspensionRequested {
+                if self.suspensionRequested || playbackSettingsRestartAddress == next {
                     self.targetAddress = next
                     self.state = .waitingForDevice
                     if retry { self.scheduleRecovery(next) }

@@ -312,39 +312,22 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("LDAC")
-                Menu {
-                    Button("Check LDAC support again") {
+                LDACSettingsMenu(
+                    address: headphones.address,
+                    sampleRate: settings.ldacConfiguration.sampleRate,
+                    quality: settings.ldacConfiguration.quality,
+                    unavailableSampleRates: Dictionary(uniqueKeysWithValues: LDACSampleRate.allCases.compactMap { rate in
+                        ldac.sampleRateUnavailableReason(rate, forAddress: headphones.address).map { (rate, $0) }
+                    }),
+                    isEnabled: ldac.canChangePlaybackSettings(forAddress: headphones.address),
+                    canCheckSupport: !ldac.needsStopBeforeTermination && ldac.canStartOrInstallDriver,
+                    setSampleRate: { settings.ldacConfiguration.sampleRate = $0 },
+                    setQuality: { settings.ldacConfiguration.quality = $0 },
+                    checkSupport: {
                         ldac.checkSupportAgain(forAddress: headphones.address, configuration: settings.ldacConfiguration(forAddress: headphones.address))
                     }
-                    .disabled(!ldac.canStartOrInstallDriver)
-                    .help("Checks support by starting LDAC playback.")
-                    Divider()
-                    Picker("Sample Rate", selection: $settings.ldacConfiguration.sampleRate) {
-                        ForEach(LDACSampleRate.allCases, id: \.self) { rate in
-                            Text(rate.displayName).tag(rate)
-                                .disabled(ldac.sampleRateUnavailableReason(rate, forAddress: headphones.address) != nil)
-                                .help(ldac.sampleRateUnavailableReason(rate, forAddress: headphones.address) ?? "")
-                        }
-                    }
-                    Picker("Playback Quality", selection: $settings.ldacConfiguration.quality) {
-                        ForEach(LDACQuality.allCases, id: \.self) { quality in
-                            let configuration = LDACConfiguration(sampleRate: settings.ldacConfiguration.sampleRate, quality: quality)
-                            Text(configuration.qualityDisplayName).tag(quality)
-                        }
-                    }
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .menuStyle(.button)
-                .menuIndicator(.hidden)
-                .buttonStyle(.bordered)
-                .tint(nil)
-                .controlSize(.small)
-                .fixedSize()
-                .disabled(ldac.isSessionRunning || ldac.state == .waitingForDevice)
-                .accessibilityLabel("LDAC Settings")
-                .help("LDAC Settings")
-                .accessibilityIdentifier("audio.ldacSettings")
+                )
+                .equatable()
                 Spacer()
                 switch ldacState {
                 case .requested, .connecting, .stopping:
@@ -804,6 +787,58 @@ struct MenuBarView: View {
 }
 
 #if !ACOUPLET_PUBLIC_APIS_ONLY
+private struct LDACSettingsMenu: View, Equatable {
+    let address: String
+    let sampleRate: LDACSampleRate
+    let quality: LDACQuality
+    let unavailableSampleRates: [LDACSampleRate: String]
+    let isEnabled: Bool
+    let canCheckSupport: Bool
+    let setSampleRate: (LDACSampleRate) -> Void
+    let setQuality: (LDACQuality) -> Void
+    let checkSupport: () -> Void
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.address == rhs.address && lhs.sampleRate == rhs.sampleRate && lhs.quality == rhs.quality
+            && lhs.unavailableSampleRates == rhs.unavailableSampleRates
+            && lhs.isEnabled == rhs.isEnabled && lhs.canCheckSupport == rhs.canCheckSupport
+    }
+
+    var body: some View {
+        Menu {
+            Button("Check LDAC support again", action: checkSupport)
+                .disabled(!canCheckSupport)
+                .help("Checks support by starting LDAC playback.")
+            Divider()
+            Picker("Sample Rate", selection: Binding(get: { sampleRate }, set: setSampleRate)) {
+                ForEach(LDACSampleRate.allCases, id: \.self) { rate in
+                    Text(rate.displayName).tag(rate)
+                        .disabled(unavailableSampleRates[rate] != nil)
+                        .help(unavailableSampleRates[rate] ?? "")
+                }
+            }
+            Picker("Playback Quality", selection: Binding(get: { quality }, set: setQuality)) {
+                ForEach(LDACQuality.allCases, id: \.self) { quality in
+                    let configuration = LDACConfiguration(sampleRate: sampleRate, quality: quality)
+                    Text(configuration.qualityDisplayName).tag(quality)
+                }
+            }
+        } label: {
+            Image(systemName: "gearshape")
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(.bordered)
+        .tint(nil)
+        .controlSize(.small)
+        .fixedSize()
+        .disabled(!isEnabled)
+        .accessibilityLabel("LDAC Settings")
+        .help("LDAC Settings")
+        .accessibilityIdentifier("audio.ldacSettings")
+    }
+}
+
 struct LDACDriverGuidance: View {
     @EnvironmentObject private var headphones: SonyHeadphonesController
     @EnvironmentObject private var ldac: LDACController
