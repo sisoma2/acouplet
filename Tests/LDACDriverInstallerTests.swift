@@ -357,19 +357,20 @@ final class LDACDefaultCodecTests: XCTestCase {
         XCTAssertEqual(ldac.simulatedStarts, [address])
     }
 
-    func testWaitsForTheMatchingBluetoothOutput() async throws {
-        let (ldac, headphones, route) = try prepared()
-        defer { ldac.stop(); headphones.simulateControlLoss() }
+    func testAutomaticallyStartsWithoutTheMatchingBluetoothOutput() async throws {
         for output in [nil, output(uid: "built-in-output", transport: kAudioDeviceTransportTypeBuiltIn),
                        output(uid: "02:53:4F:4E:59:02", transport: kAudioDeviceTransportTypeBluetooth),
                        output(uid: address, transport: kAudioDeviceTransportTypeUSB)] {
+            let (ldac, headphones, route) = try prepared()
+            defer { ldac.stop(); headphones.simulateControlLoss() }
             route.simulateRoute(output)
             await drainTasks()
-            XCTAssertEqual(ldac.simulatedStarts, [])
+            XCTAssertEqual(ldac.simulatedStarts, [address])
+            XCTAssertTrue(ldac.simulatedStartingDirectly)
+            route.simulateRoute(sonyOutput)
+            await drainTasks()
+            XCTAssertEqual(ldac.simulatedStarts, [address])
         }
-        route.simulateRoute(sonyOutput)
-        await drainTasks()
-        XCTAssertEqual(ldac.simulatedStarts, [address])
     }
 
     func testConnectStartsLDACBeforeClassicAudioOrControlsAreAvailable() async throws {
@@ -402,14 +403,16 @@ final class LDACDefaultCodecTests: XCTestCase {
         XCTAssertTrue(ldac.simulatedStartingDirectly)
     }
 
-    func testAlreadyConnectedHeadphonesDoNotTakeOverAnotherOutputDuringControlStartup() async throws {
+    func testAlreadyConnectedHeadphonesAutomaticallyStartDuringControlStartup() async throws {
         let (ldac, headphones, route) = try prepared(prepareDevices: { devices in
             devices.selectedController.simulateControlLoss(deviceConnected: true)
         })
         defer { ldac.stop(); headphones.simulateControlLoss() }
         route.simulateRoute(output(uid: "built-in-output", transport: kAudioDeviceTransportTypeBuiltIn))
         await drainTasks()
-        XCTAssertEqual(ldac.simulatedStarts, [])
+        XCTAssertFalse(headphones.isReady)
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+        XCTAssertTrue(ldac.simulatedStartingDirectly)
         route.simulateRoute(sonyOutput)
         await drainTasks()
         XCTAssertEqual(ldac.simulatedStarts, [address])
@@ -439,8 +442,9 @@ final class LDACDefaultCodecTests: XCTestCase {
 
     func testWaitsForTheDriverWithoutOpeningTheInstaller() async throws {
         var driver = LDACDriverInstaller.State.missing
-        let (ldac, headphones, _) = try prepared(inspectDriver: { _ in driver })
+        let (ldac, headphones, route) = try prepared(inspectDriver: { _ in driver })
         defer { ldac.stop(); headphones.simulateControlLoss() }
+        route.simulateRoute(output(uid: "built-in-output", transport: kAudioDeviceTransportTypeBuiltIn))
         for state in [LDACDriverInstaller.State.missing, .outdated, .restartRequired, .unavailable("test")] {
             driver = state
             ldac.refreshDriverStateInBackground()
@@ -456,8 +460,9 @@ final class LDACDefaultCodecTests: XCTestCase {
 
     func testHidingLDACControlsDisablesAutomaticStartup() async throws {
         var enabled = false
-        let (ldac, headphones, _) = try prepared(preferredConfiguration: { _ in enabled ? LDACConfiguration() : nil })
+        let (ldac, headphones, route) = try prepared(preferredConfiguration: { _ in enabled ? LDACConfiguration() : nil })
         defer { ldac.stop(); headphones.simulateControlLoss() }
+        route.simulateRoute(output(uid: "built-in-output", transport: kAudioDeviceTransportTypeBuiltIn))
         await drainTasks()
         XCTAssertEqual(ldac.simulatedStarts, [])
         enabled = true
@@ -482,8 +487,9 @@ final class LDACDefaultCodecTests: XCTestCase {
         await drainTasks()
         XCTAssertEqual(first.simulatedStarts, [])
 
-        let (relaunched, headphones, _) = try prepared(defaults: defaults)
+        let (relaunched, headphones, route) = try prepared(defaults: defaults)
         defer { relaunched.stop(); headphones.simulateControlLoss() }
+        route.simulateRoute(output(uid: "built-in-output", transport: kAudioDeviceTransportTypeBuiltIn))
         await drainTasks()
         XCTAssertEqual(relaunched.simulatedStarts, [])
         relaunched.setEnabled(true, forAddress: address)

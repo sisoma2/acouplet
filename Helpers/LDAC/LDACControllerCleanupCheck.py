@@ -167,7 +167,6 @@ final class Session {
 @MainActor
 final class Controller: ObservableObject {
     var codecPreferences: [String: Bool] = [:]
-    var directStartCandidates = Set<String>()
     var automaticStartAttempts: [ObjectIdentifier: UInt64] = [:]
     let localBluetoothAddress: () -> String? = { IOBluetoothHostController.default()?.addressAsString() }
     var isSuspendedForMicrophone = false

@@ -206,8 +206,10 @@ for each Bluetooth device. Existing global rate/quality settings and per-device
 latency offsets supply the migration fallback. Automatic activation is on for a
 new profile for every recognized Sony model, subject to codec and volume-control
 availability. Existing profiles with LDAC manually enabled also adopt automatic
-activation once when upgrading. Activation requires the headphones to be the
-selected Mac output, verified local source ownership and a current driver. Manual Off persists
+activation once when upgrading. Connected headphones selected in Acouplet start
+LDAC automatically at launch even when another Mac audio output is selected.
+Direct startup waits for headphone controls and volume readback before playback.
+Activation requires a current driver and respects another active music source. Manual Off persists
 its suppression across reconnects; another multipoint source taking ownership
 also suppresses automatic activation until the user explicitly enables LDAC.
 

@@ -37,8 +37,6 @@ final class LDACController: ObservableObject {
     private let preferredConfiguration: (String) -> LDACConfiguration?
     private var codecPreferences: [String: Bool]
     private var automaticStartAttempts: [ObjectIdentifier: UInt64] = [:]
-    private var observedConnections: [ObjectIdentifier: Bool] = [:]
-    private var directStartCandidates = Set<String>()
     private var driverInspectionTask: Task<Void, Never>?
     private let isClassicConnected: (String) -> Bool
     private let localBluetoothAddress: () -> String?
@@ -192,9 +190,7 @@ final class LDACController: ObservableObject {
     private func observeDisconnectionRequests(_ controllers: [SonyHeadphonesController]) {
         let identifiers = Set(controllers.map(ObjectIdentifier.init))
         disconnectionObservations = disconnectionObservations.filter { identifiers.contains($0.key) }
-        observedConnections = observedConnections.filter { identifiers.contains($0.key) }
         for controller in controllers where disconnectionObservations[ObjectIdentifier(controller)] == nil {
-            observedConnections[ObjectIdentifier(controller)] = controller.isDeviceConnected || isClassicConnected(controller.address)
             controller.preferredAudioConnection = { [weak self, weak controller] in
                 guard let self, let controller else { return false }
                 return self.connectDirectly(forAddress: controller.address)
@@ -477,12 +473,6 @@ final class LDACController: ObservableObject {
     }
 
     func refreshPreferredCodec(resetAttempts: Bool = false) {
-        for headphones in devices?.controllers ?? [] {
-            let connected = headphones.isDeviceConnected || isClassicConnected(headphones.address)
-            let previous = observedConnections.updateValue(connected, forKey: ObjectIdentifier(headphones))
-            if !connected { directStartCandidates.remove(headphones.address) }
-            else if previous == false, !isSessionRunning, requestedAddress == nil { directStartCandidates.insert(headphones.address) }
-        }
         if resetAttempts { automaticStartAttempts.removeAll() }
         guard state == .off, !isSessionRunning, requestedAddress == nil,
               cleanupTask == nil, recoveryTask == nil,
@@ -492,12 +482,12 @@ final class LDACController: ObservableObject {
               let configuration = preferredConfiguration(address),
               let headphones = devices.controller(for: address), headphones.isDeviceConnected,
               automaticStartAttempts[ObjectIdentifier(headphones)] != headphones.notificationSession,
-              helpers.isAvailable, driverState == .current, preferenceRestoreTasks[address] == nil,
-              let route = audioRoute?.route, let uid = route.uid, let transport = route.transport else { return }
-        let headphoneOutput = LDACNativeOutput.canTransferControls(uid: uid, transport: transport.rawValue, address: address)
-        if canStartDirectly(forAddress: address), headphoneOutput || directStartCandidates.contains(address) {
+              helpers.isAvailable, driverState == .current, preferenceRestoreTasks[address] == nil else { return }
+        if canStartDirectly(forAddress: address) {
             setEnabled(true, forAddress: address, configuration: configuration, directly: true)
-        } else if headphoneOutput, canEnable(forAddress: address), headphones.pendingControlTransition == nil,
+        } else if let route = audioRoute?.route, let uid = route.uid, let transport = route.transport,
+                  LDACNativeOutput.canTransferControls(uid: uid, transport: transport.rawValue, address: address),
+                  canEnable(forAddress: address), headphones.pendingControlTransition == nil,
                   headphones.hasCurrentMusicSourceContext(for: localBluetoothAddress()) {
             setEnabled(true, forAddress: address, configuration: configuration)
         }
@@ -505,7 +495,6 @@ final class LDACController: ObservableObject {
 
     func setEnabled(_ enabled: Bool, forAddress address: String, configuration: LDACConfiguration? = nil, directly: Bool = false) {
         guard let address = SonyBLEIdentity.normalizedAddress(address) else { return }
-        directStartCandidates.remove(address)
         codecPreferences[address] = enabled
         defaults?.set(codecPreferences, forKey: "ldac.codecPreferences")
         if let headphones = devices?.controller(for: address) {
