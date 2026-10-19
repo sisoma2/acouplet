@@ -333,7 +333,7 @@ final class LDACController: ObservableObject {
             selectedApplicationCount: configuration.routing.bundleIDs.count, health: health, runtime: runtime)
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "Acouplet-LDAC-report.json"
+        panel.nameFieldStringValue = LDACDiagnosticReport.filename()
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             do {

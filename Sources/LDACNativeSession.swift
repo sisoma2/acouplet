@@ -188,6 +188,15 @@ struct LDACDiagnosticReport: Codable, Sendable {
     let health: LDACTransportHealth
     let runtime: LDACRuntimeStatus
 
+    static func filename(at date: Date = Date(), timeZone: TimeZone = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "yyyy-MM-dd-HHmmss"
+        return "Acouplet-LDAC-report-\(formatter.string(from: date)).json"
+    }
+
     static func redacted(_ text: String) -> String {
         var result = String(text.prefix(2048))
         for pattern in ["(?i)(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}",

@@ -147,6 +147,13 @@ final class LDACSupportTests: XCTestCase {
         XCTAssertFalse(LDACRuntimeStatus.supports(major: 28, minor: 0))
     }
 
+    func testDiagnosticReportFilenameIncludesTimestamp() throws {
+        let timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertEqual(LDACDiagnosticReport.filename(at: date, timeZone: timeZone),
+                       "Acouplet-LDAC-report-2023-11-14-221320.json")
+    }
+
     func testAdvertisedRatesAndChannelMasksAreUsedForAdmission() throws {
         let context = LDACCapabilityContext()
         let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
