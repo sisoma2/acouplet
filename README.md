@@ -40,8 +40,8 @@ and steps to reproduce it.
 
 LDAC uses an optional virtual audio output: a software device that macOS can send
 sound to while Acouplet plays it through your headphones using LDAC. The driver
-provides the output's timing and volume controls and coordinates Bluetooth
-playback priority. Audio capture, LDAC encoding and transmission run in separate
+provides the output's timing and volume controls and requests Bluetooth
+audio configuration. Audio capture, LDAC encoding and transmission run in separate
 Acouplet helper processes.
 
 The driver is a Core Audio HAL plug-in, loaded by macOS into a sandboxed audio
