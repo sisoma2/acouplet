@@ -36,9 +36,7 @@ final class AppEnvironment {
         ldac = LDACController(devices: devices, audioRoute: audioRoute, defaults: settings.defaults,
                               isDriverInspectionEnabled: { [weak settings] in settings?.experimentalLDACEnabled == true },
                               preferredConfiguration: { [weak settings] address in
-            guard let settings, settings.experimentalLDACEnabled else { return nil }
-            guard settings.ldacProfile(forAddress: address).automaticallyEnable else { return nil }
-            return settings.ldacConfiguration(forAddress: address)
+            settings?.automaticLDACConfiguration(forAddress: address)
         })
         notifications = SonyNotificationService(settings: settings, devices: devices,
                                                 presentLowBattery: { [weak devices, noiseModeHUD] warning, _ in

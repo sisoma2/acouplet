@@ -16,7 +16,7 @@ final class SettingsStoreTests: XCTestCase {
         let first = "AA:BB:CC:DD:EE:01"
         let second = "AA:BB:CC:DD:EE:02"
         XCTAssertEqual(settings.ldacProfile(forAddress: first).configuration.quality, .quality)
-        XCTAssertFalse(settings.ldacProfile(forAddress: first).automaticallyEnable)
+        XCTAssertTrue(settings.ldacProfile(forAddress: first).automaticallyEnable)
         settings.selectLDACDevice(address: first)
         settings.ldacConfiguration.sampleRate = .hz96000
         settings.recordLDACSuccess(forAddress: first, configuration: settings.ldacConfiguration)
@@ -30,7 +30,8 @@ final class SettingsStoreTests: XCTestCase {
         settings.applyLDACPreset(.video, forAddress: second)
         XCTAssertEqual(settings.ldacConfiguration.bufferProfile, .video)
         XCTAssertEqual(settings.ldacConfiguration.quality, .adaptive)
-        settings.updateLDACProfile(forAddress: second) { $0.automaticallyEnable = true }
+        settings.updateLDACProfile(forAddress: first) { $0.automaticallyEnable = false }
+        defaults.set([first: true], forKey: "ldac.codecPreferences")
         let reopened = SettingsStore(defaults: defaults)
         XCTAssertEqual(reopened.ldacConfiguration(forAddress: first).sampleRate, .hz96000)
         XCTAssertEqual(reopened.ldacConfiguration(forAddress: second).bufferProfile, .video)
@@ -39,6 +40,33 @@ final class SettingsStoreTests: XCTestCase {
         reopened.useLastSuccessfulLDACConfiguration(forAddress: first)
         XCTAssertEqual(reopened.ldacConfiguration(forAddress: first).quality, .quality)
         XCTAssertEqual(reopened.ldacProfile(forAddress: first).consecutiveFailures, 0)
+    }
+
+    @MainActor
+    func testPreviouslyEnabledLDACProfilesMigrateWithoutLosingConfigurationOrLaterOptOuts() throws {
+        let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let enabled = "AA:BB:CC:DD:EE:01"
+        let disabled = "AA:BB:CC:DD:EE:02"
+        let untouched = "AA:BB:CC:DD:EE:03"
+        var profile = LDACDeviceProfile(configuration: LDACConfiguration(sampleRate: .hz96000, quality: .quality))
+        profile.automaticallyEnable = false
+        profile.lastSuccessfulConfiguration = profile.configuration
+        defaults.set(try JSONEncoder().encode([enabled: profile, disabled: profile, untouched: profile]),
+                     forKey: "preferences.ldacDeviceProfiles")
+        defaults.set([enabled: true, disabled: false], forKey: "ldac.codecPreferences")
+
+        let settings = SettingsStore(defaults: defaults)
+        XCTAssertEqual(settings.automaticLDACConfiguration(forAddress: enabled), profile.configuration)
+        XCTAssertEqual(settings.ldacProfile(forAddress: enabled).lastSuccessfulConfiguration, profile.configuration)
+        XCTAssertNil(settings.automaticLDACConfiguration(forAddress: disabled))
+        XCTAssertNil(settings.automaticLDACConfiguration(forAddress: untouched))
+        XCTAssertEqual(defaults.dictionary(forKey: "ldac.codecPreferences")?[disabled] as? Bool, false)
+        XCTAssertTrue(SettingsStore(defaults: defaults).ldacProfile(forAddress: enabled).automaticallyEnable)
+
+        settings.updateLDACProfile(forAddress: enabled) { $0.automaticallyEnable = false }
+        XCTAssertNil(SettingsStore(defaults: defaults).automaticLDACConfiguration(forAddress: enabled))
     }
 
     @MainActor

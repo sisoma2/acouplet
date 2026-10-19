@@ -89,7 +89,7 @@ struct LDACApplicationRouting: Codable, Equatable, Sendable {
 
 struct LDACDeviceProfile: Codable, Equatable, Sendable {
     var configuration: LDACConfiguration
-    var automaticallyEnable = false
+    var automaticallyEnable = true
     var lastSuccessfulConfiguration: LDACConfiguration? = nil
     var consecutiveFailures = 0
 }

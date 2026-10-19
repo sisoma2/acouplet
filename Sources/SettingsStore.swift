@@ -59,7 +59,10 @@ final class SettingsStore: ObservableObject {
     }
     #if !ACOUPLET_PUBLIC_APIS_ONLY
     @Published private(set) var ldacDeviceProfiles: [String: LDACDeviceProfile] {
-        didSet { persist(ldacDeviceProfiles, forKey: "preferences.ldacDeviceProfiles") }
+        didSet {
+            persist(ldacDeviceProfiles, forKey: "preferences.ldacDeviceProfiles")
+            defaults.set(true, forKey: "preferences.ldacAutomaticActivationMigrated")
+        }
     }
     private var selectedLDACAddress: String?
     private var isLoadingLDACProfile = false
@@ -155,6 +158,9 @@ final class SettingsStore: ObservableObject {
         customEqualizerDraft = Self.decode(EqualizerSettings.self, from: defaults.data(forKey: Keys.customEqualizerDraft)) ?? .flat
         equalizerDraftsByDevice = Self.decode([String: EqualizerSettings].self, from: defaults.data(forKey: Keys.equalizerDraftsByDevice)) ?? [:]
         equalizerProfiles = Self.decode([SavedEqualizerProfile].self, from: defaults.data(forKey: Keys.equalizerProfiles)) ?? []
+        #if !ACOUPLET_PUBLIC_APIS_ONLY
+        migrateAutomaticLDACActivation()
+        #endif
         refreshLaunchStatus()
     }
 
@@ -169,6 +175,23 @@ final class SettingsStore: ObservableObject {
 
     func ldacConfiguration(forAddress address: String) -> LDACConfiguration {
         ldacProfile(forAddress: address).configuration
+    }
+
+    func automaticLDACConfiguration(forAddress address: String) -> LDACConfiguration? {
+        let profile = ldacProfile(forAddress: address)
+        guard experimentalLDACEnabled, profile.automaticallyEnable else { return nil }
+        return profile.configuration
+    }
+
+    private func migrateAutomaticLDACActivation() {
+        let key = "preferences.ldacAutomaticActivationMigrated"
+        guard !defaults.bool(forKey: key), !ldacDeviceProfiles.isEmpty else { return }
+        let codecPreferences = defaults.dictionary(forKey: "ldac.codecPreferences") as? [String: Bool] ?? [:]
+        for (address, var profile) in ldacDeviceProfiles where codecPreferences[address] == true && !profile.automaticallyEnable {
+            profile.automaticallyEnable = true
+            ldacDeviceProfiles[address] = profile
+        }
+        defaults.set(true, forKey: key)
     }
 
     func selectLDACDevice(address: String) {

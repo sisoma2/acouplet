@@ -158,9 +158,11 @@ native property/parser checks run through `Packaging/check-all.py`.
 General > Experimental Features > LDAC device profile stores the rate, quality,
 latency calibration, buffer reserve, microphone policy and application selection
 for each Bluetooth device. Existing global rate/quality settings and per-device
-latency offsets supply the migration fallback. Automatic activation is off for a
-new profile. Enabling it still requires the headphones to be the selected Mac
-output, verified local source ownership and a current driver. Manual Off persists
+latency offsets supply the migration fallback. Automatic activation is on for a
+new profile for every recognized Sony model, subject to codec and volume-control
+availability. Existing profiles with LDAC manually enabled also adopt automatic
+activation once when upgrading. Activation requires the headphones to be the
+selected Mac output, verified local source ownership and a current driver. Manual Off persists
 its suppression across reconnects; another multipoint source taking ownership
 also suppresses automatic activation until the user explicitly enables LDAC.
 

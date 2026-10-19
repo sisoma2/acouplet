@@ -133,6 +133,47 @@ final class LDACDriverInstallerTests: XCTestCase {
 final class LDACDefaultCodecTests: XCTestCase {
     private let address = "02:53:4F:4E:59:01"
 
+    func testRecognizedSonyModelsAutomaticallyAttemptLDACWhenControlsAreAvailable() async throws {
+        var automaticallyStartedModels: [SonyDeviceModel] = []
+        for model in SonyDeviceModel.allCases where model != .unknown {
+            let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let settings = SettingsStore(defaults: defaults)
+            settings.selectLDACDevice(address: address)
+            XCTAssertTrue(settings.ldacProfile(forAddress: address).automaticallyEnable, model.name)
+            let (ldac, headphones, route) = try prepared(defaults: defaults, model: model,
+                preferredConfiguration: { settings.automaticLDACConfiguration(forAddress: $0) })
+            defer { ldac.stop(); headphones.simulateControlLoss() }
+            await drainTasks()
+            guard ldac.deviceUnavailableReason(forAddress: address) == nil else {
+                XCTAssertEqual(ldac.simulatedStarts, [], model.name)
+                continue
+            }
+            XCTAssertEqual(ldac.simulatedStarts, [address], model.name)
+            automaticallyStartedModels.append(model)
+
+            ldac.stop(restoreAudio: false)
+            headphones.simulateControlLoss(deviceConnected: false)
+            for _ in 0..<100 where ldac.isSessionRunning { try await Task.sleep(for: .milliseconds(5)) }
+            XCTAssertFalse(ldac.isSessionRunning)
+            headphones.simulateDeviceConnection(named: model.name, simulatedAddress: address, galleryModel: model)
+            route.simulateRoute(sonyOutput)
+            await drainTasks()
+            XCTAssertEqual(ldac.simulatedStarts, [address, address], model.name)
+
+            ldac.setEnabled(false, forAddress: address)
+            for _ in 0..<100 where ldac.isSessionRunning { try await Task.sleep(for: .milliseconds(5)) }
+            route.simulateRoute(sonyOutput)
+            await drainTasks()
+            XCTAssertEqual(ldac.simulatedStarts, [address, address], model.name)
+            XCTAssertNil(ldac.simulatedRequestedAddress)
+        }
+        for model in [SonyDeviceModel.wfXM5, .whXM5, .wfXM6, .whXM6, .whULT900N, .wh1000XX] {
+            XCTAssertTrue(automaticallyStartedModels.contains(model), model.name)
+        }
+    }
+
     func testStartsLDACForTheSelectedSonyOutputWithoutAManualRequest() async throws {
         let (ldac, headphones, route) = try prepared()
         defer { ldac.stop(); headphones.simulateControlLoss() }
