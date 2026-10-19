@@ -741,6 +741,10 @@ struct MenuBarView: View {
                     .disabled(headphones.powerOffState != nil || headphones.isRunningHeadphoneTest)
                 }
                 Divider()
+                Button("Disconnect", systemImage: "rectangle.portrait.and.arrow.right", action: headphones.disconnect)
+                    .disabled(!headphones.canDisconnect)
+                    .help("Disconnect from this Mac and pause automatic reconnect")
+                    .accessibilityIdentifier("headphones.disconnect")
                 if headphones.supportedFunctions.contains(0x23) {
                     Button("Turn Off Headphones…", systemImage: "power") {
                         if let session = headphones.powerOffSession {

@@ -767,8 +767,8 @@ extension LDACNativeSession {
     @MainActor
     static func mediaFailureCheck(_ mode: String) async throws {
         let events = SessionEvents()
-        let session = try lossSession(active: !["setup", "closed-before-active"].contains(mode), events: events)
-        if mode == "stopping" { session.stop(restoreAudio: false) }
+        let session = try lossSession(active: !["setup", "closed-before-active", "stopping-closed-before-active"].contains(mode), events: events)
+        if mode.hasPrefix("stopping") { session.stop(restoreAudio: false) }
         let closed = "FEED_COMPLETE result=5 strictPass=0 sentPackets=1 drainedPackets=1 closed=1"
         let daemon = "l2capDisconnected for CID: 0x0041"
         let encoder = "ENCODER_FAILED reason=packet-boundary bytes=700 outgoingMTU=679 baseline=1000"
@@ -785,6 +785,11 @@ extension LDACNativeSession {
         case "unknown-error": lines = [("media", "FEED_COMPLETE result=5 strictPass=0 sentPackets=1")]
         case "setup": lines = [("media", "FEED_COMPLETE result=5 strictPass=0 reason=invalid-start-or-prefill sentPackets=0")]
         case "stopping": lines = [("media", "FEED_COMPLETE result=0 strictPass=1 sentPackets=1 closed=0")]
+        case "stopping-closed", "stopping-closed-before-active": lines = [("media", closed)]
+        case "stopping-open-error": lines = [("media", "FEED_COMPLETE result=5 strictPass=0 sentPackets=1 closed=0")]
+        case "stopping-unknown-error": lines = [("media", "FEED_COMPLETE result=5 strictPass=0 sentPackets=1")]
+        case "stopping-other-error": lines = [("media", "FEED_COMPLETE result=4 strictPass=0 sentPackets=1 closed=1")]
+        case "stopping-encoder": lines = [("media", encoder), ("media", closed)]
         default: throw ClosureCheckError(description: "Unknown media fixture")
         }
         for (source, line) in lines {
@@ -793,16 +798,20 @@ extension LDACNativeSession {
             if line == encoder { try require(session.hardFailure, "Encoder diagnostic did not immediately retain hard failure") }
         }
         let recoverable = ["media-first", "daemon-first", "closure-first", "daemon-then-encoder"].contains(mode)
-        let hard = !["media-first", "daemon-first", "stopping"].contains(mode)
+        let hard = !["media-first", "daemon-first", "stopping", "stopping-closed"].contains(mode)
         try require(session.feedFinished && session.shouldStop, "Media completion did not enter shutdown")
         try require(session.recoverableFailure == recoverable && session.hardFailure == hard,
             "Media closure/error classification depended on child output order: \(mode)")
         try require(!session.mediaCloseRequired && !session.mediaCloseSent, "Media diagnostic bypassed signaling cleanup")
+        if mode == "stopping-closed" {
+            try require(!session.mediaGate.closed && !session.signalingGate.closed,
+                        "An expected feed closure bypassed transport closure verification")
+        }
         if recoverable {
             try session.handle("media", line: closed)
         }
         for _ in 0..<100 { await Task.yield() }
-        let expected = mode == "stopping" ? [] : ["closure-first", "daemon-then-encoder"].contains(mode) ? ["connectionLost", "failed"]
+        let expected = ["stopping", "stopping-closed"].contains(mode) ? [] : ["closure-first", "daemon-then-encoder"].contains(mode) ? ["connectionLost", "failed"]
             : [hard ? "failed" : "connectionLost"]
         try require(events.names == expected, "Media failure emitted incorrect or repeated events: \(events.names)")
     }
@@ -1222,7 +1231,9 @@ enum LDACSessionClosureCheck {
             }
         }
         for mode in ["media-first", "daemon-first", "encoder-first", "closure-first", "daemon-then-encoder",
-                     "pcm-error", "open-error", "unknown-error", "setup", "closed-before-active", "stopping"] {
+                     "pcm-error", "open-error", "unknown-error", "setup", "closed-before-active", "stopping",
+                     "stopping-closed", "stopping-closed-before-active", "stopping-open-error", "stopping-unknown-error",
+                     "stopping-other-error", "stopping-encoder"] {
             ownershipChecks += 1
             do {
                 try await LDACNativeSession.mediaFailureCheck(mode)

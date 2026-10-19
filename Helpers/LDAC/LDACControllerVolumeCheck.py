@@ -101,6 +101,7 @@ final class SonyHeadphonesController: ObservableObject {
     var multipoint = Multipoint()
     var earbudFinder: EarbudFinder?
     var isReady = true
+    var isReconnectPaused = false
     var isDeviceConnected = true
     var ldacRequiresMultipointOff = false
     var pendingControlTransition: String?

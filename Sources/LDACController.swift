@@ -74,6 +74,7 @@ final class LDACController: ObservableObject {
     }
     private var controlObservation: AnyCancellable?
     private var availabilityObservations = Set<AnyCancellable>()
+    private var disconnectionObservations: [ObjectIdentifier: AnyCancellable] = [:]
     private let audioRoute: MacAudioRouteObserver?
     private var resumeOutputUID: String?
     private var lastResumeBlockers: String?
@@ -135,6 +136,9 @@ final class LDACController: ObservableObject {
         helpers = LDACNativeSession.Helpers(bundle: bundle)
         self.devices = devices
         self.audioRoute = audioRoute
+        devices?.$controllers.sink { [weak self] controllers in
+            self?.observeDisconnectionRequests(controllers)
+        }.store(in: &availabilityObservations)
         if let saved = defaults?.dictionary(forKey: "ldac.pendingConnectionPreferences") as? [String: String] {
             for (address, value) in saved where SonyBLEIdentity.normalizedAddress(address) == address {
                 if let request = UUID(uuidString: value) { pendingConnectionModes[address] = request }
@@ -161,6 +165,24 @@ final class LDACController: ObservableObject {
     }
 
     var needsStopBeforeTermination: Bool { isSessionRunning || !preferenceRestoreTasks.isEmpty }
+
+    private func observeDisconnectionRequests(_ controllers: [SonyHeadphonesController]) {
+        let identifiers = Set(controllers.map(ObjectIdentifier.init))
+        disconnectionObservations = disconnectionObservations.filter { identifiers.contains($0.key) }
+        for controller in controllers where disconnectionObservations[ObjectIdentifier(controller)] == nil {
+            disconnectionObservations[ObjectIdentifier(controller)] = controller.disconnectionRequests.sink { [weak self, weak controller] in
+                guard let self, let controller else { return }
+                let address = controller.address
+                if self.multipointConflictAddress == address {
+                    self.multipointConflictAddress = nil
+                    self.multipointConflictConfiguration = nil
+                }
+                if self.targetAddress == address || self.requestedAddress == address {
+                    self.stop(restoreAudio: false, reason: "user disconnected or powered off headphones")
+                }
+            }
+        }
+    }
 
     #if DEBUG
     func simulateConnectionPreferenceRestoration(_ headphones: SonyHeadphonesController, request: UUID) async -> String? {
@@ -276,7 +298,7 @@ final class LDACController: ObservableObject {
             return String(localized: "This model does not support the LDAC codec.")
         default: break
         }
-        guard headphones.isReady else {
+        guard headphones.isReady, !headphones.isReconnectPaused else {
             return String(localized: "Connect the headphone controls in Acouplet before starting LDAC.")
         }
         guard headphones.earbudFinder?.isBusy != true, headphones.earbudFinder?.mayBeRinging != true else {
@@ -524,7 +546,7 @@ final class LDACController: ObservableObject {
     func canRestoreConnectionPreference(forAddress address: String) -> Bool {
         guard hasPendingConnectionPreferenceRestoration(forAddress: address), preferenceRestoreTasks[address] == nil,
               devices?.isSystemSleeping != true, let headphones = devices?.controller(for: address),
-              headphones.isDeviceConnected, headphones.isReady, headphones.connectionMode == .soundQuality,
+              headphones.isDeviceConnected, headphones.isReady, !headphones.isReconnectPaused, headphones.connectionMode == .soundQuality,
               headphones.earbudFinder?.isBusy != true, headphones.earbudFinder?.mayBeRinging != true else { return false }
         return headphones.connectionModeUnavailableReason(.stableConnection) == nil
     }
@@ -590,7 +612,7 @@ final class LDACController: ObservableObject {
         guard synchronizeMicrophoneHandoff() else { return }
         reconcileConnectionPreferences()
         for (address, request) in deferredConnectionModes where address != requestedAddress && preferenceRestoreTasks[address] == nil {
-            guard let headphones = devices?.controller(for: address), headphones.isDeviceConnected, headphones.isReady,
+            guard let headphones = devices?.controller(for: address), headphones.isDeviceConnected, headphones.isReady, !headphones.isReconnectPaused,
                   headphones.earbudFinder?.isBusy != true, headphones.earbudFinder?.mayBeRinging != true else { continue }
             deferredConnectionModes[address] = nil
             scheduleConnectionPreferenceRestoration(headphones, address: address, request: request)
@@ -861,7 +883,7 @@ final class LDACController: ObservableObject {
                 throw ControlError(String(localized: "The headphone connection changed. Try LDAC again."))
             }
             guard headphones.lastConnectionModeChangeID == request else { return false }
-            if restoring, headphones.earbudFinder?.isBusy == true || headphones.earbudFinder?.mayBeRinging == true {
+            if restoring, headphones.isReconnectPaused || headphones.earbudFinder?.isBusy == true || headphones.earbudFinder?.mayBeRinging == true {
                 deferredConnectionModes[address] = request
                 pendingConnectionModes[address] = request
                 return false
@@ -1624,7 +1646,7 @@ final class LDACController: ObservableObject {
         let output = nativeOutput
         cleanupTask = Task { [weak self] in
             guard let self else { return }
-            let disconnected = targetDisconnected || self.devices?.isSystemSleeping == true
+            let disconnected = targetDisconnected || self.devices?.isSystemSleeping == true || !self.restoreAudioOnStop
             let restoreError = await output?.restoreAndRelease(targetDisconnected: disconnected)
             let connectionRestoreError: String?
             if disconnected || self.suspensionRequested {

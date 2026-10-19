@@ -73,6 +73,7 @@ final class Device: ObservableObject {
     var firmwareVersion: String?
     var systemFeatures = SystemFeatures()
     @Published var isReady: Bool
+    var isReconnectPaused = false
     var notificationSession: UInt64 = 1
     @Published var isDeviceConnected = true
     var localSource = true

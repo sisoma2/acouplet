@@ -4,6 +4,59 @@ import IOBluetooth
 
 final class SonyConnectionControllerTests: XCTestCase {
     @MainActor
+    func testDisconnectClosesBluetoothAndPausesReconnectUntilExplicitConnect() {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        controller.simulateDeviceConnection(named: "WF-1000XM5")
+        let device = ServiceDiscoveryDevice()
+        controller.simulateSelectedDevice(device)
+        XCTAssertTrue(controller.canDisconnect)
+        controller.disconnect()
+        XCTAssertEqual(device.closeCount, 1)
+        XCTAssertFalse(device.connected)
+        XCTAssertFalse(controller.isDeviceConnected)
+        XCTAssertEqual(controller.linkState, .disconnected)
+        XCTAssertTrue(controller.isReconnectPaused)
+        let session = controller.simulatedControlSession
+        for _ in 0..<3 {
+            controller.simulateAutomaticRefresh(deviceConnected: true)
+            controller.setReconnectAutomatically(true)
+            controller.refresh()
+            XCTAssertFalse(controller.retryControlsIfNeeded(allowingSuppressedReconnect: true))
+        }
+        controller.systemWillSleep()
+        controller.systemDidWake()
+        XCTAssertEqual(controller.simulatedControlSession, session + 1)
+        XCTAssertEqual(device.classicOpenCount, 0)
+        XCTAssertTrue(device.openedChannels.isEmpty)
+        XCTAssertNil(controller.retrySecondsRemaining)
+        controller.connect()
+        XCTAssertFalse(controller.isReconnectPaused)
+        XCTAssertEqual(device.classicOpenCount, 1)
+        controller.simulateControlLoss()
+    }
+
+    @MainActor
+    func testDisconnectFailureReportsErrorAndAllowsRetry() {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        controller.simulateDeviceConnection(named: "WF-1000XM5")
+        let device = ServiceDiscoveryDevice()
+        device.closeStatus = kIOReturnError
+        controller.simulateSelectedDevice(device)
+        controller.disconnect()
+        XCTAssertEqual(device.closeCount, 1)
+        XCTAssertTrue(controller.isDeviceConnected)
+        XCTAssertNotNil(controller.lastErrorMessage)
+        XCTAssertTrue(controller.isReconnectPaused)
+        XCTAssertTrue(controller.canDisconnect)
+        device.closeStatus = kIOReturnSuccess
+        controller.disconnect()
+        XCTAssertEqual(device.closeCount, 2)
+        XCTAssertFalse(controller.isDeviceConnected)
+        XCTAssertNil(controller.lastErrorMessage)
+        controller.simulateControlLoss()
+    }
+
+    @MainActor
     func testNoiseShortcutUsesOffAndAmbientWhenANCIsNotAdvertised() throws {
         for (function, inquiry): (UInt8, UInt8) in [(0x66, 0x21), (0x67, 0x22)] {
             let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
@@ -2820,6 +2873,8 @@ private final class ServiceDiscoveryDevice: NSObject, SonyBluetoothDevice, @unch
     var reportedAddress: String?
     @objc var classicPeer: NSObject?
     var classicOpenCount = 0
+    var closeCount = 0
+    var closeStatus = kIOReturnSuccess
     var service: (any SonyServiceRecord)?
     var channel: (any RFCOMMChannel)?
     var openStatus = kIOReturnSuccess
@@ -2840,6 +2895,12 @@ private final class ServiceDiscoveryDevice: NSObject, SonyBluetoothDevice, @unch
     func openConnection(_ target: Any!) -> IOReturn {
         classicOpenCount += 1
         return kIOReturnSuccess
+    }
+
+    func closeConnection() -> IOReturn {
+        closeCount += 1
+        if closeStatus == kIOReturnSuccess { connected = false }
+        return closeStatus
     }
 
     func sonyServiceRecord(for uuid: IOBluetoothSDPUUID) -> (any SonyServiceRecord)? {

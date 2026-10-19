@@ -3,6 +3,55 @@ import XCTest
 
 final class SonyPowerOffTests: XCTestCase {
     @MainActor
+    func testPowerOffPausesMacPlaybackBeforeSendingCommandAndStoppingLDAC() throws {
+        var controller: SonyHeadphonesController!
+        defer { controller = nil }
+        var pauses = 0
+        controller = SonyHeadphonesController(startAutomatically: false, simulated: true, pauseMacPlayback: {
+            pauses += 1
+            XCTAssertNil(controller.powerOffState)
+            XCTAssertTrue(controller.simulatedTransmittedFrames.isEmpty)
+        })
+        controller.simulateDeviceConnection(named: "WF-1000XM5")
+        let observation = controller.disconnectionRequests.sink { XCTAssertEqual(pauses, 1) }
+        let session = try XCTUnwrap(controller.powerOffSession)
+        controller.powerOff(expectedSession: session + 1)
+        XCTAssertEqual(pauses, 0)
+        controller.powerOff(expectedSession: session)
+        XCTAssertEqual(pauses, 1)
+        XCTAssertEqual(controller.simulatedPendingFrame?.payload, [0x24, 3, 1])
+        controller.powerOff(expectedSession: session)
+        XCTAssertEqual(pauses, 1)
+        observation.cancel()
+        controller.simulateControlLoss()
+    }
+
+    @MainActor
+    func testDisconnectPausesMacPlaybackBeforeClosingTheConnectionAndStoppingLDAC() {
+        var controller: SonyHeadphonesController!
+        defer { controller = nil }
+        var pauses = 0
+        controller = SonyHeadphonesController(startAutomatically: false, simulated: true, pauseMacPlayback: {
+            pauses += 1
+            XCTAssertTrue(controller.isReady)
+            XCTAssertTrue(controller.isDeviceConnected)
+            XCTAssertFalse(controller.isDisconnectedByUser)
+        })
+        controller.disconnect()
+        XCTAssertEqual(pauses, 0)
+        controller.simulateDeviceConnection(named: "WF-1000XM5")
+        let observation = controller.disconnectionRequests.sink { XCTAssertEqual(pauses, 1) }
+        controller.disconnect()
+        XCTAssertEqual(pauses, 1)
+        XCTAssertEqual(controller.linkState, .disconnected)
+        XCTAssertFalse(controller.isDeviceConnected)
+        controller.disconnect()
+        XCTAssertEqual(pauses, 1)
+        observation.cancel()
+        controller.simulateControlLoss()
+    }
+
+    @MainActor
     func testPowerOffRequiresReadyAdvertisedSupportAndTheConfirmedSession() throws {
         let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
         XCTAssertNil(controller.powerOffSession)

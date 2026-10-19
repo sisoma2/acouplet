@@ -18319,6 +18319,40 @@
           }
         }
       }
+    },
+    "Disconnect from this Mac and pause automatic reconnect": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnect from this Mac and pause automatic reconnect"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu Mac ile bağlantıyı kes ve otomatik yeniden bağlanmayı duraklat"
+          }
+        }
+      }
+    },
+    "Couldn’t disconnect the headphones. Try again or use Bluetooth Settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t disconnect the headphones. Try again or use Bluetooth Settings."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kulaklıkların bağlantısı kesilemedi. Tekrar deneyin veya Bluetooth Ayarları’nı kullanın."
+          }
+        }
+      }
     }
   },
   "version": "1.1"

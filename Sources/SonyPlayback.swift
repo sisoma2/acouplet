@@ -1,5 +1,22 @@
 import Foundation
 
+@MainActor
+enum MacMediaPlayback {
+    #if !ACOUPLET_PUBLIC_APIS_ONLY
+    private static let library = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_NOW | RTLD_LOCAL)
+    private typealias SendCommand = @convention(c) (UInt32, CFDictionary?) -> Bool
+    private static let pauseCommand: UInt32 = 1
+    #endif
+
+    static func pause() {
+        #if !ACOUPLET_PUBLIC_APIS_ONLY
+        guard let library, let symbol = dlsym(library, "MRMediaRemoteSendCommand") else { return }
+        let send = unsafeBitCast(symbol, to: SendCommand.self)
+        _ = send(pauseCommand, nil)
+        #endif
+    }
+}
+
 enum SonyPlaybackState: UInt8, Sendable {
     case unsettled = 0, playing, paused, stopped
 }

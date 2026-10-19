@@ -7,6 +7,55 @@ import XCTest
 final class LDACCallAudioTests: XCTestCase {
     private let address = "02:53:4F:4E:59:01"
 
+    func testPowerOffAndDisconnectCancelLDACWithoutReconnecting() async throws {
+        for powerOff in [true, false] {
+            let (controller, headphones) = try controller(audio: Hardware().audio())
+            if powerOff {
+                headphones.powerOff(expectedSession: try XCTUnwrap(headphones.powerOffSession))
+            } else {
+                headphones.disconnect()
+            }
+            XCTAssertNil(controller.simulatedRequestedAddress)
+            XCTAssertFalse(controller.simulatedRestoresAudioOnStop)
+            await drainTasks()
+            XCTAssertEqual(controller.state, .off)
+            XCTAssertNil(controller.targetAddress)
+            XCTAssertFalse(controller.isSessionRunning)
+            XCTAssertFalse(controller.isAwaitingAutomaticRetry)
+            XCTAssertTrue(controller.simulatedLaunches?.isEmpty == true)
+            XCTAssertTrue(controller.simulatedStarts?.isEmpty == true)
+            controller.refreshPreferredCodec(resetAttempts: true)
+            XCTAssertEqual(controller.state, .off)
+            headphones.simulateControlLoss()
+        }
+    }
+
+    func testPowerOffAndDisconnectCancelWaitingLDACRequest() async throws {
+        for powerOff in [true, false] {
+            let hardware = Hardware()
+            let audio = hardware.audio()
+            let (controller, headphones) = try controller(audio: audio)
+            hardware.active = true
+            audio.refresh()
+            await drainTasks()
+            XCTAssertEqual(controller.state, .waitingForDevice)
+            if powerOff {
+                headphones.powerOff(expectedSession: try XCTUnwrap(headphones.powerOffSession))
+            } else {
+                headphones.disconnect()
+            }
+            XCTAssertEqual(controller.state, .off)
+            XCTAssertNil(controller.simulatedRequestedAddress)
+            XCTAssertNil(controller.targetAddress)
+            hardware.active = false
+            hardware.time = 10
+            audio.refresh()
+            await drainTasks()
+            XCTAssertTrue(controller.simulatedStarts?.isEmpty == true)
+            headphones.simulateControlLoss()
+        }
+    }
+
     func testAcoupletCaptureHelpersDoNotTriggerCallHandoff() {
         let otherPID = ProcessInfo.processInfo.processIdentifier + 1
         for bundleID in ["dev.baglayan.Acouplet", "dev.baglayan.Acouplet.debug", "dev.baglayan.Acouplet.ldac-audio"] {

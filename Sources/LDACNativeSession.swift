@@ -1000,6 +1000,12 @@ final class LDACNativeSession: @unchecked Sendable {
                 fail("Live LDAC transmission ended with an error.")
             } else if line.hasPrefix("FEED_COMPLETE ") {
                 feedFinished = true
+                if active, lock.withLock({ requestedStop }),
+                   line.range(of: "\\bresult=5\\b", options: .regularExpression) != nil,
+                   line.range(of: "\\bclosed=1\\b", options: .regularExpression) != nil {
+                    record("STREAM_CLOSED_DURING_STOP")
+                    return
+                }
                 if active, !shouldStop, line.range(of: "\\bclosed=1\\b", options: .regularExpression) != nil {
                     connectionLost("The LDAC Bluetooth connection ended.")
                 }
