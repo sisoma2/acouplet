@@ -18,8 +18,8 @@ For installation and everyday use, start with the [project README](../README.md)
 | [Hardware qualification](HardwareQualification.md) | Preparing and recording manual playback, call and recovery scenarios. |
 | [Validation history](ValidationHistory.md) | Recorded macOS 26.7.1 test results and remaining qualification limits. |
 
-Run shell commands in these guides from the repository root. After changing the
-project, follow [Install and run local changes](Development.md#install-and-run-local-changes)
+Run shell commands in these guides from the repository root. After editing Swift
+or other app code, follow [Install and run local changes](Development.md#install-and-run-local-changes)
 to build, install and verify a signed Release update.
 
 ## Repository layout

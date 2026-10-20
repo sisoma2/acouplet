@@ -14,12 +14,15 @@ uv run --locked ruff check .
 uv run --locked ruff format --check .
 ```
 
-These checks report existing lint and formatting findings as well as new ones.
-Use `uv run --locked ruff format .` to apply formatting deliberately. The
-native test runner does not invoke Ruff. To run its checks with the project's
-Python interpreter, use `uv run --locked python Packaging/check-all.py` and
-the same selection flags documented below. Direct `python3` commands remain
-supported for environments without uv, including the isolated GUI-test VM.
+After editing Python files, run the lint check and
+`uv run --locked ruff format .`, fix all lint errors, and confirm both checks
+above pass before building and installing any required update. Skip Ruff lint
+and formatting checks when no Python files change.
+
+The native test runner does not invoke Ruff. To run its checks with the project's
+Python interpreter, use `uv run --locked python Packaging/check-all.py` and the
+same selection flags documented below. Direct `python3` commands remain supported
+for environments without uv, including the isolated GUI-test VM.
 
 ## Tests
 

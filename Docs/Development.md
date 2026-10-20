@@ -33,11 +33,13 @@ uv run --locked ruff format --check .
 uv run --locked python Packaging/check-all.py
 ```
 
-Use `uv run --locked ruff format .` to apply formatting. The repository has
-existing lint and formatting findings; adding the environment does not reformat
-the existing scripts. Ruff targets Python 3.9 and excludes build outputs and
-vendored code. Configure editor integrations to use `.venv/bin/ruff` so they
-use the same version as the command line.
+After editing Python files, run `uv run --locked ruff check .` and
+`uv run --locked ruff format .`, fix all lint errors, and confirm the lint and
+format checks above pass before building and installing any required update.
+Skip Ruff lint and formatting checks when no Python files change. Ruff targets
+Python 3.9 and excludes build outputs and vendored code. Configure editor
+integrations to use `.venv/bin/ruff` so they use the same version as the command
+line.
 
 Xcode phases, packaging scripts and the isolated GUI-test VM continue to use
 their existing Python interpreters. They do not require uv or Ruff. Python
@@ -81,10 +83,12 @@ Do not rebuild while installation is running.
 
 ## Install and run local changes
 
-After finishing edits, run these commands from the repository root to test the
-updated app in `/Applications`. The build uses the installed app's signing team
-and an existing Apple Development certificate from that team. This preserves
-the installed app's identity and settings, including LDAC driver authentication.
+After editing Swift or other app code, run these commands from the repository
+root to test the updated app in `/Applications`. Skip this Release build,
+installation and launch workflow when no Swift or other app code changes.
+The build uses the installed app's signing team and an existing Apple Development
+certificate from that team. This preserves the installed app's identity and
+settings, including LDAC driver authentication.
 
 ```sh
 CODE_SIGN_IDENTITY='Apple Development' \
