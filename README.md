@@ -80,7 +80,9 @@ Restart the Mac afterward.
 
 ## Building from source
 
-See [Development](NATIVE_MACOS.md) for build requirements, options and tests.
+See [project documentation](Docs/README.md) for development guides, LDAC details
+and research. Start with [Development](Docs/Development.md) for build requirements
+and options, or [Testing](Docs/Testing.md) for checks.
 
 Sony product photographs are not included in the current source tree. They are
 third-party artwork and are not covered by this project's MIT license. Source

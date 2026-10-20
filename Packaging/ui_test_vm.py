@@ -15,7 +15,7 @@ from pathlib import Path
 def require_guest():
     result = subprocess.run(['/usr/sbin/sysctl', '-n', 'kern.hv_vmm_present'], capture_output=True, text=True, timeout=10)
     if result.returncode != 0 or result.stdout.strip() != '1':
-        raise ValueError('GUI tests require an isolated macOS VM. Apple XCTest automation has crashed Code, Chrome and Finder on this desktop. Use --ui-vm NAME with a prepared local Tart VM, or run the GUI suite inside a macOS guest. See NATIVE_MACOS.md. No GUI automation was started.')
+        raise ValueError('GUI tests require an isolated macOS VM. Apple XCTest automation has crashed Code, Chrome and Finder on this desktop. Use --ui-vm NAME with a prepared local Tart VM, or run the GUI suite inside a macOS guest. See Docs/Testing.md. No GUI automation was started.')
 
 
 def validate_vm(name):
@@ -23,7 +23,7 @@ def validate_vm(name):
         raise ValueError('--ui-vm must name a prepared local Tart VM.')
     tart = shutil.which('tart')
     if tart is None:
-        raise ValueError('Tart is required for --ui-vm. Install Tart and prepare a macOS VM with Xcode; see NATIVE_MACOS.md.')
+        raise ValueError('Tart is required for --ui-vm. Install Tart and prepare a macOS VM with Xcode; see Docs/Testing.md.')
     result = subprocess.run([tart, 'list', '--source', 'local', '--format', 'json'], check=True, capture_output=True, text=True, timeout=30)
     matches = [vm for vm in json.loads(result.stdout) if vm['Name'] == name]
     if len(matches) != 1 or matches[0]['State'] != 'stopped':

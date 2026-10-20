@@ -34,5 +34,5 @@ The archived patch includes that historical fallback, so its command-line packet
 mode also falls back to socket/window one on Classic. Only the fake packet channel
 in the offline fixture exercises the pipeline. Further live work requires a
 supported transport that preserves packet boundaries, followed by an HCI capture
-and controlled comparisons. See [the investigation](../../NATIVE_MACOS.md#sender-timing-and-bounded-packet-submission)
+and controlled comparisons. See [the investigation](../../Docs/LDACTransport.md#sender-timing-and-bounded-packet-submission)
 for timing tools, live findings, and measurement limits.
