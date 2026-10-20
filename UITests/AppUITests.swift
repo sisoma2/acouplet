@@ -1719,7 +1719,7 @@ final class AppUITests: XCTestCase {
     }
 
     @MainActor
-    func testReopeningDisconnectedBackgroundAppShowsSettings() throws {
+    func testReopeningDisconnectedBackgroundAppKeepsSettingsClosed() throws {
         let app = XCUIApplication()
         defer { app.terminate() }
         app.launchArguments = ["-ui-testing", "--disconnected", "-AppleLanguages", "(en)"]
@@ -1739,7 +1739,8 @@ final class AppUITests: XCTestCase {
         try reopen.run()
         reopen.waitUntilExit()
         XCTAssertEqual(reopen.terminationStatus, 0)
-        XCTAssertTrue(app.descendants(matching: .any)["settings.form"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any)["settings.form"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.windows.count, 0)
         XCTAssertFalse(app.statusItems.firstMatch.exists)
         app.terminate()
         app.launchArguments += ["--manual-launch"]
@@ -1754,7 +1755,7 @@ final class AppUITests: XCTestCase {
     }
 
     @MainActor
-    func testDuplicateLaunchReopensDisconnectedBackgroundAppWithoutReplacingIt() throws {
+    func testDuplicateLaunchKeepsSettingsClosedWithoutReplacingBackgroundApp() throws {
         let app = XCUIApplication()
         defer { app.terminate() }
         app.launchArguments = ["-ui-testing", "--disconnected", "-AppleLanguages", "(en)"]
@@ -1779,14 +1780,15 @@ final class AppUITests: XCTestCase {
         try duplicate.run()
         defer { if duplicate.isRunning { duplicate.terminate() } }
         XCTAssertNotEqual(duplicate.processIdentifier, original.processIdentifier)
-        XCTAssertTrue(app.descendants(matching: .any)["settings.form"].waitForExistence(timeout: 5))
         let exited = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !duplicate.isRunning }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [exited], timeout: 8), .completed)
         XCTAssertFalse(original.isTerminated)
         XCTAssertEqual(NSRunningApplication.runningApplications(
             withBundleIdentifier: "dev.baglayan.Acouplet.debug"
         ).map(\.processIdentifier), [original.processIdentifier])
-        XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.processIdentifier, original.processIdentifier)
+        XCTAssertFalse(app.descendants(matching: .any)["settings.form"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.windows.count, 0)
+        XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.bundleIdentifier, "com.apple.finder")
         XCTAssertFalse(app.statusItems.firstMatch.exists)
     }
 
@@ -2009,6 +2011,28 @@ final class AppUITests: XCTestCase {
     }
 
     @MainActor
+    func testLaunchingDoesNotRestoreSettings() throws {
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = ["-ui-testing", "-AppleLanguages", "(en)"]
+        app.launch()
+        XCTAssertTrue(app.statusItems.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.windows.count, 0)
+        app.statusItems.firstMatch.click()
+        app.buttons["menu.settings"].click()
+        let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
+        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 5))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.statusItems.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(settingsWindow.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.windows.count, 0)
+        app.statusItems.firstMatch.click()
+        app.buttons["menu.settings"].click()
+        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testSettingsPanesRememberSelectionWhenReopened() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing", "--ui-test-host", "-AppleLanguages", "(en)"]
@@ -2025,16 +2049,8 @@ final class AppUITests: XCTestCase {
         selectSettingsPane("advanced", in: settingsWindow)
         settingsWindow.buttons[XCUIIdentifierCloseWindow].click()
         XCTAssertTrue(settingsWindow.waitForNonExistence(timeout: 3))
-        let original = try XCTUnwrap(NSRunningApplication.runningApplications(
-            withBundleIdentifier: "dev.baglayan.Acouplet.debug"
-        ).first)
-        let bundleURL = try XCTUnwrap(original.bundleURL)
-        let reopen = Process()
-        reopen.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        reopen.arguments = ["-a", bundleURL.path]
-        try reopen.run()
-        reopen.waitUntilExit()
-        XCTAssertEqual(reopen.terminationStatus, 0)
+        app.statusItems.firstMatch.click()
+        app.buttons["menu.settings"].click()
         XCTAssertTrue(settingsWindow.waitForExistence(timeout: 3))
         XCTAssertEqual(settingsWindow.title, "Advanced")
         let screenshot = XCTAttachment(screenshot: settingsWindow.screenshot())

@@ -13,8 +13,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isMigratingBackgroundService = false
     private var hasDeferredLaunch = false
 
-    /// Asks the running copy whose process ID is the notification's object to open Settings.
-    static let reopenNotification = Notification.Name("dev.baglayan.Acouplet.reopen")
     private var globalHotKeyController: GlobalHotKeyController?
     private var menuBarController: MenuBarController?
     private var preferencePaneServer: SonyPreferencePaneServer?
@@ -65,32 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         if !isRunningTests,
-           let existing = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
-            .first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && $0.activationPolicy != .prohibited }) {
+           NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && $0.activationPolicy != .prohibited }) {
             isDuplicateLaunch = true
-            guard !CommandLine.arguments.contains("--background-service") else {
-                NSApp.terminate(nil)
-                return
-            }
-            existing.publisher(for: \.isFinishedLaunching, options: [.initial, .new])
-                .combineLatest(existing.publisher(for: \.isTerminated, options: [.initial, .new]))
-                .first { $0 || $1 }
-                .timeout(.seconds(5), scheduler: DispatchQueue.main)
-                .receive(on: DispatchQueue.main)
-                .sink(receiveCompletion: { _ in NSApp.terminate(nil) }, receiveValue: { finished, terminated in
-                    if finished, !terminated {
-                        DistributedNotificationCenter.default().postNotificationName(
-                            Self.reopenNotification, object: String(existing.processIdentifier), userInfo: nil, options: .deliverImmediately)
-                    }
-                })
-                .store(in: &cancellables)
+            NSApp.terminate(nil)
             return
         }
-        DistributedNotificationCenter.default().publisher(for: Self.reopenNotification,
-                                                          object: String(ProcessInfo.processInfo.processIdentifier) as NSString)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.showSettings() }
-            .store(in: &cancellables)
         NSApp.setActivationPolicy(.accessory)
         #if DEBUG
         if CommandLine.arguments.contains("-ui-testing") {
@@ -431,8 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showSettings()
-        return false
+        false
     }
 
     func showSettings() {
@@ -454,6 +431,8 @@ struct AppSettingsScene: Scene {
             SettingsWindowContent(environment: environment)
                 .environmentObject(environment.settings)
         }
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
         .windowResizability(.contentSize)
     }
 }
