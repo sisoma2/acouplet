@@ -8,6 +8,110 @@ final class AppUITests: XCTestCase {
     }
 
     @MainActor
+    func testNoiseControlsRespondWhileAnotherAppIsActive() throws {
+        let app = XCUIApplication()
+        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
+        defer { app.terminate() }
+        for appearance in ["light", "dark"] {
+            app.launchArguments = ["-ui-testing", "--\(appearance)-appearance", "-AppleLanguages", "(en)"]
+            app.launch()
+            let status = app.statusItems.firstMatch
+            XCTAssertTrue(status.waitForExistence(timeout: 5))
+            status.click()
+            let dashboard = app.descendants(matching: .any)["headphones.dashboard"]
+            if !dashboard.waitForExistence(timeout: 3) { status.click() }
+            XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+            app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+            XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+            let statusFrame = status.frame
+            for mode in ["off", "ambient", "anc"] {
+                finder.activate()
+                let origin = finder.frame.origin
+                func click(_ frame: CGRect) {
+                    finder.coordinate(withNormalizedOffset: .zero)
+                        .withOffset(CGVector(dx: frame.midX - origin.x, dy: frame.midY - origin.y)).click()
+                }
+                click(statusFrame)
+                let button = app.buttons["noiseControl.\(mode)"]
+                XCTAssertTrue(button.waitForExistence(timeout: 3))
+                XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.bundleIdentifier, "com.apple.finder")
+                XCTAssertTrue(button.isEnabled)
+                click(button.frame)
+                XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "isSelected == true"), object: button
+                )], timeout: 3), .completed)
+                let attachment = XCTAttachment(screenshot: app.screenshot())
+                attachment.name = "Noise control with Finder active — \(appearance), \(mode)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+                XCTAssertTrue(button.waitForNonExistence(timeout: 3))
+            }
+            app.terminate()
+        }
+    }
+
+    @MainActor
+    func testNoiseControlSelectionRemainsVisibleAfterModeChanges() throws {
+        let app = XCUIApplication()
+        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
+        defer { app.terminate() }
+        for appearance in ["light", "dark"] {
+            app.launchArguments = ["-ui-testing", "--ui-test-host", "--\(appearance)-appearance", "-AppleLanguages", "(en)"]
+            app.launch()
+            let panel = app.windows["Headphone Controls"]
+            XCTAssertTrue(panel.waitForExistence(timeout: 5))
+            for mode in ["off", "anc", "ambient", "off", "ambient", "anc", "off"] {
+                let selected = app.buttons["noiseControl.\(mode)"]
+                XCTAssertTrue(selected.waitForExistence(timeout: 3))
+                selected.click()
+                XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "isSelected == true"), object: selected
+                )], timeout: 3), .completed)
+                finder.activate()
+                let screenshot = panel.screenshot()
+                let attachment = XCTAttachment(screenshot: screenshot)
+                attachment.name = "Noise selection — \(appearance), \(mode)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                var brightness: [String: CGFloat] = [:]
+                for identifier in ["off", "anc", "ambient"] {
+                    let button = app.buttons["noiseControl.\(identifier)"]
+                    XCTAssertEqual(button.isSelected, identifier == mode)
+                    let bitmap = try XCTUnwrap(NSBitmapImageRep(data: button.screenshot().pngRepresentation))
+                    var total: CGFloat = 0
+                    var count = 0
+                    for y in (bitmap.pixelsHigh * 35 / 100)..<(bitmap.pixelsHigh * 65 / 100) {
+                        for x in (bitmap.pixelsWide / 5)..<(bitmap.pixelsWide / 4) {
+                            let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                            total += (color.redComponent + color.greenComponent + color.blueComponent) / 3
+                            count += 1
+                        }
+                    }
+                    brightness[identifier] = total / CGFloat(count)
+                    var contrastingPixels = 0
+                    for y in (bitmap.pixelsHigh / 8)..<(bitmap.pixelsHigh * 7 / 8) {
+                        for x in (bitmap.pixelsWide / 3)..<(bitmap.pixelsWide * 2 / 3) {
+                            let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                            let value = (color.redComponent + color.greenComponent + color.blueComponent) / 3
+                            if abs(value - total / CGFloat(count)) > 0.4 { contrastingPixels += 1 }
+                        }
+                    }
+                    XCTAssertGreaterThan(contrastingPixels, 20, "The \(identifier) label is not readable in \(appearance) appearance")
+                }
+                let selectedBrightness = try XCTUnwrap(brightness[mode])
+                for identifier in ["off", "anc", "ambient"] where identifier != mode {
+                    let unselectedBrightness = try XCTUnwrap(brightness[identifier])
+                    let difference = appearance == "light"
+                        ? unselectedBrightness - selectedBrightness : selectedBrightness - unselectedBrightness
+                    XCTAssertGreaterThan(difference, 0.25, "Selection is not visible in \(appearance) appearance after choosing \(mode)")
+                }
+            }
+            app.terminate()
+        }
+    }
+
+    @MainActor
     func testVoiceFocusUsesSystemAccent() throws {
         let app = XCUIApplication()
         defer { app.terminate() }
@@ -1551,7 +1655,7 @@ final class AppUITests: XCTestCase {
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         var resizeFailures: [String] = []
         for appearance in ["light", "dark"] {
-            app.launchArguments = ["-ui-testing", "--\(appearance)-appearance", "-AppleLanguages", "(en)"]
+            app.launchArguments = ["-ui-testing", "--\(appearance)-appearance", "-AppleLanguages", "(en)", "-AppleShowScrollBars", "Always"]
             app.launch()
             let status = app.statusItems.firstMatch
             XCTAssertTrue(status.waitForExistence(timeout: 5))
@@ -1559,6 +1663,7 @@ final class AppUITests: XCTestCase {
             status.click()
             let dashboard = app.descendants(matching: .any)["headphones.dashboard"]
             let panel = app.popovers.containing(.group, identifier: "headphones.dashboard").firstMatch
+            if !dashboard.waitForExistence(timeout: 3) { status.click() }
             XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
             XCTAssertTrue(app.images["device.artwork.case"].exists)
             XCTAssertTrue(app.buttons["menu.settings"].isHittable)
@@ -1625,17 +1730,25 @@ final class AppUITests: XCTestCase {
                 if frames.contains(where: { abs($0.1.minY - initialFrame.minY) > 1 }) {
                     resizeFailures.append("\(appearance), \(mode): the native panel's top edge moved during resize")
                 }
+                let heights = frames.map { $0.1.height }
+                let growing = finalFrame.height > initialFrame.height
+                if zip(heights, heights.dropFirst()).contains(where: { previous, next in
+                    growing ? next < previous - 1 : next > previous + 1
+                }) {
+                    resizeFailures.append("\(appearance), \(mode): the panel reversed direction during resize")
+                }
+                XCTAssertTrue(panel.scrollBars.allElementsBoundByIndex.allSatisfy { !$0.isHittable })
             }
-            try await measureResize(to: "anc")
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: app.buttons["noiseControl.anc"])], timeout: 3), .completed)
+            try await measureResize(to: "off")
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: app.buttons["noiseControl.off"])], timeout: 3), .completed)
             XCTAssertLessThan(panel.frame.height, ambientHeight)
             let compact = XCTAttachment(screenshot: panel.screenshot())
-            compact.name = "Main-panel-\(appearance)-anc"
+            compact.name = "Main-panel-\(appearance)-off"
             compact.lifetime = .keepAlways
             add(compact)
             let steadyFrame = panel.frame
             let artworkFrame = app.images["device.artwork.wfXM5"].frame
-            for mode in ["off", "anc", "off", "anc"] {
+            for mode in ["anc", "off", "anc", "off"] {
                 app.buttons["noiseControl.\(mode)"].click()
                 XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: app.buttons["noiseControl.\(mode)"])], timeout: 3), .completed)
                 XCTAssertEqual(panel.frame, steadyFrame)
@@ -1648,28 +1761,39 @@ final class AppUITests: XCTestCase {
             try await measureResize(to: "ambient")
             XCTAssertTrue(app.sliders["Ambient sound level"].waitForExistence(timeout: 3))
             XCTAssertEqual(panel.frame.height, ambientHeight, accuracy: 1)
+            app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+            XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
             app.terminate()
         }
-        app.launchArguments = ["-ui-testing", "--compact-panel", "--light-appearance", "-AppleLanguages", "(en)"]
+        XCTAssertTrue(resizeFailures.isEmpty, resizeFailures.joined(separator: "\n"))
+    }
+
+    @MainActor
+    func testCompactPanelKeepsControlsReachableWhenHeightConstrained() throws {
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = ["-ui-testing", "--ui-test-host", "--compact-panel", "--light-appearance", "-AppleLanguages", "(en)", "-AppleShowScrollBars", "Always"]
         app.launch()
-        let status = app.statusItems.firstMatch
-        XCTAssertTrue(status.waitForExistence(timeout: 5))
-        status.click()
-        let dashboard = app.descendants(matching: .any)["headphones.dashboard"]
-        let panel = app.popovers.containing(.group, identifier: "headphones.dashboard").firstMatch
+        let panel = app.windows["Headphone Controls"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        let dashboard = panel.descendants(matching: .any)["test.mainPanel"].firstMatch
         XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
         XCTAssertEqual(dashboard.frame.height, 480, accuracy: 1)
         let scroll = app.scrollViews["headphones.controlsScroll"]
         XCTAssertTrue(scroll.exists)
         XCTAssertTrue(app.images["device.artwork.case"].isHittable)
         XCTAssertTrue(app.buttons["menu.settings"].isHittable)
-        scroll.scroll(byDeltaX: 0, deltaY: -500)
-        XCTAssertTrue(app.popUpButtons["audio.dsee"].isHittable)
+        panel.coordinate(withNormalizedOffset: CGVector(dx: 0.975, dy: 0.6))
+            .press(forDuration: 0.1, thenDragTo: panel.coordinate(withNormalizedOffset: CGVector(dx: 0.975, dy: 0.82)))
         let limited = XCTAttachment(screenshot: panel.screenshot())
         limited.name = "Main-panel-limited-height"
         limited.lifetime = .keepAlways
         add(limited)
-        XCTAssertTrue(resizeFailures.isEmpty, resizeFailures.joined(separator: "\n"))
+        let dsee = app.popUpButtons["audio.dsee"]
+        XCTAssertTrue(panel.frame.contains(dsee.frame))
+        dsee.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(app.menuItems["Off"].waitForExistence(timeout: 3))
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
     }
 
     nonisolated private static func panelWindows(processIdentifier: pid_t) -> [(CGWindowID, CGRect)] {

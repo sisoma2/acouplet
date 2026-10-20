@@ -47,7 +47,7 @@ struct MenuBarView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var availableHeight: CGFloat
-    @State private var presentedMode: NoiseControlMode?
+    @State private var isHeightConstrained = false
     @State private var powerOffTarget: PowerOffTarget?
     @State private var showsPowerOffConfirmation = false
     @State private var showsMultipoint = false
@@ -80,6 +80,7 @@ struct MenuBarView: View {
                 controls
             }
             .scrollBounceBehavior(.basedOnSize)
+            .scrollIndicators(isHeightConstrained ? .automatic : .never)
             .accessibilityIdentifier("headphones.controlsScroll")
             ForEach(devicesNeedingConfirmation, id: \.address) { controller in
                 Divider()
@@ -140,6 +141,9 @@ struct MenuBarView: View {
         .frame(width: 360)
         .frame(maxHeight: maximumHeight)
         .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: Bool.self) { $0.size.height >= maximumHeight - 1 } action: {
+            isHeightConstrained = $0
+        }
         .windowResizeAnchorIfAvailable(.topLeading)
         .background(PanelScreenHeightReader { availableHeight = $0 }.accessibilityHidden(true))
         .font(.body)
@@ -149,11 +153,6 @@ struct MenuBarView: View {
         .accessibilityIdentifier("headphones.dashboard")
         .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: showsConnectOnly)
         .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: showsHeadphoneControls)
-        .onChange(of: headphones.noiseControlMode, initial: true) { _, mode in
-            withAnimation(presentedMode != nil && mode != nil && !reduceMotion ? .smooth(duration: 0.2) : nil) {
-                presentedMode = mode
-            }
-        }
         .alert("Turn Off \(powerOffTarget?.name ?? "")?", isPresented: $showsPowerOffConfirmation, presenting: powerOffTarget) { target in
             Button("Cancel", role: .cancel) {}
             Button("Turn Off") { target.controller.powerOff(expectedSession: target.session) }
@@ -164,7 +163,7 @@ struct MenuBarView: View {
         .tint(settings.tintColor)
     }
 
-    private var noiseControlMode: NoiseControlMode? { presentedMode ?? headphones.noiseControlMode }
+    private var noiseControlMode: NoiseControlMode? { headphones.noiseControlMode }
 
     private var showsHeadphoneControls: Bool {
         headphones.isReady && headphones.powerOffState == nil && !headphones.headphoneTestNeedsRecovery
@@ -581,8 +580,7 @@ struct MenuBarView: View {
         HStack(spacing: 8) {
             ForEach(headphones.availableNoiseModes) { mode in
                 modeButton(mode)
-                    .headphoneButtonStyle(prominent: noiseControlMode == mode)
-                    .tint(noiseControlMode == mode ? .primary : nil)
+                    .headphoneSelectionButtonStyle(selected: noiseControlMode == mode)
             }
         }
     }
@@ -594,10 +592,10 @@ struct MenuBarView: View {
                 Text(mode.compactTitle)
             }
             .frame(maxWidth: .infinity, minHeight: 48)
-            .foregroundStyle(noiseControlMode == mode ? Color(nsColor: .textBackgroundColor) : Color.primary)
         }
         .buttonBorderShape(.roundedRectangle(radius: 12))
         .disabled(!headphones.canChangeNoiseControl)
+        .help(headphones.noiseControlUnavailableReason ?? mode.title)
         .accessibilityLabel(mode.title)
         .accessibilityInputLabels([mode.compactTitle, mode.title])
         .accessibilityIdentifier("noiseControl.\(mode.rawValue)")
@@ -1517,7 +1515,30 @@ private struct MultipointPopover: NSViewRepresentable {
     }
 }
 
+private struct HeadphoneSelectionButtonStyle: ButtonStyle {
+    let selected: Bool
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(Color(nsColor: selected ? .textBackgroundColor : .labelColor))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color(nsColor: selected ? .labelColor : .controlBackgroundColor), in: .rect(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            }
+            .contentShape(.rect(cornerRadius: 6))
+            .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.5)
+    }
+}
+
 extension View {
+    func headphoneSelectionButtonStyle(selected: Bool) -> some View {
+        buttonStyle(HeadphoneSelectionButtonStyle(selected: selected))
+    }
+
     @ViewBuilder
     func headphoneButtonStyle(prominent: Bool = false) -> some View {
         if #available(macOS 26.0, *) {

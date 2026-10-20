@@ -3,6 +3,10 @@ import Combine
 import os
 import SwiftUI
 
+private final class MenuBarHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 @MainActor
 final class MenuBarController: NSObject, NSPopoverDelegate {
     private let devices: SonyDeviceCoordinator
@@ -23,6 +27,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var wantsPopover = false
     private var isPopoverClosing = false
     private var retriedControllers = Set<ObjectIdentifier>()
+    private var refreshedNoiseControllers = Set<ObjectIdentifier>()
     private var dismissalObservations = Set<AnyCancellable>()
     private var trackingMenus = Set<ObjectIdentifier>()
     private var foregroundApplicationPID: Int32?
@@ -94,7 +99,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let ldac = self.ldac
         #endif
         let screenHeight = statusItem.button?.window?.screen?.visibleFrame.height
-        let controller = NSHostingController(rootView: SelectedDeviceView(devices: devices) { [weak self] in
+        let hostingView = MenuBarHostingView(rootView: SelectedDeviceView(devices: devices) { [weak self] in
             MenuBarView(showSettings: showSettings, closeMenu: { [weak self] in self?.closeMenu() }, initialScreenHeight: screenHeight)
                 .environmentObject(settings)
                 #if ACOUPLET_SPARKLE
@@ -113,7 +118,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                     }
                 }
         }.frame(minHeight: 0, maxHeight: .infinity, alignment: .top))
-        controller.sizingOptions = []
+        hostingView.sizingOptions = []
+        let controller = NSViewController()
+        controller.view = hostingView
         popover.contentViewController = controller
     }
 
@@ -210,6 +217,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard wantsPopover, popover.isShown else { return }
         let headphones = devices.selectedController
         let identifier = ObjectIdentifier(headphones)
+        if headphones.isReady, refreshedNoiseControllers.insert(identifier).inserted {
+            headphones.refreshNoiseControl()
+        }
         guard retriedControllers.insert(identifier).inserted else { return }
         if !headphones.retryControlsIfNeeded() { retriedControllers.remove(identifier) }
     }
@@ -288,6 +298,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         ldac.refreshDriverStateInBackground()
         #endif
         retriedControllers.removeAll()
+        refreshedNoiseControllers.removeAll()
         let shownAt = ProcessInfo.processInfo.systemUptime
         dismissalObservations.removeAll()
         trackingMenus.removeAll()

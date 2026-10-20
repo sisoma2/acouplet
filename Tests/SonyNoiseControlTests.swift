@@ -207,6 +207,42 @@ final class SonyNoiseControlControllerTests: XCTestCase {
         XCTFail("The command queue did not drain.")
     }
 
+    func testNoiseRefreshRecoversStaleUnavailabilityWithoutReconnecting() throws {
+        for inquiry: UInt8 in [0x17, 0x19] {
+            let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+            defer { controller.simulateControlLoss() }
+            controller.simulateDeviceConnection(named: "WH-1000XM5", galleryModel: inquiry == 0x17 ? .whXM5 : nil)
+            let session = controller.simulatedControlSession
+            let state = controller.noiseControl?.state
+            deliver([0x65, inquiry, 1], to: controller)
+            XCTAssertFalse(controller.canChangeNoiseControl)
+            controller.refreshNoiseControl()
+            controller.refreshNoiseControl()
+            acknowledgeAll(controller)
+            let payloads = controller.simulatedTransmittedFrames.filter { $0.type == 0x0C }.map(\.payload)
+            XCTAssertEqual(payloads, [[0x62, inquiry], [0x66, inquiry]])
+            deliver([0x63, inquiry, 0], to: controller)
+            XCTAssertTrue(controller.canChangeNoiseControl)
+            XCTAssertEqual(controller.noiseControl?.state, state)
+            XCTAssertEqual(controller.simulatedControlSession, session)
+            XCTAssertTrue(controller.isReady)
+        }
+    }
+
+    func testNoiseRefreshKeepsConfirmedUnavailabilityDisabled() {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        controller.simulateDeviceConnection(named: "WH-1000XM5", galleryModel: .whXM5)
+        deliver([0x65, 0x17, 1], to: controller)
+        controller.refreshNoiseControl()
+        acknowledgeAll(controller)
+        deliver([0x63, 0x17, 1], to: controller)
+        controller.setNoiseControl(.anc)
+        acknowledgeAll(controller)
+        XCTAssertFalse(controller.canChangeNoiseControl)
+        XCTAssertFalse(controller.simulatedTransmittedFrames.contains { $0.payload.first == 0x68 })
+    }
+
     func testHandshakeRequiresOwnedMetadataAndKeepsChangingNoiseUnavailable() throws {
         for inquiry: UInt8 in [0x17, 0x19] {
             let extra: [UInt8] = inquiry == 0x19 ? [1, 2] : []

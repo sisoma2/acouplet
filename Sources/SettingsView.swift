@@ -2169,10 +2169,8 @@ struct MultipointSourcePicker: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .frame(maxWidth: .infinity)
-                                .foregroundStyle(selected ? Color(nsColor: .textBackgroundColor) : Color.primary)
                         }
-                        .headphoneButtonStyle(prominent: selected)
-                        .tint(selected ? .primary : nil)
+                        .headphoneSelectionButtonStyle(selected: selected)
                         .help(headphones.sourceControlUnavailableReason ?? MultipointControls.title(for: device, among: state.devices))
                         .accessibilityLabel(MultipointControls.title(for: device, among: state.devices))
                         .accessibilityValue(selected ? String(localized: "Selected for audio") : String(localized: "Not selected"))

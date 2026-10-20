@@ -673,6 +673,9 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             "Right charging: \(batteries.right?.chargingState.title ?? "Unknown")",
             "Case charging (last reported): \(batteries.caseBattery?.chargingState.title ?? "Unknown")",
             "Noise control: \(noiseControlMode?.title ?? "Unknown")",
+            "Noise control availability: \(noiseControlUnavailableReason ?? "Available")",
+            "Noise control reported available: \(noiseControl?.available.map(String.init) ?? "Unknown")",
+            "Noise control state confirmed: \(noiseControl?.state != nil)",
             "Equalizer: \(equalizerPreset?.title ?? "Unknown")",
             "Headphone codec: \(audioFeatures.codec?.title ?? "Unknown")",
             "Ear-tip fit workflow: \(earTipFitTransition.map { String(describing: $0.phase) } ?? "Not open")",
@@ -1922,16 +1925,21 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         requestBattery()
     }
 
+    func refreshNoiseControl() {
+        guard powerOffState == nil, !isRunningHeadphoneTest, stage == .ready, let asmType,
+              connectionTransition?.isFinished != false, sourceTransition?.isFinished != false,
+              multipointTransition?.isFinished != false, deviceActionTransition?.isFinished != false else { return }
+        if protocolInformation?.generation == .v1 { send([0x62, 0x02]) }
+        requestNoiseControl(asmType)
+    }
+
     private func requestCurrentSettings() {
         guard powerOffState == nil, !isRunningHeadphoneTest, stage == .ready, connectionTransition?.isFinished != false, sourceTransition?.isFinished != false,
               multipointTransition?.isFinished != false, deviceActionTransition?.isFinished != false else { return }
         for (key, read) in discoveryReads where read.transmitted && !read.resolved && !read.retried && read.timeout == nil {
             send(Array(key.dropFirst()), type: key[0], retryingDiscovery: true)
         }
-        if let asmType {
-            if protocolInformation?.generation == .v1 { send([0x62, 0x02]) }
-            requestNoiseControl(asmType)
-        }
+        refreshNoiseControl()
         requestBattery()
         refreshEqualizer()
         if firmwareVersion == nil { send([0x04, 0x02]) }
@@ -4651,7 +4659,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         sendRequestedNoiseControl()
     }
 
-    private var noiseControlUnavailableReason: String? {
+    var noiseControlUnavailableReason: String? {
         guard stage == .ready, isReady, asmType != nil, powerOffState == nil else { return String(localized: "Connect the headphones first.") }
         if noiseControl != nil || legacyControls != nil, unconfirmedChanges[.noiseControl] != nil {
             return String(localized: "Sync noise control before making another change.")
