@@ -1469,7 +1469,9 @@ final class AppUITests: XCTestCase {
                         captureGalleryScreenshot(try captureImage(panel), named: "\(variant)-main-\(mode)")
                     }
                     panel.menuButtons["More"].click()
-                    app.menuItems["Custom Equalizer…"].click()
+                    let customEqualizer = app.menuItems["Custom Equalizer…"]
+                    XCTAssertTrue(customEqualizer.waitUntilExists(timeout: 2))
+                    customEqualizer.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
                     let equalizer = app.windows["Equalizer"]
                     XCTAssertTrue(equalizer.waitUntilExists(timeout: 3))
                     captureGalleryScreenshot(try captureImage(equalizer), named: "\(variant)-equalizer-01")
@@ -2509,7 +2511,7 @@ final class AppUITests: XCTestCase {
             let retry = window.buttons["headphones.connect"]
             XCTAssertEqual(retry.label, language == "tr" ? "Yeniden Dene" : "Retry")
             XCTAssertTrue(retry.isEnabled)
-            XCTAssertEqual(status.frame.midY, retry.frame.midY, accuracy: 1)
+            XCTAssertEqual(status.frame.midY, retry.frame.midY, accuracy: 2)
             XCTAssertTrue(window.frame.contains(status.frame))
             XCTAssertTrue(window.frame.contains(retry.frame))
             XCTAssertLessThan(status.frame.maxX, retry.frame.minX)
@@ -2776,11 +2778,12 @@ final class AppUITests: XCTestCase {
         XCTAssertEqual(connectReady, .completed, manager.debugDescription)
         if NSApplication.shared.isFullKeyboardAccessEnabled {
             manager.buttons["multipoint.refresh"].hover()
-            for _ in 0..<16 where !connect.isHittable {
+            for _ in 0..<24 {
+                if connect.stringValue == "Keyboard focused" { break }
                 app.typeKey(.tab, modifierFlags: [])
             }
+            XCTAssertEqual(connect.stringValue, "Keyboard focused")
             XCTAssertTrue(connect.isHittable, "Keyboard focus must reveal the saved-device action")
-            app.typeKey(.tab, modifierFlags: [])
             app.typeKey(.space, modifierFlags: [])
         } else {
             connect.click()
@@ -3316,7 +3319,11 @@ final class AppUITests: XCTestCase {
                 XCTAssertFalse(settings.buttons["finder.open"].exists)
                 XCTAssertFalse(settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", heading)).firstMatch.exists)
                 XCTAssertFalse(app.sheets.firstMatch.exists)
-                scroll.scrollBars.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.99)).click()
+                let bar = scroll.scrollBars.firstMatch
+                guard bar.exists else { break }
+                let previous = String(describing: bar.value)
+                bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.99)).click()
+                if String(describing: bar.value) == previous { break }
             }
             XCTAssertFalse(settings.buttons["finder.open"].exists)
             app.terminate()

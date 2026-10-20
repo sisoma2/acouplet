@@ -2099,6 +2099,9 @@ private struct MultipointDeviceRow: View {
                 .help(reason ?? (device.isConnected ? String(localized: "Disconnect this device from the headphones") : String(localized: "Connect this device to the headphones")))
                 .accessibilityLabel("\(action == .disconnect ? String(localized: "Disconnect") : String(localized: "Connect")) \(title)")
                 .accessibilityIdentifier("multipoint.\(action == .disconnect ? "disconnect" : "connect").\(device.id)")
+                #if DEBUG
+                .accessibilityValue(Text(verbatim: CommandLine.arguments.contains("-ui-testing") && actionFocused ? "Keyboard focused" : ""))
+                #endif
                 .accessibilityHidden(pendingAction != nil)
                 .opacity(showsAction && pendingAction == nil ? 1 : 0)
                 .fixedSize()
