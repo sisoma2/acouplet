@@ -202,6 +202,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     @Published private(set) var noiseControl: SonyNoiseControl?
     @Published private(set) var noiseControlDisplayState: SonyNoiseControl.State?
     let noiseModeChanges = PassthroughSubject<SonyNoiseModeChange, Never>()
+    let confirmedNoiseModeChanges = PassthroughSubject<NoiseControlMode, Never>()
     let audioSourceChanges = PassthroughSubject<SonyMultipointDevice, Never>()
     @Published private(set) var batteries = SonyBatteries()
     @Published private(set) var isChargingInCase = false
@@ -873,11 +874,12 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     private var noiseControlRead: NoiseControlRead?
     private var queuedNoiseControlRead = false
     private var noiseControlRefresh: (id: UUID, work: DispatchWorkItem)?
-    private var noiseControlRefreshAttempted = false
+    private var noiseControlRefreshAttempts = 0
     private var noiseControlSawValidChanging = false
     private var requestedNoiseControlPayload: [UInt8]?
     private var requestedNoiseControlPreservesAdaptation = true
     private var noiseControlWriteState: SonyNoiseControl.State?
+    private var noiseControlModeBeforeWrite: NoiseControlMode?
     private var settingIntent: (setting: Setting, requestID: UUID, continuation: CheckedContinuation<Void, Error>)?
     private var noiseMetadataReads: [[UInt8]: Bool] = [:]
     private var noiseReadTimeouts: [[UInt8]: (id: UUID, work: DispatchWorkItem)] = [:]
@@ -1901,6 +1903,13 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         updateRetryCountdown()
         refresh(shouldOpenLink: reconnectAutomatically)
         guard stage == .ready else { return }
+        if noiseControlSawValidChanging, noiseControlRead?.timedOut == true {
+            refresh()
+            return
+        }
+        if noiseControl != nil, noiseControl?.canSet != true || unconfirmedChanges[.noiseControl] != nil {
+            refreshNoiseControl()
+        }
         if isLDACStreaming {
             // The poll ticks every 3 s: a battery read every 60 s keeps the menu current without the settings burst.
             syncPollCount = 0
@@ -2026,8 +2035,9 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     }
 
     private func scheduleNoiseControlRefresh(_ inquiry: UInt8) {
-        guard noiseControlRefresh == nil, !noiseControlSawValidChanging || !noiseControlRefreshAttempted else { return }
-        if noiseControlSawValidChanging { noiseControlRefreshAttempted = true }
+        guard noiseControlRefresh == nil, !noiseControlSawValidChanging || noiseControlRefreshAttempts < 6 else { return }
+        let delay = noiseControlRefreshAttempts == 0 ? 0.25 : 1.0
+        if noiseControlSawValidChanging { noiseControlRefreshAttempts += 1 }
         let session = controlSession
         let id = UUID()
         let refresh = DispatchWorkItem { [weak self] in
@@ -2040,7 +2050,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             }
         }
         noiseControlRefresh = (id, refresh)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: refresh)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: refresh)
     }
 
     private func beginLegacyOptionalReadTimeout(_ query: [UInt8]) {
@@ -4363,6 +4373,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
                     error: HeadphoneControlError(message: String(localized: "Headphones did not confirm the change.")))
                 if setting == .noiseControl {
                     self.sendRequestedNoiseControl()
+                    if let query { self.send(query) }
                 }
                 if let query {
                     if frame.type == 0x0E, query.first == 0x46 { self.send(query, type: frame.type) }
@@ -4378,7 +4389,8 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     private func confirmSetting(_ setting: Setting, value: [UInt8]?) {
         let sentValue = settingTimeouts[setting] == nil ? nil : pendingChanges[setting]
         guard let expected = sentValue ?? unconfirmedChanges[setting],
-              value == expected || (setting == .equalizer && expected.count == 1 && value?.first == expected.first) else { return }
+              value == expected || (setting == .equalizer && expected.count == 1 && value?.first == expected.first)
+                || (setting == .noiseControl && noiseControl?.confirms(value, expected: expected) == true) else { return }
         let requestID = settingRequests[setting]
         pendingChanges[setting] = nil
         unconfirmedChanges[setting] = nil
@@ -4395,6 +4407,9 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             isApplyingChange = false
             commandTimeoutWorkItem?.cancel()
             commandTimeoutWorkItem = nil
+            if let mode = noiseControlMode, noiseControlModeBeforeWrite != mode {
+                confirmedNoiseModeChanges.send(mode)
+            }
             sendRequestedNoiseControl()
         }
     }
@@ -4696,6 +4711,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             payload = updated
         }
         noiseControlWriteState = noiseControl?.state
+        noiseControlModeBeforeWrite = noiseControlMode
         beginApplyingChange()
         sendSetting(payload, setting: .noiseControl)
     }
@@ -5015,7 +5031,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         noiseControl = nil
         noiseControlDisplayState = nil
         if noiseControlRead?.timedOut == true { noiseControlRead = nil }
-        noiseControlRefreshAttempted = false
+        noiseControlRefreshAttempts = 0
         noiseControlSawValidChanging = false
         noiseMetadataReads = [:]
         legacyReads = reusingConnection ? timedOutLegacyReads : []
@@ -5147,7 +5163,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         resetFirmwareUpdateReads()
         noiseControlRefresh?.work.cancel()
         noiseControlRefresh = nil
-        noiseControlRefreshAttempted = false
+        noiseControlRefreshAttempts = 0
         noiseControlSawValidChanging = false
         for timeout in noiseReadTimeouts.values { timeout.work.cancel() }
         noiseReadTimeouts = [:]
@@ -5577,6 +5593,10 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         }, completion: { [weak self] in
             guard let self, self.controlSession == session, self.transmissionID == identifier else { return }
             self.transmittedFrame = frame
+            if frame.type == 0x0C, frame.payload.first == 0x68 {
+                let bytes = frame.payload.map { String(format: "%02X", $0) }.joined(separator: " ")
+                Self.logger.debug("Noise control TX; payload=\(bytes, privacy: .public)")
+            }
             self.beginDiscoveryRead(frame.payload, type: frame.type)
             if frame.type == 0x0C, frame.payload == [0x10, 0x04] {
                 self.bluetoothLEIdentityReadTransmitted = true
@@ -7342,6 +7362,8 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
 
     private func parseNoiseControl(_ payload: [UInt8]) {
         guard stage == .noiseControl || stage == .ready, payload.count >= 2 else { return }
+        let bytes = payload.map { String(format: "%02X", $0) }.joined(separator: " ")
+        Self.logger.debug("Noise control RX; payload=\(bytes, privacy: .public)")
         let read = payload[0] == 0x67 && noiseControlRead?.asmType == payload[1] ? noiseControlRead : nil
         if let inquiry = noiseControl?.inquiryType {
             guard payload[1] == inquiry, payload[0] == 0x69 || read != nil, read?.timedOut != true else { return }
@@ -7380,7 +7402,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             }
             noiseControlRefresh?.work.cancel()
             noiseControlRefresh = nil
-            noiseControlRefreshAttempted = false
+            noiseControlRefreshAttempts = 0
             if read != nil || noiseControlRead == nil || noiseControlSawValidChanging {
                 noiseControlRead = nil
                 noiseReadTimeouts.removeValue(forKey: [0x66, inquiry])?.work.cancel()

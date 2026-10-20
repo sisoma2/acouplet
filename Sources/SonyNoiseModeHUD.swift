@@ -29,6 +29,62 @@ struct SonyNoiseModeChange: Equatable {
 
 #if !ACOUPLET_PUBLIC_APIS_ONLY
 @MainActor
+final class SonyNoiseModeSound {
+    private var sound: NSSound?
+
+    func play(_ mode: NoiseControlMode, deviceUID: String) {
+        guard !deviceUID.isEmpty, let next = NSSound(data: Self.audioData(for: mode)) else { return }
+        sound?.stop()
+        next.playbackDeviceIdentifier = deviceUID
+        next.volume = 1
+        sound = next
+        next.play()
+    }
+
+    static func audioData(for mode: NoiseControlMode) -> Data {
+        let frequencies: [Double] = switch mode {
+        case .off: [520, 390]
+        case .anc: [520, 780]
+        case .ambient: [660, 990]
+        case .wind: [660, 520]
+        }
+        let rate = 44_100
+        let toneFrames = rate / 12
+        let gapFrames = rate / 40
+        let frames = toneFrames * 2 + gapFrames
+        var data = Data("RIFF".utf8)
+        func append<T: FixedWidthInteger>(_ value: T) {
+            var value = value.littleEndian
+            withUnsafeBytes(of: &value) { data.append(contentsOf: $0) }
+        }
+        append(UInt32(36 + frames * 2))
+        data.append(contentsOf: "WAVEfmt ".utf8)
+        append(UInt32(16))
+        append(UInt16(1))
+        append(UInt16(1))
+        append(UInt32(rate))
+        append(UInt32(rate * 2))
+        append(UInt16(2))
+        append(UInt16(16))
+        data.append(contentsOf: "data".utf8)
+        append(UInt32(frames * 2))
+        for frame in 0..<frames {
+            let tone = frame < toneFrames ? 0 : 1
+            let offset = tone == 0 ? frame : frame - toneFrames - gapFrames
+            let sample: Double
+            if offset < 0 {
+                sample = 0
+            } else {
+                let envelope = min(1, Double(min(offset, toneFrames - 1 - offset)) / 220)
+                sample = sin(2 * .pi * frequencies[tone] * Double(offset) / Double(rate)) * envelope
+            }
+            append(Int16(sample * 16_000))
+        }
+        return data
+    }
+}
+
+@MainActor
 final class SonyNativeHUDProbe {
     static let shared = SonyNativeHUDProbe(executableURL:
         Bundle.main.bundleURL.appending(path: "Contents/Helpers/SonyNativeHUDCheck"))

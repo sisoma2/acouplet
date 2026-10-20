@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CoreAudio
 import Foundation
 @preconcurrency import IOBluetooth
 
@@ -15,6 +16,7 @@ final class AppEnvironment {
     #if !ACOUPLET_PUBLIC_APIS_ONLY
     let notifications: SonyNotificationService
     let noiseModeHUD = SonyNoiseModeHUD()
+    let noiseModeSound = SonyNoiseModeSound()
     let ldac: LDACController
     #endif
     private var cancellables = Set<AnyCancellable>()
@@ -152,7 +154,18 @@ final class AppEnvironment {
                 .sink { [weak self, weak controller] state, connected in
                     if let controller, state != .ready || !connected { self?.noiseModeHUD.dismiss(for: controller) }
                 }
-            noiseModeObservers[ObjectIdentifier(controller)] = [changes, connection]
+            let confirmations = controller.confirmedNoiseModeChanges.sink { [weak self, weak controller] mode in
+                guard let self, let controller, controller.lowBatteryNotificationDeviceID != nil else { return }
+                let uid: String?
+                if controller.isLDACStreaming {
+                    guard !self.ldac.currentConfiguration.routing.isSelective else { return }
+                    uid = LDACNativeOutput.uid
+                } else {
+                    uid = try? LDACCallHardware.headsetUID(address: controller.address, scope: kAudioObjectPropertyScopeOutput)
+                }
+                if let uid { self.noiseModeSound.play(mode, deviceUID: uid) }
+            }
+            noiseModeObservers[ObjectIdentifier(controller)] = [changes, connection, confirmations]
         }
     }
 
