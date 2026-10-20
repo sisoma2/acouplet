@@ -152,13 +152,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         var refreshRequested = false
     }
 
-    private struct SoundPressureRead {
-        let id = UUID()
-        let generation: UInt64
-        var transmitted = false
-        var timedOut = false
-    }
-
     private struct WearingStatusRead {
         let id = UUID()
         let generation: UInt64
@@ -267,10 +260,11 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     @Published private(set) var headGesturePracticeTransition: SonyHeadGesturePracticeTransition?
     @Published private(set) var earbudFinder: EarbudFinderController?
     private var earbudFinderObservation: AnyCancellable?
-    @Published private(set) var soundPressure = SonySoundPressure()
-    @Published private(set) var soundPressureReadError: String?
-    @Published private(set) var soundPressureAutomaticRefreshSuspended = false
-    @Published private var soundPressureRead: SoundPressureRead?
+    private let soundPressureSession = SonySoundPressureSession()
+    private var soundPressureObservation: AnyCancellable?
+    var soundPressure: SonySoundPressure { soundPressureSession.soundPressure }
+    var soundPressureReadError: String? { soundPressureSession.error }
+    var soundPressureAutomaticRefreshSuspended: Bool { soundPressureSession.automaticRefreshSuspended }
     @Published private(set) var wearingStatus = SonyWearingStatus()
     @Published private(set) var wearingStatusReadID: UUID?
     @Published private(set) var playback = SonyPlayback()
@@ -464,11 +458,11 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     }
     var canRefreshSoundPressure: Bool {
         powerOffState == nil && !isRunningHeadphoneTest && isReady && soundPressure.isSupported && soundPressure.available == true
-            && !soundPressure.isStopped && soundPressureRead == nil && commandQueue.pending == nil
+            && !soundPressure.isStopped && !soundPressureSession.hasPendingRead && commandQueue.pending == nil
             && connectionTransition?.isFinished != false && multipointTransition?.isFinished != false
             && sourceTransition?.isFinished != false && deviceActionTransition?.isFinished != false
     }
-    var isReadingSoundPressure: Bool { soundPressureRead != nil && soundPressureRead?.timedOut == false }
+    var isReadingSoundPressure: Bool { soundPressureSession.isReading }
     var isEqualizerUpdatePending: Bool { requestedEqualizerPayload != nil || pendingChanges[.equalizer] != nil }
     var earTipFitUnavailableReason: String? {
         guard earTipFit.isSupported else { return String(localized: "These earbuds do not report fit-test support.") }
@@ -855,12 +849,9 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     private var queuedPlaybackSource: String?
     private var queuedVolumeSource: String?
     private var queuedMusicVolumeIsCurrent: (() -> Bool)?
-    private var soundPressureGeneration: UInt64 = 0
-    private var soundPressureReadTimeout: DispatchWorkItem?
     private var wearingStatusGeneration: UInt64 = 0
     private var wearingStatusRead: WearingStatusRead?
     private var wearingStatusReadTimeout: DispatchWorkItem?
-    private var lastSoundPressureRequest: ContinuousClock.Instant?
     private var playbackSourceGeneration: UInt64 = 0
     private var announcedAudioSourceAddress: String?
     private var playbackFreshQueries: Set<[UInt8]> = []
@@ -941,7 +932,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             || powerReads.values.contains(where: { $0.timedOut })
             || voiceGuidanceReads.values.contains(where: { $0.transmitted && $0.isObsolete && $0.timeout == nil })
             || playbackReads.values.contains(where: { $0.timedOut })
-            || soundPressureRead?.timedOut == true
+            || soundPressureSession.hasTimedOutRead
             || inventoryRead?.timedOut == true
             || wearingStatusRead?.timedOut == true
     }
@@ -961,6 +952,9 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         let identities = identityDefaults.map(SonyBLEIdentity.savedDevices) ?? [:]
         savedIdentity = self.pinnedAddress.flatMap { identities[$0] } ?? (self.pinnedAddress == nil && identities.count == 1 ? identities.values.first : nil)
         super.init()
+        soundPressureObservation = soundPressureSession.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         address = self.pinnedAddress ?? ""
         if let advertisedName { deviceName = advertisedName }
         guard !displayOnly else {
@@ -1002,7 +996,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     func simulateBatteryReadTimeout(_ query: [UInt8]) { batteryReads[query]?.timeout?.perform() }
     func simulateBatteryRefresh() { requestBattery() }
     func simulatePlaybackReadTimeout(_ query: [UInt8]) { playbackReadTimeouts[query]?.perform() }
-    func simulateSoundPressureReadTimeout() { soundPressureReadTimeout?.perform() }
+    func simulateSoundPressureReadTimeout() { soundPressureSession.simulateReadTimeout() }
     func simulateInventoryReadTimeout() { inventoryReadTimeout?.perform() }
     func simulateDiscoveryReadTimeout(_ query: [UInt8], type: UInt8 = 0x0C) { discoveryReads[[type] + query]?.timeout?.perform() }
     func simulatedDiscoveryReadTimeoutID(_ query: [UInt8], type: UInt8 = 0x0C) -> UUID? {
@@ -1592,10 +1586,10 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         multipoint.update([0x33, 0x02, 0, 0])
         multipoint.update([0x37, 0x01, 1])
         multipoint.update(simulatedMultipointInventory(selected: 1))
-        soundPressure = SonySoundPressure(supportedFunctions: supportedFunctions2)
+        soundPressureSession.configure(supportedFunctions: supportedFunctions2)
         wearingStatus = SonyWearingStatus(supportedFunctions: supportedFunctions2)
-        soundPressure.update([0x51, 0x03, 1, 0, 0, 0, 0, 5, 16])
-        soundPressure.update([0x57, 0x03, 0])
+        _ = receiveSoundPressure([0x51, 0x03, 1, 0, 0, 0, 0, 5, 16])
+        _ = receiveSoundPressure([0x57, 0x03, 0])
         voiceGuidance = SonyVoiceGuidance(supportedFunctions: supportedFunctions2)
         for payload: [UInt8] in [
             [0x41, 0x01, 0, 0, 0, 0, 1, 2, 1, 0x10],
@@ -3182,7 +3176,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
                 finishMultipointRecovery(String(localized: "The connected headphones do not match the pending change."))
                 return
             }
-            if multipointReadbacks.isEmpty, playbackReads.isEmpty, queuedPlaybackQueries.isEmpty, soundPressureRead == nil {
+            if multipointReadbacks.isEmpty, playbackReads.isEmpty, queuedPlaybackQueries.isEmpty, !soundPressureSession.hasPendingRead {
                 beginHandshake(reusingConnection: true)
             } else {
                 closeSonyLink()
@@ -3523,7 +3517,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
                   self.noiseReadTimeouts.isEmpty, self.equalizerRead == nil || self.equalizerRead?.timedOut == true,
                   self.discoveryReads.values.allSatisfy({ $0.timeout == nil }),
                   self.playbackReads.values.allSatisfy({ $0.timedOut }), self.queuedPlaybackQueries.isEmpty,
-                  self.soundPressureRead == nil || self.soundPressureRead?.timedOut == true,
+                  !self.soundPressureSession.hasPendingRead || self.soundPressureSession.hasTimedOutRead,
                   self.pendingInboundAcknowledgments == 0 else { return }
             self.beginHandshake(reusingConnection: true)
         }
@@ -3997,13 +3991,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     }
 
     func refreshSoundPressure(automatically: Bool = false) {
-        guard canRefreshSoundPressure, !automatically || (!soundPressureAutomaticRefreshSuspended
-            && soundPressureReadError == nil && soundPressure.intervalSeconds != nil) else { return }
-        if let interval = soundPressure.intervalSeconds, let lastSoundPressureRequest,
-           lastSoundPressureRequest.duration(to: .now) < .seconds(interval) { return }
-        if !automatically { soundPressureAutomaticRefreshSuspended = false }
-        soundPressureReadError = nil
-        soundPressureRead = SoundPressureRead(generation: soundPressureGeneration)
+        guard canRefreshSoundPressure, soundPressureSession.request(automatically: automatically) else { return }
         send(SonySoundPressure.levelQueryPayload, type: 0x0E)
     }
 
@@ -4117,50 +4105,22 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     }
 
     func invalidateSoundPressureReading() {
-        soundPressureGeneration += 1
-        soundPressure.invalidateReading()
+        soundPressureSession.invalidateReading()
     }
 
     private func beginSoundPressureRead() {
-        guard let read = soundPressureRead else { return }
-        soundPressureRead?.transmitted = true
-        lastSoundPressureRequest = .now
         let session = controlSession
-        let timeout = DispatchWorkItem { [weak self] in
-            Task { @MainActor in
-                guard let self, self.controlSession == session, self.soundPressureRead?.id == read.id else { return }
-                self.soundPressureRead?.timedOut = true
-                self.soundPressureReadTimeout = nil
-                self.verifyConnectionPreferenceIfNeeded()
-                guard read.generation == self.soundPressureGeneration else { return }
-                self.soundPressure.invalidateReading()
-                self.soundPressureReadError = String(localized: "The listening level was not received. Reconnect the headphones to try again.")
-            }
+        soundPressureSession.didTransmit(isCurrent: { [weak self] in
+            self?.controlSession == session
+        }) { [weak self] in
+            self?.verifyConnectionPreferenceIfNeeded()
         }
-        soundPressureReadTimeout = timeout
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: timeout)
     }
 
     private func receiveSoundPressure(_ payload: [UInt8]) -> Bool {
-        var updated = soundPressure
-        guard updated.update(payload) else { return false }
-        if payload[0] == 0x5B {
-            guard let read = soundPressureRead, read.transmitted else { return true }
-            soundPressureReadTimeout?.cancel()
-            soundPressureReadTimeout = nil
-            soundPressureRead = nil
-            guard !read.timedOut, read.generation == soundPressureGeneration,
-                  soundPressure.available == true, !soundPressure.isStopped,
-                  connectionTransition?.isFinished != false, multipointTransition?.isFinished != false,
-                  sourceTransition?.isFinished != false, deviceActionTransition?.isFinished != false else { return true }
-        } else if updated.available != soundPressure.available
-            || updated.measurementEnabled != soundPressure.measurementEnabled
-            || updated.previewEnabled != soundPressure.previewEnabled
-            || (payload[0] == 0x59 && (payload[2] > 1 || payload[3] > 1)) {
-            soundPressureGeneration += 1
-        }
-        soundPressure = updated
-        return true
+        soundPressureSession.receive(payload, acceptsReading: connectionTransition?.isFinished != false
+            && multipointTransition?.isFinished != false && sourceTransition?.isFinished != false
+            && deviceActionTransition?.isFinished != false)
     }
 
     func controlPlayback(_ command: SonyPlaybackCommand) {
@@ -4995,7 +4955,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         playback = SonyPlayback()
         touchAssignments = SonyTouchAssignments()
         voiceGuidance = SonyVoiceGuidance()
-        soundPressure = SonySoundPressure()
+        soundPressureSession.configure()
         wearingStatus = SonyWearingStatus()
         earTipFit = SonyEarTipFit()
         headGesturePractice = SonyHeadGesturePractice()
@@ -5012,7 +4972,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     private func beginHandshake(reusingConnection: Bool = false) {
         guard !isReconnectPaused, !isRunningHeadphoneTest else { return }
         if reusingConnection, equalizerRead != nil || !batteryReads.isEmpty || !playbackReads.isEmpty
-            || soundPressureRead != nil || inventoryRead != nil || noiseControlRead != nil
+            || soundPressureSession.hasPendingRead || inventoryRead != nil || noiseControlRead != nil
             || queuedNoiseControlRead || !noiseReadTimeouts.isEmpty || noiseControlRefresh != nil
             || discoveryReads.values.contains(where: { $0.retryTransmitted || ($0.transmitted && !$0.resolved) }) {
             closeSonyLink()
@@ -5053,7 +5013,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         multipoint = SonyMultipoint()
         table2CapabilitiesSession = nil
         voiceGuidance = SonyVoiceGuidance()
-        soundPressure = SonySoundPressure()
+        soundPressureSession.configure()
         wearingStatus = SonyWearingStatus()
         sourceTransition?.controlLost(session: controlSession)
         deviceActionTransition?.controlLost(session: controlSession)
@@ -5139,12 +5099,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     }
 
     private func resetSoundPressureRead() {
-        soundPressureReadTimeout?.cancel()
-        soundPressureReadTimeout = nil
-        soundPressureRead = nil
-        soundPressureReadError = nil
-        lastSoundPressureRequest = nil
-        invalidateSoundPressureReading()
+        soundPressureSession.resetRead()
     }
 
     private func resetWearingStatusRead(preservingPendingRead: Bool = false) {
@@ -5983,7 +5938,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
                 let command = frame.payload.prefix(2).map { String(format: "%02X", $0) }.joined(separator: " ")
                 Self.logger.error("Command ACK timeout; type=\(frame.type, format: .hex) sequence=\(frame.sequence) session=\(session) length=\(frame.payload.count) command=\(command, privacy: .public) payloadPrefix=\(payload, privacy: .private)")
                 if frame.type == 0x0E, frame.payload == SonySoundPressure.levelQueryPayload {
-                    self.soundPressureAutomaticRefreshSuspended = true
+                    self.soundPressureSession.suspendAutomaticRefresh()
                 }
                 self.fail(frame.type == 0x0C && frame.payload == Self.powerOffPayload
                           ? String(localized: "The power-off command was not acknowledged. Its outcome is unknown.")
@@ -6622,7 +6577,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
                 playback = SonyPlayback(generation: .v1)
                 touchAssignments = SonyTouchAssignments()
                 voiceGuidance = SonyVoiceGuidance()
-                soundPressure = SonySoundPressure()
+                soundPressureSession.configure()
                 earTipFit = SonyEarTipFit()
                 headGesturePractice = SonyHeadGesturePractice()
                 multipoint = SonyMultipoint()
@@ -7275,7 +7230,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
                 return
             }
             invalidateSoundPressureReading()
-            soundPressure = SonySoundPressure(supportedFunctions: functions)
+            soundPressureSession.configure(supportedFunctions: functions)
             invalidateWearingStatus()
             wearingStatus = SonyWearingStatus(supportedFunctions: functions)
             supportedFunctions2 = functions

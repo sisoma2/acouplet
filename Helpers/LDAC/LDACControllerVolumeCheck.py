@@ -80,8 +80,11 @@ final class MacAudioRouteObserver {
 }
 @MainActor
 enum LDACDriverInstaller {
-    enum State { case current }
+    enum State: Equatable { case missing, outdated, restartRequired, current, unavailable(String) }
     static func inspect(bundle: Bundle) -> State { .current }
+    static func inspectInBackground(bundle: Bundle) async -> State { .current }
+    static func invalidateCache() {}
+    static func openInstaller(bundle: Bundle) async throws {}
 }
 
 __VOLUME__
@@ -354,7 +357,8 @@ final class Controller: ObservableObject {
     let bundle = Bundle.main
     let inspectDriver: ((Bundle) -> LDACDriverInstaller.State)? = { LDACDriverInstaller.inspect(bundle: $0) }
     var isClassicConnected: (String) -> Bool = { _ in true }
-    var driverState = LDACDriverInstaller.State.current
+    let driverService = LDACDriverService(inspect: { LDACDriverInstaller.inspect(bundle: $0) })
+    var driverState: LDACDriverInstaller.State { driverService.state }
     var audioRoute: MacAudioRouteObserver? = MacAudioRouteObserver()
     var resumeOutputUID: String?
     var lastResumeBlockers: String?
@@ -1056,7 +1060,7 @@ def run_fixture(contents, failure=None):
         environment.setdefault("CLANG_MODULE_CACHE_PATH", str(root / ".build/check-all/ModuleCache"))
         if not environment.get("SDKROOT"):
             environment["SDKROOT"] = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
-        subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), "-o", str(binary)],
+        subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), str(root / "Sources/LDACDriverService.swift"), "-o", str(binary)],
                        env=environment, check=True)
         result = subprocess.run([str(binary)], check=False, env=environment, capture_output=True, text=True)
         if failure is None:

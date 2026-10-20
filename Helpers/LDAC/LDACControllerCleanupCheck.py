@@ -141,6 +141,7 @@ enum LDACDriverInstaller {
     static var installations = 0
     static var error: Error?
     static func inspect(bundle: Bundle) -> State { inspections += 1; return state }
+    static func inspectInBackground(bundle: Bundle) async -> State { inspect(bundle: bundle) }
     static func invalidateCache() {}
     static func openInstaller(bundle: Bundle) async throws {
         installations += 1
@@ -186,9 +187,14 @@ final class Controller: ObservableObject {
     var updateResumeTask: Task<Void, Never>?
     var automaticSelectionAddress: String?
     var helpers = Helpers()
-    var driverState = LDACDriverInstaller.State.current
-    var driverInstallationError: String?
-    var isOpeningDriverInstaller = false
+    let driverService = LDACDriverService(inspect: { LDACDriverInstaller.inspect(bundle: $0) })
+    var driverState: LDACDriverInstaller.State { driverService.state }
+    var driverInstallationError: String? { driverService.installationError }
+    private var simulatesOpeningInstaller = false
+    var isOpeningDriverInstaller: Bool {
+        get { simulatesOpeningInstaller || driverService.isOpeningInstaller }
+        set { simulatesOpeningInstaller = newValue }
+    }
     let bundle = Bundle.main
     let inspectDriver: ((Bundle) -> LDACDriverInstaller.State)? = { LDACDriverInstaller.inspect(bundle: $0) }
     var isClassicConnected: (String) -> Bool = { _ in true }
@@ -896,7 +902,7 @@ enum LDACControllerCleanupCheck {
         print("PASS actual finder admission: active finding and unconfirmed Stop block LDAC; manual driver installation is independent of headphones and preserves busy/driver-state checks")
     }
 }
-'''.replace("__METHODS__", "\n".join(method(name) for name in ["canStartDirectly", "synchronizeMicrophoneHandoff", "sampleRateUnavailableReason", "support", "capabilityContext", "recordDiscoveredSupport", "checkSupportAgain", "needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "openDriverInstaller", "setEnabled", "stop", "suspend", "resumeIfReady", "clearWaitingDeadline", "updateWaitingDeadline", "reconcileRequestedDevice", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
+'''.replace("__METHODS__", "\n".join(method(name) for name in ["canStartDirectly", "synchronizeMicrophoneHandoff", "sampleRateUnavailableReason", "support", "capabilityContext", "recordDiscoveredSupport", "checkSupportAgain", "needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "setEnabled", "stop", "suspend", "resumeIfReady", "clearWaitingDeadline", "updateWaitingDeadline", "reconcileRequestedDevice", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
 
 native_types = (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift").read_text()
 fixture = fixture.replace("__TYPES__", native_types[native_types.index("struct LDACFormat:"):native_types.index("enum LDACState:")])
@@ -913,5 +919,5 @@ with tempfile.TemporaryDirectory(prefix="acouplet-ldac-controller-cleanup-") as 
     swift = directory / "Check.swift"
     binary = directory / "check"
     swift.write_text(fixture)
-    subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), "-o", str(binary)], check=True)
+    subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), str(pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACDriverService.swift"), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

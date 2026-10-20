@@ -471,3 +471,74 @@ final class SonySoundPressureTests: XCTestCase {
         [[0x51, 3, 1, 0, 0, 0, 0, 5, 0x10], [0x57, 3, 0], [0x59, 3, 0, 1], [0x5B, 3, 80, 0xFF]]
     }
 }
+
+@MainActor
+final class SonySoundPressureSessionTests: XCTestCase {
+    func testReplyRequiresTransmissionAndCurrentGeneration() {
+        let session = configuredSession()
+        XCTAssertTrue(session.request(automatically: false))
+        XCTAssertTrue(session.receive([0x5B, 3, 80, 0xFF], acceptsReading: true))
+        XCTAssertTrue(session.hasPendingRead)
+        XCTAssertNil(session.soundPressure.reading)
+        session.didTransmit(onTimeout: {})
+        session.invalidateReading()
+        XCTAssertTrue(session.receive([0x5B, 3, 80, 0xFF], acceptsReading: true))
+        XCTAssertFalse(session.hasPendingRead)
+        XCTAssertNil(session.soundPressure.reading)
+    }
+
+    func testBlockedReadingStillRetiresItsRequest() {
+        let session = configuredSession()
+        XCTAssertTrue(session.request(automatically: false))
+        session.didTransmit(onTimeout: {})
+        XCTAssertTrue(session.receive([0x5B, 3, 80, 0xFF], acceptsReading: false))
+        XCTAssertFalse(session.hasPendingRead)
+        XCTAssertNil(session.soundPressure.reading)
+    }
+
+    func testResetAllowsNewRequestAndInvalidatesQueuedTimeout() async {
+        let session = configuredSession()
+        var timeoutCount = 0
+        XCTAssertTrue(session.request(automatically: false))
+        session.didTransmit { timeoutCount += 1 }
+        session.simulateReadTimeout()
+        session.resetRead()
+        XCTAssertTrue(session.request(automatically: false))
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(timeoutCount, 0)
+        XCTAssertNil(session.error)
+        XCTAssertTrue(session.isReading)
+        session.resetRead()
+    }
+
+    func testIntervalStartsWhenQueryIsTransmitted() {
+        var now = ContinuousClock.now
+        let session = configuredSession(now: { now })
+        XCTAssertTrue(session.request(automatically: false))
+        now = now.advanced(by: .seconds(20))
+        session.didTransmit(onTimeout: {})
+        XCTAssertTrue(session.receive([0x5B, 3, 80, 0xFF], acceptsReading: true))
+        XCTAssertEqual(session.soundPressure.reading, .decibels(80))
+        XCTAssertFalse(session.request(automatically: true))
+        now = now.advanced(by: .seconds(5))
+        XCTAssertTrue(session.request(automatically: true))
+        session.resetRead()
+    }
+
+    func testManualRequestResumesSuspendedAutomaticRefresh() {
+        let session = configuredSession()
+        session.suspendAutomaticRefresh()
+        XCTAssertFalse(session.request(automatically: true))
+        XCTAssertTrue(session.request(automatically: false))
+        XCTAssertFalse(session.automaticRefreshSuspended)
+        session.resetRead()
+    }
+
+    private func configuredSession(now: @escaping () -> ContinuousClock.Instant = { .now }) -> SonySoundPressureSession {
+        let session = SonySoundPressureSession(now: now)
+        session.configure(supportedFunctions: [0x53])
+        XCTAssertTrue(session.receive([0x51, 3, 1, 0, 0, 0, 0, 5, 0], acceptsReading: true))
+        XCTAssertTrue(session.receive([0x57, 3, 0], acceptsReading: true))
+        return session
+    }
+}

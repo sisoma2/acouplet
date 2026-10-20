@@ -1354,3 +1354,73 @@ final class LDACRecoveryTests: XCTestCase {
     }
 }
 #endif
+
+#if !ACOUPLET_PUBLIC_APIS_ONLY
+@MainActor
+final class LDACDriverServiceTests: XCTestCase {
+    func testUpdateOnlyOpensOutdatedDriver() async {
+        for state in [LDACDriverInstaller.State.missing, .current, .restartRequired, .unavailable("Unavailable")] {
+            var openings = 0
+            let service = LDACDriverService(inspect: { _ in state }, openInstaller: { _ in openings += 1 })
+            service.update()
+            for _ in 0..<10 { await Task.yield() }
+            XCTAssertEqual(service.state, state)
+            XCTAssertFalse(service.isOpeningInstaller)
+            XCTAssertEqual(openings, 0)
+        }
+    }
+
+    func testInstallationCoalescesRequestsAndAllowsRetryAfterFailure() async {
+        var openings = 0
+        let service = LDACDriverService(inspect: { _ in .outdated }, openInstaller: { _ in
+            openings += 1
+            if openings == 1 {
+                throw NSError(domain: "LDACDriverServiceTests", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Installer could not open"])
+            }
+        })
+        service.update()
+        service.install()
+        XCTAssertTrue(service.isOpeningInstaller)
+        for _ in 0..<100 where service.isOpeningInstaller { await Task.yield() }
+        XCTAssertFalse(service.isOpeningInstaller)
+        XCTAssertEqual(service.installationError, "Installer could not open")
+        XCTAssertEqual(openings, 1)
+        service.install()
+        XCTAssertNil(service.installationError)
+        for _ in 0..<100 where service.isOpeningInstaller { await Task.yield() }
+        XCTAssertFalse(service.isOpeningInstaller)
+        XCTAssertEqual(openings, 2)
+    }
+
+    func testBackgroundInspectionCoalescesAndDiscardsResultDuringPlayback() async throws {
+        var continuation: CheckedContinuation<LDACDriverInstaller.State, Never>?
+        var inspections = 0
+        var canUpdate = true
+        var completions = 0
+        let service = LDACDriverService(inspectInBackground: { _ in
+            inspections += 1
+            return await withCheckedContinuation { continuation = $0 }
+        })
+        service.refreshInBackground(canUpdate: { canUpdate }, didRefresh: { completions += 1 })
+        service.refreshInBackground(canUpdate: { canUpdate }, didRefresh: { completions += 1 })
+        for _ in 0..<100 where continuation == nil { await Task.yield() }
+        let pending = try XCTUnwrap(continuation)
+        canUpdate = false
+        pending.resume(returning: .outdated)
+        for _ in 0..<100 where completions == 0 { await Task.yield() }
+        XCTAssertEqual(inspections, 1)
+        XCTAssertEqual(completions, 1)
+        XCTAssertEqual(service.state, .unavailable(""))
+        continuation = nil
+        canUpdate = true
+        service.refreshInBackground(canUpdate: { canUpdate }, didRefresh: { completions += 1 })
+        for _ in 0..<100 where continuation == nil { await Task.yield() }
+        try XCTUnwrap(continuation).resume(returning: .current)
+        for _ in 0..<100 where completions == 1 { await Task.yield() }
+        XCTAssertEqual(service.state, .current)
+        XCTAssertEqual(inspections, 2)
+        XCTAssertEqual(completions, 2)
+    }
+}
+#endif
