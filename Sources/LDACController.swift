@@ -100,8 +100,7 @@ final class LDACController: ObservableObject {
     private var connectionModeConfirmed = false
     private var startTask: Task<Void, Never>?
     private var readinessTask: Task<Void, Never>?
-    private var volumeTask: Task<Void, Never>?
-    private var volumeTaskID: UUID?
+    private let volumeSession = LDACVolumeSession()
     private var cleanupTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
     private var recoveryTaskID: UUID?
@@ -118,7 +117,6 @@ final class LDACController: ObservableObject {
     private var stoppingForUpdate = false
     private var updateResumeTask: Task<Void, Never>?
     private var stableSince: Date?
-    private var pendingVolume: Int?
     private var initialReadbackID: UUID?
     private var controlSession: UInt64?
     private var sourceAddress: String?
@@ -945,7 +943,7 @@ final class LDACController: ObservableObject {
                 self.record("native-controls", reason: "scalar=\(controls.scalar) userMuted=\(controls.muted)")
                 if controls.muted { self.setOutputGain(0) }
                 if let range = self.volumeRange {
-                    self.pendingVolume = controls.volume(in: range)
+                    self.volumeSession.pendingVolume = controls.volume(in: range)
                     self.sendPendingVolume()
                 }
                 if self.usable { self.setOutputGain(controls.muted ? 0 : 1) }
@@ -1019,7 +1017,7 @@ final class LDACController: ObservableObject {
                       headphones.playback.musicVolumeRange == range, headphones.playback.volume == volume else {
                     throw ControlError(String(localized: "The headphone audio settings changed. Try LDAC again."))
                 }
-                self.pendingVolume = output.controls.volume(in: range)
+                self.volumeSession.pendingVolume = output.controls.volume(in: range)
                 self.observeControls(headphones, devices: devices)
                 self.startTask = nil
                 self.launch(address)
@@ -1234,7 +1232,7 @@ final class LDACController: ObservableObject {
                                 throw ControlError(String(localized: "The headphone audio settings changed. Try LDAC again."))
                             }
                             self.initialReadbackID = readback
-                            if let output = self.nativeOutput { self.pendingVolume = output.controls.volume(in: range) }
+                            if let output = self.nativeOutput { self.volumeSession.pendingVolume = output.controls.volume(in: range) }
                         } else {
                             try await self.nativeOutput?.validateForRecovery()
                         }
@@ -1357,7 +1355,7 @@ final class LDACController: ObservableObject {
         controlSession = nil
         sourceAddress = nil
         volumeRange = nil
-        pendingVolume = nil
+        volumeSession.pendingVolume = nil
         initialReadbackID = nil
         transportHealth = LDACTransportHealth()
         runtimeStatus = LDACRuntimeStatus()
@@ -1464,38 +1462,28 @@ final class LDACController: ObservableObject {
 
     private var bindingIsCurrent: Bool { bindingCheck == .current }
 
-    private enum BindingCheck: Equatable {
-        case current
-        /// Nothing that LDAC depends on changed, but freshness was lost or a transition that may keep the
-        /// selected source is still running (keeping, inventory reread, another device's connection, multipoint).
-        case held(String, transition: Bool)
-        case sourceChanged(String)
-        case lost(String)
-    }
-
-    /// Classifies the binding, naming the clause that decided it so that recovery logs say which one failed.
-    /// Identity, connection, control session and raw transport are always checked; only freshness and
-    /// source-keeping transitions are tolerated while the values LDAC was bound to stay the same (L4, L5).
-    private var bindingCheck: BindingCheck {
-        guard let headphones, let address = targetAddress, devices?.controller(for: address) === headphones,
-              SonyBLEIdentity.normalizedAddress(headphones.address) == address else { return .lost("controller-changed") }
-        guard headphones.isDeviceConnected else { return .lost("device-disconnected") }
-        guard controlSession != nil, headphones.notificationSession == controlSession else { return .lost("control-session-changed") }
-        guard headphones.playback.generation != .v1 || transportFormat != nil else { return .lost("raw-transport-missing") }
-        if headphones.isLeavingLDACConnectionMode { return .sourceChanged("connection-mode") }
-        if let bound = sourceAddress, let selected = headphones.multipoint.selectedSource?.address, selected != bound,
-           !headphones.multipoint.inventoryIsStale {
-            return .sourceChanged("selected-source")
-        }
-        if let range = headphones.playback.musicVolumeRange, range != volumeRange { return .lost("volume-range-changed") }
-        if let transition = headphones.pendingControlTransition { return .held("transition=\(transition)", transition: true) }
-        if headphones.multipoint.inventoryIsStale { return .held("inventory-stale", transition: false) }
-        if headphones.multipoint.selectedSource?.address != sourceAddress { return .held("source-unconfirmed", transition: false) }
-        if headphones.playback.musicVolumeRange == nil { return .held("volume-range-unknown", transition: false) }
-        guard hasOwnedMusicContext else {
-            return .held(headphones.hasCurrentMusicVolumeControl ? "source-context-stale" : "volume-controls-stale", transition: false)
-        }
-        return .current
+    private var bindingCheck: LDACMusicBinding.Status {
+        let matchesController: Bool
+        if let headphones, let address = targetAddress {
+            matchesController = devices?.controller(for: address) === headphones
+                && SonyBLEIdentity.normalizedAddress(headphones.address) == address
+        } else { matchesController = false }
+        return LDACMusicBinding.check(.init(
+            matchesController: matchesController,
+            isConnected: headphones?.isDeviceConnected == true,
+            session: headphones?.notificationSession,
+            boundSession: controlSession,
+            requiresRawTransport: headphones?.playback.generation == .v1,
+            hasRawTransport: transportFormat != nil,
+            isLeavingConnectionMode: headphones?.isLeavingLDACConnectionMode == true,
+            selectedSource: headphones?.multipoint.selectedSource?.address,
+            boundSource: sourceAddress,
+            inventoryIsStale: headphones?.multipoint.inventoryIsStale == true,
+            volumeRange: headphones?.playback.musicVolumeRange,
+            boundVolumeRange: volumeRange,
+            pendingTransition: headphones?.pendingControlTransition,
+            hasOwnedMusicContext: hasOwnedMusicContext,
+            hasCurrentVolumeControl: headphones?.hasCurrentMusicVolumeControl == true))
     }
 
     private var musicControlStatus: String {
@@ -1505,7 +1493,7 @@ final class LDACController: ObservableObject {
         let currentSession = headphones.map { String($0.notificationSession) } ?? "none"
         let selectedSource = headphones?.multipoint.selectedSource?.address ?? "none"
         let newReadback = headphones?.musicVolumeReadbackID != nil && headphones?.musicVolumeReadbackID != initialReadbackID
-        return "ready=\(headphones?.isReady == true) connected=\(headphones?.isDeviceConnected == true) ownedContext=\(hasOwnedMusicContext) fresh=\(headphones?.hasFreshMusicVolumeReadback == true) canWrite=\(headphones?.canControlMusicVolume == true) canConfirm=\(headphones?.canPerformConfirmedSettingChange(.playbackVolume) == true) newReadback=\(newReadback) controlSession=\(currentSession) bound=\(controlSession != nil) source=\(selectedSource) volume=\(volume.map(String.init) ?? "unknown") range=\(rangeDescription) pendingVolume=\(pendingVolume.map(String.init) ?? "none") writing=\(volumeTask != nil) userMuted=\(nativeOutput?.controls.muted ?? true)"
+        return "ready=\(headphones?.isReady == true) connected=\(headphones?.isDeviceConnected == true) ownedContext=\(hasOwnedMusicContext) fresh=\(headphones?.hasFreshMusicVolumeReadback == true) canWrite=\(headphones?.canControlMusicVolume == true) canConfirm=\(headphones?.canPerformConfirmedSettingChange(.playbackVolume) == true) newReadback=\(newReadback) controlSession=\(currentSession) bound=\(controlSession != nil) source=\(selectedSource) volume=\(volume.map(String.init) ?? "unknown") range=\(rangeDescription) pendingVolume=\(volumeSession.pendingVolume.map(String.init) ?? "none") writing=\(volumeSession.isWriting) userMuted=\(nativeOutput?.controls.muted ?? true)"
     }
 
     private func prepareControlsForMedia(_ address: String) {
@@ -1578,7 +1566,7 @@ final class LDACController: ObservableObject {
                             }
                             self.volumeRange = range
                             self.initialReadbackID = readback
-                            self.pendingVolume = self.nativeOutput?.controls.volume(in: range)
+                            self.volumeSession.pendingVolume = self.nativeOutput?.controls.volume(in: range)
                         }
                         self.record("prestream-controls-ready", reason: self.musicControlStatus)
                         self.readinessTask = nil
@@ -1637,7 +1625,7 @@ final class LDACController: ObservableObject {
                         self.sourceAddress = headphones.multipoint.selectedSource?.address
                         self.volumeRange = range
                         self.record("volume-bound", reason: self.musicControlStatus)
-                        if self.isRecovering || self.pendingVolume == nil, let output = self.nativeOutput { self.pendingVolume = output.controls.volume(in: range) }
+                        if self.isRecovering || self.volumeSession.pendingVolume == nil, let output = self.nativeOutput { self.volumeSession.pendingVolume = output.controls.volume(in: range) }
                     }
                     if self.controlSession != nil {
                         switch self.bindingCheck {
@@ -1653,21 +1641,21 @@ final class LDACController: ObservableObject {
                             throw ControlError(String(localized: "The headphone audio source or connection changed. LDAC stopped."))
                         }
                         self.sendPendingVolume()
-                        if self.pendingVolume == nil, self.volumeTask == nil,
+                        if self.volumeSession.pendingVolume == nil, !self.volumeSession.isWriting,
                            self.headphones?.canControlMusicVolume == true,
                            self.headphones?.canPerformConfirmedSettingChange(.playbackVolume) == true,
                            let format = self.transportFormat {
                             try await self.nativeOutput?.finishPreparation()
                             try Task.checkCancellation()
                             guard self.sessionID == identifier, self.state != .stopping, self.bindingIsCurrent,
-                                  self.pendingVolume == nil, self.volumeTask == nil else {
+                                  self.volumeSession.pendingVolume == nil, !self.volumeSession.isWriting else {
                                 self.nativeOutput?.silence()
                                 continue
                             }
                             if let output = self.nativeOutput, let range = self.volumeRange,
                                self.headphones?.playback.volume != output.controls.volume(in: range) {
                                 output.silence()
-                                self.pendingVolume = output.controls.volume(in: range)
+                                self.volumeSession.pendingVolume = output.controls.volume(in: range)
                                 continue
                             }
                             self.usable = true
@@ -1726,9 +1714,9 @@ final class LDACController: ObservableObject {
         }
         // Only a volume that differs from the Mac's own controls is news. Re-confirming the same volume on every
         // `objectWillChange` sent an owner request each time and caused the `volume-confirmed` bursts (L6).
-        if pendingVolume == nil, volumeTask == nil, let headphones, let range = volumeRange,
+        if volumeSession.pendingVolume == nil, !volumeSession.isWriting, let headphones, let range = volumeRange,
            let volume = headphones.playback.volume, let output = nativeOutput, output.controls.volume(in: range) != volume {
-            pendingVolume = volume
+            volumeSession.pendingVolume = volume
         }
         sendPendingVolume()
     }
@@ -1781,85 +1769,40 @@ final class LDACController: ObservableObject {
     }
 
     private func sendPendingVolume() {
-        guard volumeTask == nil, pendingVolume != nil, controlSession != nil, state != .stopping else { return }
-        let identifier = sessionID
-        let volumeIdentifier = UUID()
-        volumeTaskID = volumeIdentifier
-        volumeTask = Task { [weak self] in
-            guard let self, self.sessionID == identifier else { return }
-            defer {
-                if self.volumeTaskID == volumeIdentifier {
-                    self.volumeTask = nil
-                    self.volumeTaskID = nil
+        volumeSession.send(using: .init(
+            context: { [weak self] in
+                guard let self, self.controlSession != nil, self.state != .stopping, let headphones = self.headphones else { return nil }
+                return LDACVolumeSession.Context(
+                    sessionID: self.sessionID, binding: self.bindingCheck, hasRawTransport: self.transportFormat != nil,
+                    volumeRange: self.volumeRange,
+                    canWrite: headphones.canControlMusicVolume && headphones.canPerformConfirmedSettingChange(.playbackVolume),
+                    headphoneVolume: headphones.playback.volume,
+                    nativeVolume: self.volumeRange.flatMap { self.nativeOutput?.controls.volume(in: $0) })
+            },
+            write: { [weak self] volume, isCurrent in
+                guard let headphones = self?.headphones else { throw CancellationError() }
+                try await headphones.performConfirmedSettingChange(.playbackVolume) {
+                    headphones.setPlaybackVolume(volume, isCurrent: isCurrent)
                 }
-            }
-            do {
-                while let volume = self.pendingVolume {
-                    try Task.checkCancellation()
-                    if case .held = self.bindingCheck {
-                        try await Task.sleep(for: .milliseconds(100))
-                        continue
-                    }
-                    guard self.bindingIsCurrent, let headphones = self.headphones,
-                          self.volumeRange?.contains(volume) == true else {
-                        throw ControlError("The headphone music volume controls became unavailable. LDAC stopped.", userFacing: String(localized: "The headphone volume controls became unavailable. LDAC stopped."))
-                    }
-                    if !headphones.canControlMusicVolume || !headphones.canPerformConfirmedSettingChange(.playbackVolume) {
-                        try await Task.sleep(for: .milliseconds(100))
-                        continue
-                    }
-                    self.pendingVolume = nil
-                    if headphones.playback.volume != volume {
-                        self.record("volume-write", reason: "requested=\(volume)")
-                        try await headphones.performConfirmedSettingChange(.playbackVolume) {
-                            headphones.setPlaybackVolume(volume) { [weak self] in
-                                guard let self else { return false }
-                                return self.sessionID == identifier && self.volumeTaskID == volumeIdentifier
-                                    && self.volumeTask?.isCancelled == false && self.state != .stopping
-                                    && self.transportFormat != nil && self.bindingIsCurrent
-                            }
-                        }
-                    }
-                    try Task.checkCancellation()
-                    let confirmedBinding: Bool
-                    switch self.bindingCheck {
-                    case .current, .held: confirmedBinding = true
-                    case .sourceChanged, .lost: confirmedBinding = false
-                    }
-                    guard self.sessionID == identifier, confirmedBinding, headphones.playback.volume == volume else {
-                        throw ControlError("The headphones did not confirm the requested native volume. LDAC stopped.", userFacing: String(localized: "The headphones did not confirm the requested volume. LDAC stopped."))
-                    }
-                    self.record("volume-confirmed", reason: "confirmed=\(volume)")
-                    if self.pendingVolume == nil, let range = self.volumeRange, let output = self.nativeOutput,
-                       output.controls.volume(in: range) != volume {
-                        do { try await output.configure(volume: volume, range: range) }
-                        catch is LDACOwnerTimeoutError {
-                            // A late owner is not a failure (L12): the Mac controls still differ, so the next
-                            // change notification queues this volume again.
-                            self.record("volume-configure-late", reason: "confirmed=\(volume)")
-                        }
-                        try Task.checkCancellation()
-                    }
+            },
+            configure: { [weak self] volume, range in
+                guard let self, let output = self.nativeOutput else { return }
+                do { try await output.configure(volume: volume, range: range) }
+                catch is LDACOwnerTimeoutError {
+                    self.record("volume-configure-late", reason: "confirmed=\(volume)")
                 }
-            } catch is CancellationError {
-            } catch {
-                guard self.sessionID == identifier, self.volumeTaskID == volumeIdentifier, self.state != .stopping else { return }
-                switch self.bindingCheck {
+            },
+            record: { [weak self] event, reason in self?.record(event, reason: reason) },
+            failed: { [weak self] error, binding in
+                guard let self else { return }
+                switch binding {
                 case let .sourceChanged(reason): self.stopForChange(reason)
                 case let .lost(reason): self.recoverBinding("\(reason) after volume error")
-                case .held:
-                    // A held binding is not a failure: keep LDAC and retry the Mac's volume once it is current.
-                    self.record("volume-deferred", reason: error.localizedDescription)
-                    if self.pendingVolume == nil, let range = self.volumeRange, let output = self.nativeOutput {
-                        self.pendingVolume = output.controls.volume(in: range)
-                    }
-                    self.volumeTask = nil
-                    self.volumeTaskID = nil
-                    self.controlsChanged()
                 case .current: self.fail(error.localizedDescription)
+                case .held: break
                 }
-            }
-        }
+            },
+            deferred: { [weak self] in self?.controlsChanged() }))
     }
 
     private func setOutputGain(_ gain: Double) {
@@ -1890,9 +1833,7 @@ final class LDACController: ObservableObject {
         setOutputGain(0)
         readinessTask?.cancel()
         readinessTask = nil
-        volumeTask?.cancel()
-        volumeTask = nil
-        volumeTaskID = nil
+        volumeSession.cancel()
         bindingHoldTask?.cancel()
         bindingHoldTask = nil
         bindingHeldSince = nil
@@ -1949,9 +1890,7 @@ final class LDACController: ObservableObject {
         setOutputGain(0)
         readinessTask?.cancel()
         readinessTask = nil
-        volumeTask?.cancel()
-        volumeTask = nil
-        volumeTaskID = nil
+        volumeSession.cancel()
         controlObservation = nil
         if let session {
             if stoppingForUpdate {
@@ -1979,9 +1918,7 @@ final class LDACController: ObservableObject {
         bindingHeldSince = nil
         readinessTask?.cancel()
         readinessTask = nil
-        volumeTask?.cancel()
-        volumeTask = nil
-        volumeTaskID = nil
+        volumeSession.cancel()
         controlObservation = nil
         let output = nativeOutput
         cleanupTask = Task { [weak self] in
@@ -2008,7 +1945,7 @@ final class LDACController: ObservableObject {
             self.controlSession = nil
             self.sourceAddress = nil
             self.volumeRange = nil
-            self.pendingVolume = nil
+            self.volumeSession.pendingVolume = nil
             self.initialReadbackID = nil
             self.startingDirectly = false
             self.requestedOutputGain = 0

@@ -234,8 +234,7 @@ final class Controller: ObservableObject {
     var cleanupTask: Task<Void, Never>?
     var recoveryTask: Task<Void, Never>?
     var readinessTask: Task<Void, Never>?
-    var volumeTask: Task<Void, Never>?
-    var volumeTaskID: UUID?
+    let volumeSession = LDACVolumeSession()
     var controlObservation: Int?
     var outputID: UUID?
     var headphones: Device?
@@ -245,7 +244,6 @@ final class Controller: ObservableObject {
     var controlSession: UInt64?
     var sourceAddress: String?
     var volumeRange: ClosedRange<Int>?
-    var pendingVolume: Int?
     var initialReadbackID: UUID?
     var stableSince: Date?
     var requestedOutputGain = 0.0
@@ -919,5 +917,5 @@ with tempfile.TemporaryDirectory(prefix="acouplet-ldac-controller-cleanup-") as 
     swift = directory / "Check.swift"
     binary = directory / "check"
     swift.write_text(fixture)
-    subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), str(pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACDriverService.swift"), "-o", str(binary)], check=True)
+    subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), str(pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACDriverService.swift"), str(pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACMusicBinding.swift"), str(pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACVolumeSession.swift"), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

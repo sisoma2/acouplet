@@ -371,8 +371,7 @@ final class Controller: ObservableObject {
     var controlObservation: Int?
     var startTask: Task<Void, Never>?
     var readinessTask: Task<Void, Never>?
-    var volumeTask: Task<Void, Never>?
-    var volumeTaskID: UUID?
+    let volumeSession = LDACVolumeSession()
     var cleanupTask: Task<Void, Never>?
     var recoveryTask: Task<Void, Never>?
     var recoveryTaskID: UUID?
@@ -386,7 +385,6 @@ final class Controller: ObservableObject {
     var recoveryEvents: [String] = []
     var restoreAudioOnStop = true
     var stableSince: Date?
-    var pendingVolume: Int?
     var initialReadbackID: UUID?
     var controlSession: UInt64?
     var sourceAddress: String?
@@ -579,7 +577,7 @@ enum Check {
         precondition(output.ready && output.preparations == 1 && session.gains.last == 1)
         print("PASS actual start/handoff/active/readiness: legacy preparation is silent; delayed controls require new status and volume plus confirmed setter")
 
-        controller.pendingVolume = 6
+        controller.volumeSession.pendingVolume = 6
         controller.sendPendingVolume()
         try await waitUntil { headphones.queuedWrite != nil }
         session.emit(.connectionLost("fixture queued loss"))
@@ -746,21 +744,21 @@ enum Check {
             await Task.yield()
         }
         try await Task.sleep(for: .milliseconds(50))
-        precondition(quietOutput.configurations == configurations && quiet.volumeTask == nil && quiet.pendingVolume == nil
+        precondition(quietOutput.configurations == configurations && !quiet.volumeSession.isWriting && quiet.volumeSession.pendingVolume == nil
                      && quiet.events.filter { $0 == "volume-confirmed" }.count == confirmations,
                      "Unchanged headphone volume re-sent the native volume on every change notification")
         quietDevice.playback.volume = 9
         quiet.controlsChanged()
-        try await waitUntil { quiet.volumeTask == nil && quietOutput.controls.volume(in: 0...30) == 9 }
+        try await waitUntil { !quiet.volumeSession.isWriting && quietOutput.controls.volume(in: 0...30) == 9 }
         precondition(quietOutput.configurations == configurations + 1 && quietDevice.transmitted == quietWrites,
                      "A headphone volume change was not mirrored exactly once")
         quietOutput.controls.scalar = 0.5
-        quiet.pendingVolume = quietOutput.controls.volume(in: 0...30)
+        quiet.volumeSession.pendingVolume = quietOutput.controls.volume(in: 0...30)
         quiet.sendPendingVolume()
         try await waitUntil { quietDevice.queuedWrite != nil }
         quietDevice.transmitVolume()
         quietDevice.confirmVolume()
-        try await waitUntil { quiet.volumeTask == nil }
+        try await waitUntil { !quiet.volumeSession.isWriting }
         precondition(quietDevice.playback.volume == 15 && quietOutput.configurations == configurations + 1,
                      "A Mac-side volume change configured the Mac output it came from")
         try await stop(quiet)
@@ -770,11 +768,11 @@ enum Check {
         lateOutput.configureTimeouts = 1
         lateDevice.playback.volume = 7
         late.controlsChanged()
-        try await waitUntil { late.volumeTask == nil && lateOutput.configureTimeouts == 0 }
+        try await waitUntil { !late.volumeSession.isWriting && lateOutput.configureTimeouts == 0 }
         precondition(late.usable && lateOutput.ready && !late.isRecovering && late.requestedAddress != nil,
                      "A late owner reply to configure stopped LDAC")
         late.controlsChanged()
-        try await waitUntil { late.volumeTask == nil && lateOutput.controls.volume(in: 0...30) == 7 }
+        try await waitUntil { !late.volumeSession.isWriting && lateOutput.controls.volume(in: 0...30) == 7 }
         try await stop(late)
         print("PASS L12: a late configure reply is not fatal; the next change notification configures again")
 
@@ -800,7 +798,7 @@ enum Check {
         keeping.controlsChanged()
         try await Task.sleep(for: .milliseconds(600))
         precondition(keeping.usable && keepOutput.ready && !keeping.isRecovering, "A transition that keeps the source tore LDAC down")
-        keeping.pendingVolume = 5
+        keeping.volumeSession.pendingVolume = 5
         keeping.sendPendingVolume()
         try await Task.sleep(for: .milliseconds(150))
         precondition(keepDevice.queuedWrite == nil, "A volume write was sent during a held transition")
@@ -809,7 +807,7 @@ enum Check {
         try await waitUntil { keepDevice.queuedWrite != nil }
         keepDevice.transmitVolume()
         keepDevice.confirmVolume()
-        try await waitUntil { keeping.volumeTask == nil }
+        try await waitUntil { !keeping.volumeSession.isWriting }
         precondition(keeping.usable && keepDevice.playback.volume == 5)
         keepDevice.pendingControlTransition = "multipoint"
         keepDevice.isDeviceConnected = false
@@ -892,20 +890,20 @@ enum Check {
         let transmitted = modernDevice.transmitted
         let silences = modernOutput.silences
         modernDevice.blocksPlaybackCommands = true
-        modern.pendingVolume = 7
+        modern.volumeSession.pendingVolume = 7
         modern.controlsChanged()
         try await Task.sleep(for: .milliseconds(150))
         precondition(modern.bindingIsCurrent && modern.usable && modernOutput.ready && !modern.isRecovering
                      && modern.session === modernRaw && modernOutput.silences == silences,
                      "A temporary command block discarded active LDAC ownership")
-        precondition(modern.pendingVolume == 7 && modernDevice.queuedWrite == nil && modernDevice.transmitted == transmitted,
+        precondition(modern.volumeSession.pendingVolume == 7 && modernDevice.queuedWrite == nil && modernDevice.transmitted == transmitted,
                      "A blocked Sony volume command was submitted")
         modernDevice.blocksPlaybackCommands = false
         modern.controlsChanged()
         try await waitUntil { modernDevice.queuedWrite != nil }
         modernDevice.transmitVolume()
         modernDevice.confirmVolume()
-        try await waitUntil { modern.volumeTask == nil }
+        try await waitUntil { !modern.volumeSession.isWriting }
         precondition(modern.usable && modernOutput.ready && !modern.isRecovering && modernDevice.playback.volume == 7,
                      "Volume did not resume on the original LDAC session")
         modernDevice.blocksPlaybackCommands = true
@@ -1047,12 +1045,16 @@ fixture = fixture.replace("__SUPPORT__", (root / "Sources/LDACSupport.swift").re
 fixture = fixture.replace("__VOLUME__", volume).replace("__METHODS__", "\n".join(member(name) for name in names))
 fixture = fixture.replace(".advanced(by: .seconds(45))", ".advanced(by: .milliseconds(2500))")
 
-def run_fixture(contents, failure=None):
+def run_fixture(contents, failure=None, volume_source=None):
     with tempfile.TemporaryDirectory(prefix="acouplet-ldac-controller-volume-") as directory:
         directory = Path(directory)
         swift = directory / "Check.swift"
         binary = directory / "check"
         swift.write_text(contents)
+        volume_file = root / "Sources/LDACVolumeSession.swift"
+        if volume_source is not None:
+            volume_file = directory / "LDACVolumeSession.swift"
+            volume_file.write_text(volume_source)
         environment = os.environ.copy()
         environment["ACOUPLET_TESTING"] = "1"
         environment["CFFIXED_USER_HOME"] = str(directory / "home")
@@ -1060,7 +1062,7 @@ def run_fixture(contents, failure=None):
         environment.setdefault("CLANG_MODULE_CACHE_PATH", str(root / ".build/check-all/ModuleCache"))
         if not environment.get("SDKROOT"):
             environment["SDKROOT"] = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
-        subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), str(root / "Sources/LDACDriverService.swift"), "-o", str(binary)],
+        subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), str(root / "Sources/LDACDriverService.swift"), str(root / "Sources/LDACMusicBinding.swift"), str(volume_file), "-o", str(binary)],
                        env=environment, check=True)
         result = subprocess.run([str(binary)], check=False, env=environment, capture_output=True, text=True)
         if failure is None:
@@ -1086,10 +1088,10 @@ mutations = [
      "        guard recoveryTaskID == taskID else { return }\n        return;", "An early exit left the retry wait set"),
     ("unchanged-volume filter", "let output = nativeOutput, output.controls.volume(in: range) != volume {",
      "let output = nativeOutput {", "Unchanged headphone volume re-sent the native volume"),
-    ("configure echo filter", "let output = self.nativeOutput,\n                       output.controls.volume(in: range) != volume {",
-     "let output = self.nativeOutput {", "A Mac-side volume change configured the Mac output it came from"),
-    ("late configure tolerance", "                        catch is LDACOwnerTimeoutError {",
-     "                        catch let error as LDACOwnerTimeoutError where false {", "A late owner reply to configure stopped LDAC"),
+    ("configure echo filter", "nativeVolume != volume {",
+     "true {", "A Mac-side volume change configured the Mac output it came from"),
+    ("late configure tolerance", "                catch is LDACOwnerTimeoutError {",
+     "                catch let error as LDACOwnerTimeoutError where false {", "A late owner reply to configure stopped LDAC"),
     ("multipoint automatic suppression", "           headphones?.requestedSourceSwitchAddress != selected {",
      "           headphones?.requestedSourceSwitchAddress != selected, false {",
      "Another multipoint source did not suppress automatic LDAC activation"),
@@ -1106,8 +1108,12 @@ checks = CheckCases("LDAC controller checks; add --check-mutations to include ne
 checks.add("baseline", run_fixture, fixture)
 if "--check-mutations" in sys.argv:
     for name, before, after, failure in mutations:
-        assert fixture.count(before) == 1
-        checks.add("mutation/" + name, run_fixture, fixture.replace(before, after), failure)
+        if fixture.count(before) == 1:
+            checks.add("mutation/" + name, run_fixture, fixture.replace(before, after), failure)
+        else:
+            volume_source = (root / "Sources/LDACVolumeSession.swift").read_text()
+            assert volume_source.count(before) == 1, name
+            checks.add("mutation/" + name, run_fixture, fixture, failure, volume_source.replace(before, after))
 
 
 if __name__ == "__main__":

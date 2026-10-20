@@ -23,6 +23,15 @@ check that the control connection is still current.
 Protocol payload parsing remains in `SonySoundPressure`. Transport admission and
 connection-preference recovery remain in the controller.
 
+`SonyEarTipFitSession` owns the fit-test model, workflow transition, reply
+ownership and phase timeouts. It returns the commands needed for the current
+phase; the controller admits and sends them, then reports actual transmission.
+Connection loss cancels the timeout and preserves an interrupted measurement
+until explicit recovery. Timeout callbacks check both the current control
+connection and the scheduled timeout identity, so a cancelled callback cannot
+interrupt a replacement attempt. The controller retains transport failure
+handling, diagnostics and the existing read-only feature properties.
+
 ## Settings and menu presentation
 
 `SettingsView` owns tab selection and Settings lifecycle work, including automatic
@@ -52,6 +61,28 @@ publishers. Background inspections apply results only if playback is still
 stopped when the inspection finishes. A completed inspection then asks the
 controller to reconsider the preferred codec.
 
+## LDAC music controls
+
+`LDACMusicBinding` classifies a snapshot of the controller identity, connection,
+control session, raw transport, selected source, volume range and freshness.
+Identity or session changes invalidate the binding; confirmed source changes
+stop playback. Incomplete transitions and stale readbacks hold the binding
+while the controller applies its existing recovery deadline.
+
+`LDACVolumeSession` owns the pending volume, asynchronous write and write
+identity. Its injected operations provide current binding snapshots, confirmed
+headphone writes and native-output configuration. Every queued write rechecks
+the playback session, write identity, raw transport and binding before it may
+transmit. New requests coalesce while a write is awaiting confirmation. An old
+cancelled write cannot clear a replacement write, and matching native volume
+does not cause another output-configuration request.
+
+`LDACController` retains media admission, connection preferences, binding-hold
+deadlines, ordinary-audio restoration and the decisions to stop or recover
+playback. It supplies these operations without transferring playback lifecycle
+ownership to the volume session. Late native-owner configuration replies retain
+their existing tolerance.
+
 ## Validation
 
 Run the checks in [Testing](Testing.md). `SonySoundPressureSessionTests` covers
@@ -60,7 +91,17 @@ refresh intervals and manual resumption. `LDACDriverServiceTests` covers driver
 state admission, repeated installer requests, error recovery and background
 inspection races.
 
-The LDAC cleanup and volume fixtures compile `LDACDriverService.swift` directly
-alongside their fake platform interfaces. Their remaining controller-method
-extraction continues to exercise playback coordination. Run GUI checks only in
+`SonyEarTipFitSessionTests` covers transmission ownership, stale timeouts,
+connection changes, cancellation and notifications; the existing controller
+and transition suites continue to cover the full protocol workflow.
+`LDACMusicBindingTests` covers classification and precedence, and
+`LDACVolumeSessionTests` covers coalescing, binding holds, cancellation,
+replacement writes, source changes, confirmation and native-volume echoes.
+
+The LDAC cleanup and volume fixtures compile `LDACDriverService.swift`,
+`LDACMusicBinding.swift` and `LDACVolumeSession.swift` directly alongside their
+fake platform interfaces. The volume mutation checks also verify the extracted
+volume implementation by compiling a modified copy of the complete type. Their
+remaining controller-method extraction continues to exercise playback
+coordination. Run GUI checks only in
 the isolated macOS VM described in the testing guide.

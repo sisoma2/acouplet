@@ -254,8 +254,10 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     @Published private(set) var powerFeatures = SonyPowerFeatures()
     @Published private(set) var touchAssignments = SonyTouchAssignments()
     @Published private(set) var voiceGuidance = SonyVoiceGuidance()
-    @Published private(set) var earTipFit = SonyEarTipFit()
-    @Published private(set) var earTipFitTransition: SonyEarTipFitTransition?
+    private let earTipFitSession = SonyEarTipFitSession()
+    private var earTipFitObservation: AnyCancellable?
+    var earTipFit: SonyEarTipFit { earTipFitSession.model }
+    var earTipFitTransition: SonyEarTipFitTransition? { earTipFitSession.transition }
     @Published private(set) var headGesturePractice = SonyHeadGesturePractice()
     @Published private(set) var headGesturePracticeTransition: SonyHeadGesturePracticeTransition?
     @Published private(set) var earbudFinder: EarbudFinderController?
@@ -880,8 +882,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     private var legacyOptimizerTimeoutPhase: SonyLegacyOptimizerTransition.Phase?
     private var headGesturePracticeTimeout: DispatchWorkItem?
     private var headGesturePracticeTimeoutPhase: SonyHeadGesturePracticeTransition.Phase?
-    private var earTipFitTimeout: DispatchWorkItem?
-    private var earTipFitTimeoutPhase: SonyEarTipFitTransition.Phase?
     private var powerOffRequestSession: UInt64?
     private var batteryReads: [[UInt8]: BatteryRead] = [:]
     private var powerReads: [[UInt8]: PowerRead] = [:]
@@ -955,6 +955,9 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         soundPressureObservation = soundPressureSession.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        earTipFitObservation = earTipFitSession.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         address = self.pinnedAddress ?? ""
         if let advertisedName { deviceName = advertisedName }
         guard !displayOnly else {
@@ -985,7 +988,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     var simulatedControlSession: UInt64 { controlSession }
     var simulatedReconnectAutomatically: Bool { reconnectAutomatically }
     var simulatedHandshakeTimeoutPending: Bool { handshakeTimeoutWorkItem != nil }
-    var simulatedEarTipFitTimeoutPending: Bool { earTipFitTimeout != nil }
+    var simulatedEarTipFitTimeoutPending: Bool { earTipFitSession.hasTimeout }
     var simulatedHeadGesturePracticeTimeoutPending: Bool { headGesturePracticeTimeout != nil }
     func simulateAcknowledgmentTimeout() { acknowledgmentTimeout?.perform() }
     func simulateNoiseReadTimeout(_ query: [UInt8]) { noiseReadTimeouts[query]?.work.perform() }
@@ -1475,7 +1478,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         customEqualizer = equalizer.flatSettings ?? .flat
         if deviceModel == .wfXM5 || galleryModel == .wfXM6 { supportedFunctions.insert(0xF6) }
         if supportsEarpieceSelection { supportedFunctions.insert(0xF7) }
-        earTipFit = SonyEarTipFit(supportedFunctions: supportedFunctions)
+        earTipFitSession.configure(supportedFunctions: supportedFunctions)
         headGesturePractice = SonyHeadGesturePractice(supportedFunctions: supportedFunctions)
         audioFeatures = SonyAudioFeatures(supportedFunctions: supportedFunctions)
         playback = SonyPlayback(supportedFunctions: supportedFunctions)
@@ -2688,35 +2691,30 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         if earTipFitTransition != nil { return true }
         guard earTipFitUnavailableReason == nil else { return false }
         cancelScheduledRetry(resetAttempts: true)
-        earTipFit = SonyEarTipFit(supportedFunctions: supportedFunctions)
-        earTipFitTransition = SonyEarTipFitTransition(session: controlSession, supportsEarpieceSelection: earTipFit.supportsEarpieceSelection)
+        earTipFitSession.begin(session: controlSession, supportedFunctions: supportedFunctions)
         advanceEarTipFit()
         return true
     }
 
     func startEarTipFit(id: UUID) {
-        guard earTipFitTransition?.id == id, canStartEarTipFit,
-              earTipFitTransition?.start(model: earTipFit) == true else { return }
+        guard canStartEarTipFit, earTipFitSession.start(id: id) else { return }
         advanceEarTipFit()
     }
 
     func cancelEarTipFit(id: UUID, dismissWhenFinished: Bool = false) {
         guard earTipFitTransition?.id == id else { return }
-        earTipFitTransition?.cancel(dismissWhenFinished: dismissWhenFinished)
+        earTipFitSession.cancel(id: id, dismissWhenFinished: dismissWhenFinished)
         advanceEarTipFit()
     }
 
     func prepareEarTipFitAgain(id: UUID) {
         guard earTipFitTransition?.id == id else { return }
-        earTipFitTransition?.prepareAgain()
+        earTipFitSession.prepareAgain(id: id)
         advanceEarTipFit()
     }
 
     func dismissEarTipFit(id: UUID) {
-        guard earTipFitTransition?.id == id, earTipFitTransition?.canDismiss == true,
-              earTipFitTransition?.phase != .interrupted else { return }
-        earTipFitTransition = nil
-        earTipFitTimeoutPhase = nil
+        earTipFitSession.dismiss(id: id)
     }
 
     private func clearHeadphoneTestsForExplicitConnection() -> Bool {
@@ -2725,8 +2723,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         if headphoneTestNeedsRecovery {
             closeSonyLink()
         }
-        earTipFitTransition = nil
-        earTipFitTimeoutPhase = nil
+        earTipFitSession.clear()
         headGesturePracticeTransition = nil
         headGesturePracticeTimeoutPhase = nil
         legacyOptimizerTransition = nil
@@ -2735,42 +2732,12 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     }
 
     private func advanceEarTipFit() {
-        guard let transition = earTipFitTransition else { return }
-        if transition.shouldStartAgain, transition.session == controlSession, canStartEarTipFit {
-            startEarTipFit(id: transition.id)
-            return
-        }
-        let changed = earTipFitTimeoutPhase != transition.phase
-        if changed {
-            earTipFitTimeout?.cancel()
-            earTipFitTimeout = nil
-            earTipFitTimeoutPhase = transition.phase
-        }
-        if transition.dismissWhenFinished, transition.phase == .finished {
-            dismissEarTipFit(id: transition.id)
-            return
-        }
-        if transition.waitingForReport, earTipFitTimeout == nil {
-            let seconds = transition.phase == .measuring ? max(30, (earTipFit.capability?.durationSeconds ?? 0) + 15) : 8
-            let timeout = DispatchWorkItem { [weak self] in
-                Task { @MainActor in
-                    guard let self, self.controlSession == transition.session,
-                          self.earTipFitTransition?.id == transition.id,
-                          self.earTipFitTransition?.phase == transition.phase else { return }
-                    self.finishEarTipFitTimeout()
-                }
-            }
-            earTipFitTimeout = timeout
-            DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(seconds), execute: timeout)
-        }
-        guard transition.session == controlSession, isReady else { return }
-        if changed, transition.phase == .checking {
-            for query in transition.initialQueries {
-                send(query)
-            }
-        }
-        if let payload = earTipFitTransition?.expectedPayload,
-           earTipFitTransition?.commandTransmitted == false, commandQueue.pending == nil { send(payload) }
+        let session = controlSession
+        let payloads = earTipFitSession.advance(session: session, isReady: isReady, canStart: canStartEarTipFit,
+                                               commandPending: commandQueue.pending != nil,
+                                               isCurrent: { [weak self] in self?.controlSession == session },
+                                               onTimeout: { [weak self] in self?.finishEarTipFitTimeout() })
+        for payload in payloads { send(payload) }
     }
 
     private func finishEarTipFitTimeout() {
@@ -2781,21 +2748,16 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             fail(String(localized: "The fit-test command could not be confirmed. Its outcome is unknown."))
             return
         }
-        earTipFitTransition?.timeout()
+        earTipFitSession.finishTimeout()
         advanceEarTipFit()
     }
 
     private func receiveEarTipFit(_ payload: [UInt8]) -> Bool {
-        guard payload.count >= 2, payload[1] == 0x06 || payload[1] == 0x07,
-              [0xF1, 0xF3, 0xF5, 0xF7, 0xF9, 0xFB, 0xFD].contains(payload[0]) else { return false }
-        let owned = earTipFitTransition?.accepts(payload, session: controlSession) == true
-        let parsed = owned && earTipFit.update(payload)
         let phase = earTipFitTransition.map { String(describing: $0.phase) } ?? "none"
+        guard let reception = earTipFitSession.receive(payload, session: controlSession) else { return false }
         let bytes = payload.map { String(format: "%02X", $0) }.joined(separator: " ")
-        Self.logger.notice("Ear-tip fit RX; session=\(self.controlSession) phase=\(phase, privacy: .public) owned=\(owned) valid=\(parsed) payload=\(bytes, privacy: .private)")
-        guard parsed else { return true }
-        earTipFitTransition?.receive(payload, model: earTipFit)
-        advanceEarTipFit()
+        Self.logger.notice("Ear-tip fit RX; session=\(self.controlSession) phase=\(phase, privacy: .public) owned=\(reception.owned) valid=\(reception.parsed) payload=\(bytes, privacy: .private)")
+        if reception.parsed { advanceEarTipFit() }
         return true
     }
 
@@ -4865,13 +4827,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         if let transition = headGesturePracticeTransition, transition.dismissWhenFinished, transition.phase == .finished {
             dismissHeadGesturePractice(id: transition.id)
         }
-        earTipFitTransition?.controlLost()
-        earTipFitTimeout?.cancel()
-        earTipFitTimeout = nil
-        earTipFitTimeoutPhase = nil
-        if let transition = earTipFitTransition, transition.dismissWhenFinished, transition.phase == .finished {
-            dismissEarTipFit(id: transition.id)
-        }
+        earTipFitSession.controlLost()
         if powerOffRequestSession == controlSession {
             if powerOffState == .sending { powerOffState = .unconfirmed }
             if powerOffState == .acknowledged { powerOffState = .disconnected }
@@ -4957,7 +4913,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         voiceGuidance = SonyVoiceGuidance()
         soundPressureSession.configure()
         wearingStatus = SonyWearingStatus()
-        earTipFit = SonyEarTipFit()
+        earTipFitSession.configure()
         headGesturePractice = SonyHeadGesturePractice()
         multipoint = SonyMultipoint()
         lastConnectionAlert = nil
@@ -5620,7 +5576,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
                 self.legacySoundEffectReads[[0x46, frame.payload[1]]]?.isObsolete = true
             }
             if frame.type == 0x0C {
-                self.earTipFitTransition?.transmitted(frame.payload, session: session)
+                self.earTipFitSession.transmitted(frame.payload, session: session)
                 self.headGesturePracticeTransition?.transmitted(frame.payload, session: session)
                 if frame.payload.count >= 2,
                    (self.earTipFitTransition != nil && [0x06, 0x07].contains(frame.payload[1]))
@@ -6578,7 +6534,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
                 touchAssignments = SonyTouchAssignments()
                 voiceGuidance = SonyVoiceGuidance()
                 soundPressureSession.configure()
-                earTipFit = SonyEarTipFit()
+                earTipFitSession.configure()
                 headGesturePractice = SonyHeadGesturePractice()
                 multipoint = SonyMultipoint()
             }
@@ -7267,7 +7223,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         supportedFunctions = functions
         logSupportFunctions(generation: "v2", table: 1, functions: functions)
         equalizer = SonyEqualizer(supportedFunctions: functions)
-        earTipFit = SonyEarTipFit(supportedFunctions: functions)
+        earTipFitSession.configure(supportedFunctions: functions)
         headGesturePractice = SonyHeadGesturePractice(supportedFunctions: functions)
         audioFeatures = SonyAudioFeatures(supportedFunctions: functions)
         systemFeatures = SonySystemFeatures(supportedFunctions: functions)
