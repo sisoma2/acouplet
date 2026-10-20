@@ -116,6 +116,8 @@ final class LDACController: ObservableObject {
     private var bindingHoldTask: Task<Void, Never>?
     private let bindingHoldLimit: TimeInterval = 10
     private var restoreAudioOnStop = true
+    private var stoppingForUpdate = false
+    private var updateResumeTask: Task<Void, Never>?
     private var stableSince: Date?
     private var pendingVolume: Int?
     private var initialReadbackID: UUID?
@@ -225,6 +227,7 @@ final class LDACController: ObservableObject {
             disconnectionObservations[ObjectIdentifier(controller)] = controller.disconnectionRequests.sink { [weak self, weak controller] in
                 guard let self, let controller else { return }
                 let address = controller.address
+                LDACUpdateHandoff().cancel(address: address)
                 if self.multipointConflictAddress == address {
                     self.multipointConflictAddress = nil
                     self.multipointConflictConfiguration = nil
@@ -531,6 +534,7 @@ final class LDACController: ObservableObject {
 
     func setEnabled(_ enabled: Bool, forAddress address: String, configuration: LDACConfiguration? = nil, directly: Bool = false) {
         guard let address = SonyBLEIdentity.normalizedAddress(address) else { return }
+        if !enabled { LDACUpdateHandoff().cancel(address: address) }
         if automaticSelectionAddress == address { automaticSelectionAddress = nil }
         codecPreferences[address] = enabled
         defaults?.set(codecPreferences, forKey: "ldac.codecPreferences")
@@ -638,7 +642,52 @@ final class LDACController: ObservableObject {
         }
     }
 
+    func resumeUpdateHandoff(handoff: LDACUpdateHandoff = LDACUpdateHandoff()) {
+        guard let pending = handoff.pending(), codecPreferences[pending.address] != false,
+              let configuration = pending.configuration.flatMap({ try? JSONDecoder().decode(LDACConfiguration.self, from: $0) })
+                ?? preferredConfiguration(pending.address), configuration.isValid else { return }
+        updateResumeTask?.cancel()
+        updateResumeTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.updateResumeTask = nil }
+            let deadline = Date().addingTimeInterval(45)
+            var selected = false
+            while !Task.isCancelled, Date() < deadline {
+                guard handoff.pending()?.id == pending.id, let devices = self.devices,
+                      !devices.isTerminating, !devices.isSystemSleeping,
+                      self.codecPreferences[pending.address] != false,
+                      self.requestedAddress == nil, !self.isSessionRunning else { return }
+                if let headphones = devices.controller(for: pending.address), !headphones.isReconnectPaused {
+                    if !selected { devices.selectForWorkflow(address: pending.address); selected = true }
+                    guard devices.selectedAddress == pending.address else { return }
+                    self.refreshDriverState()
+                    if self.driverState == .current, self.canStartDirectly(forAddress: pending.address) {
+                        self.record("update-handoff-resuming", reason: "starting the previously active headset directly")
+                        self.setEnabled(true, forAddress: pending.address, configuration: configuration, directly: true)
+                        return
+                    }
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
+    func stopForUpdate(completion: @escaping @MainActor () -> Void) {
+        if case .active = state, let address = targetAddress, let executable = bundle.executableURL {
+            do {
+                try LDACUpdateHandoff().prepare(address: address, helper: helpers.connection, executable: executable,
+                                             configuration: JSONEncoder().encode(requestedConfiguration))
+                stoppingForUpdate = true
+                devices?.beginTermination()
+                record("update-handoff-prepared", reason: "replacement may claim LDAC; ordinary audio fallback armed")
+            } catch { record("update-handoff-failed", reason: error.localizedDescription) }
+        }
+        stop(restoreAudio: !stoppingForUpdate, reason: stoppingForUpdate ? "app update handoff" : "app is terminating", completion: completion)
+    }
+
     func stop(restoreAudio: Bool = true, reason: String = "app requested stop", completion: (@MainActor () -> Void)? = nil) {
+        updateResumeTask?.cancel()
+        updateResumeTask = nil
         connectOrdinaryAfterCleanup = false
         if let address = requestedAddress ?? targetAddress, let headphones = devices?.controller(for: address) {
             automaticStartAttempts[ObjectIdentifier(headphones)] = headphones.notificationSession
@@ -912,6 +961,7 @@ final class LDACController: ObservableObject {
         isAwaitingAutomaticRetry = false
         bindingHeldSince = nil
         restoreAudioOnStop = true
+        stoppingForUpdate = false
         isSessionRunning = true
         record("requested", reason: "enabled; automaticRetriesUsed=\(recoveryAttempt)")
         let identifier = sessionID
@@ -1932,7 +1982,9 @@ final class LDACController: ObservableObject {
         volumeTaskID = nil
         controlObservation = nil
         if let session {
-            if let playbackSettingsRestartAddress, playbackSettingsRestartAddress == targetAddress, requestedAddress == targetAddress,
+            if stoppingForUpdate {
+                session.stopForUpdate()
+            } else if let playbackSettingsRestartAddress, playbackSettingsRestartAddress == targetAddress, requestedAddress == targetAddress,
                !suspensionRequested, restoreAudio {
                 session.stopForRestart()
             } else { session.stop(restoreAudio: restoreAudio) }

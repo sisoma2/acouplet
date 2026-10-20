@@ -10,6 +10,9 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate, @MainAct
     @Published private(set) var automaticallyDownloadsUpdates = false
     @Published private(set) var allowsAutomaticUpdates = false
     @Published private(set) var hasPendingUpdate = false
+    private var updateRelaunchDeadline: Date?
+
+    var isRelaunchingForUpdate: Bool { updateRelaunchDeadline.map { Date() < $0 } ?? false }
 
     /// False in development builds (Debug and `package.sh --local`), whose Info.plist has no update feed.
     /// Upstream's releases are signed with the same key, so an update from its feed would replace a local
@@ -55,6 +58,14 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate, @MainAct
     }
 
     func allowedSystemProfileKeys(for updater: SPUUpdater) -> [String]? { [] }
+
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        updateRelaunchDeadline = Date().addingTimeInterval(30)
+    }
+
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        updateRelaunchDeadline = nil
+    }
 
     var supportsGentleScheduledUpdateReminders: Bool { true }
 

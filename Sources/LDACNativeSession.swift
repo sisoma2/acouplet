@@ -447,6 +447,8 @@ final class LDACNativeSession: @unchecked Sendable {
     private var mediaSetupAllowed = false
     private var controlsRequested = false
     private var restoreAudio = true
+    private var disconnectForUpdate = false
+    private var claimedUpdateHandoff = false
     private var restartingPlayback = false
     private var requestedGain: Double?
     private var gain: Double
@@ -574,6 +576,18 @@ final class LDACNativeSession: @unchecked Sendable {
             recoveryReason = nil
             pendingPriorityObservation = nil
             restartingPlayback = true
+        }
+    }
+
+    func stopForUpdate() {
+        lock.withLock {
+            requestedStop = true
+            recoveryRequested = false
+            recoveryReason = nil
+            pendingPriorityObservation = nil
+            restartingPlayback = false
+            restoreAudio = false
+            disconnectForUpdate = true
         }
     }
 
@@ -1139,6 +1153,9 @@ final class LDACNativeSession: @unchecked Sendable {
                 }
                 return
             }
+            claimedUpdateHandoff = try LDACUpdateHandoff().claim(address: address)
+            if claimedUpdateHandoff { record("UPDATE_HANDOFF_CLAIMED") }
+            guard !shouldStop else { return }
             try launch("disconnect", executable: helpers.connection, arguments: ["--address", address, "--disconnect"])
             deadline = DispatchTime.now() + 45
         }
@@ -1430,12 +1447,13 @@ final class LDACNativeSession: @unchecked Sendable {
         }
         lock.lock()
         let restoreAudio = restoreAudio && !restartingPlayback
+        let disconnectForUpdate = disconnectForUpdate
         lock.unlock()
         let recover = lock.withLock { recoveryRequested }
         if pendingNativeStartupFailure, !nativeAudioConnected, !nativeAudioFinished, !daemonLost,
            !lock.withLock({ requestedStop }), DispatchTime.now() < nativeStartupDeadline { return }
-        if !recover && !restoreAudio && (priorityPhase == .unused || priorityPhase == .removed) { restoring = true; finish(); return }
-        if children["disconnect"] == nil { restoring = true; finish(); return }
+        if !recover && !restoreAudio && !disconnectForUpdate && (priorityPhase == .unused || priorityPhase == .removed) { restoring = true; finish(); return }
+        if children["disconnect"] == nil && !claimedUpdateHandoff { restoring = true; finish(); return }
         if nativeAudioConnected, !startAccepted, !ownedACLEnded, !originalConnectionEnded,
            signalingGate.cid == nil, mediaGate.cid == nil, unverifiedAcquisitions.isEmpty,
            !shutdownUnverified, priorityPhase == .unused || priorityPhase == .removed {

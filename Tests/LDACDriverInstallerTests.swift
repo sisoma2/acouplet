@@ -442,6 +442,33 @@ final class LDACDefaultCodecTests: XCTestCase {
         XCTAssertEqual(ldac.simulatedStarts, [address])
     }
 
+    func testUpdateHandoffResumesDisconnectedHeadphonesAndExplicitStopCancelsIt() async throws {
+        for cancelled in [false, true] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let handoff = LDACUpdateHandoff(directory: directory)
+            let configuration = LDACConfiguration(sampleRate: .hz96000, quality: .quality)
+            let helper = URL(fileURLWithPath: "/usr/bin/true")
+            try handoff.prepare(address: address, helper: helper, executable: helper, previousPID: 99999,
+                                configuration: JSONEncoder().encode(configuration))
+            let (ldac, headphones, route) = try prepared(preferredConfiguration: { _ in nil },
+                isClassicConnected: { _ in false }, prepareDevices: { devices in
+                    devices.selectedController.simulateControlLoss(deviceConnected: false)
+                })
+            defer { ldac.stop(restoreAudio: false); headphones.simulateControlLoss() }
+            route.simulateRoute(output(uid: "built-in-output", transport: kAudioDeviceTransportTypeBuiltIn))
+            ldac.resumeUpdateHandoff(handoff: handoff)
+            if cancelled { ldac.stop() }
+            await drainTasks()
+            XCTAssertFalse(headphones.isDeviceConnected)
+            XCTAssertEqual(ldac.simulatedStarts, cancelled ? [] : [address])
+            if !cancelled {
+                XCTAssertTrue(ldac.simulatedStartingDirectly)
+                XCTAssertEqual(ldac.currentConfiguration, configuration)
+            }
+        }
+    }
+
     func testDirectConnectWithoutAnAutomaticProfileDoesNotInspectBluetooth() async throws {
         var bluetoothReads = 0
         let (ldac, headphones, _) = try prepared(preferredConfiguration: { _ in nil }, isClassicConnected: { _ in

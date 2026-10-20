@@ -13,6 +13,10 @@ def method(name):
 
 
 fixture = r'''
+struct LDACUpdateHandoff {
+    func cancel(address: String) {}
+}
+
 import Foundation
 import Combine
 import CoreAudio
@@ -161,6 +165,7 @@ final class Output {
 final class Session {
     var stops: [Bool] = []
     func stop(restoreAudio: Bool) { stops.append(restoreAudio) }
+    func stopForUpdate() { stop(restoreAudio: false) }
     func stopForRestart() { stops.append(false) }
 }
 
@@ -177,6 +182,9 @@ final class Controller: ObservableObject {
     var isSuspendedForMicrophone = false
     func checkMicrophone() -> Bool { synchronizeMicrophoneHandoff() }
     struct Helpers { var isAvailable = true }
+    var stoppingForUpdate = false
+    var updateResumeTask: Task<Void, Never>?
+    var automaticSelectionAddress: String?
     var helpers = Helpers()
     var driverState = LDACDriverInstaller.State.current
     var driverInstallationError: String?

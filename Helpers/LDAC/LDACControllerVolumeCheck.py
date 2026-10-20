@@ -21,6 +21,10 @@ def member(name):
 
 volume = output_source[output_source.index("struct LDACNativeVolume:"):output_source.index("\nstruct LDACRouteRecovery")]
 fixture = r'''
+struct LDACUpdateHandoff {
+    func cancel(address: String) {}
+}
+
 import Foundation
 import Combine
 import CoreAudio
@@ -311,6 +315,7 @@ final class LDACNativeSession {
     func allowMediaSetup() { mediaSetups += 1 }
     func updateGain(_ gain: Double) { gains.append(gain) }
     func stop(restoreAudio: Bool) { stops += 1; audioRestorations.append(restoreAudio) }
+    func stopForUpdate() { stop(restoreAudio: false) }
     func stopForRestart() { stop(restoreAudio: false) }
     var recoveries: [String] = []
     func recoverConnection(reason: String) { recoveries.append(reason) }
@@ -387,6 +392,9 @@ final class Controller: ObservableObject {
     var requestedOutputGain = 0.0
     var volumeError: String?
     var stopCompletions: [@MainActor () -> Void] = []
+    var stoppingForUpdate = false
+    var updateResumeTask: Task<Void, Never>?
+    var automaticSelectionAddress: String?
     let helpers = LDACNativeSession.Helpers()
     var devices: SonyDeviceCoordinator? = SonyDeviceCoordinator()
     func observeControls(_ headphones: SonyHeadphonesController, devices: SonyDeviceCoordinator) {}

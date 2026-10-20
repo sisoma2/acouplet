@@ -48,6 +48,7 @@ python_checks = (
     'Helpers/LDAC/LDACConnectionOwnershipCheck.py',
     'Helpers/LDAC/LDACOwnerLifecycleCheck.py',
     'Helpers/LDAC/LDACOwnerExitCheck.py',
+    'Helpers/LDAC/LDACUpdateHandoffCheck.py',
     'Packaging/check-all-check.py',
     'Packaging/check-ui-test-vm.py',
 )
@@ -203,8 +204,9 @@ def run_xctest(options, derived, environment):
 
 def standalone(source, check, directory, logs, environment):
     binary = directory / Path(check).stem
+    dependencies = [repo / 'Sources/LDACUpdateHandoff.swift'] if source == 'Sources/LDACNativeSession.swift' else []
     run(sys.executable, repo / 'Packaging/build_cache.py', '--cache', directory / 'CompileCache', '--compiler', '--',
-        '/usr/bin/xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', repo / source, repo / check, '-o', binary,
+        '/usr/bin/xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', repo / source, *dependencies, repo / check, '-o', binary,
         log=logs / (binary.name + '-build.log'), environment=environment, workers=1)
     run(binary, log=logs / (binary.name + '.log'), environment=environment, workers=1)
 

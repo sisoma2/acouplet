@@ -6,6 +6,12 @@ import SwiftUI
 enum AcoupletMain {
     static func main() {
         #if !ACOUPLET_PUBLIC_APIS_ONLY
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--ldac-update-recovery",
+           let id = UUID(uuidString: CommandLine.arguments[2]) {
+            do { try LDACUpdateHandoff().recover(id: id) }
+            catch { NSLog("LDAC update recovery failed: %@", error.localizedDescription) }
+            return
+        }
         if CommandLine.arguments == [CommandLine.arguments[0], "--ldac-owner"] {
             LDACOwnerWorker.run()
             return

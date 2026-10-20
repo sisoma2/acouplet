@@ -195,6 +195,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in self?.environment.devices.systemDidWake() }
             .store(in: &cancellables)
         environment.devices.start()
+        #if !ACOUPLET_PUBLIC_APIS_ONLY
+        environment.ldac.resumeUpdateHandoff()
+        #endif
         startPreferencePaneServer()
         globalHotKeyController = GlobalHotKeyController { [weak self] in
             self?.environment.headphones.toggleNoiseControl()
@@ -247,10 +250,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #if !ACOUPLET_PUBLIC_APIS_ONLY
         if environment.ldac.needsStopBeforeTermination {
-            environment.ldac.stop(reason: "app is terminating") { [weak self] in
+            var handsOffUpdate = LDACUpdateHandoff.installerRequestsHandoff()
+            #if ACOUPLET_SPARKLE
+            handsOffUpdate = handsOffUpdate || environment.updater.isRelaunchingForUpdate
+            #endif
+            let completion: @MainActor () -> Void = { [weak self] in
                 guard let self else { sender.reply(toApplicationShouldTerminate: true); return }
                 let reply = self.applicationShouldTerminate(sender)
                 if reply != .terminateLater { sender.reply(toApplicationShouldTerminate: reply == .terminateNow) }
+            }
+            if handsOffUpdate, !isSystemTerminating, !retriesBackgroundServiceMigration {
+                environment.ldac.stopForUpdate(completion: completion)
+            } else {
+                environment.ldac.stop(reason: "app is terminating", completion: completion)
             }
             return .terminateLater
         }

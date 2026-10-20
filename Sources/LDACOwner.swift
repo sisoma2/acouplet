@@ -18,6 +18,7 @@ private enum LDACOwnerCommand: Codable, Sendable {
     case start(UUID, LDACConfiguration, Bool, Bool)
     case stop(Bool)
     case restart
+    case update
     case recover(String)
     case verify(String)
     case allowHandoff
@@ -389,6 +390,12 @@ final class LDACOwnerSession {
         #endif
         output.send(.restart)
     }
+    func stopForUpdate() {
+        #if DEBUG
+        if let simulatedStop { simulatedStop(false); return }
+        #endif
+        output.send(.update)
+    }
     func recoverConnection(reason: String) { output.send(.recover(reason)) }
     func verifyConnectionLoss(reason: String) { output.send(.verify(reason)) }
     func allowHandoff() { output.send(.allowHandoff) }
@@ -581,6 +588,7 @@ enum LDACOwnerWorker {
                     session.start()
                 case let .stop(restore): stoppingRestore = stoppingRestore && restore; session?.stop(restoreAudio: stoppingRestore)
                 case .restart: restartingPlayback = true; session?.stopForRestart()
+                case .update: stoppingRestore = false; session?.stopForUpdate()
                 case let .recover(reason): session?.recoverConnection(reason: reason)
                 case let .verify(reason): session?.verifyConnectionLoss(reason: reason)
                 case .allowHandoff: session?.allowHandoff()

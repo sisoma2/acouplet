@@ -191,6 +191,8 @@ final class LDACNativeSession: @unchecked Sendable {
         receive(.active(configuration.format))
     }
     @MainActor
+    func stopForUpdate() { stop(restoreAudio: false) }
+    @MainActor
     func stopForRestart() { stop(restoreAudio: false) }
 
     @MainActor

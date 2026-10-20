@@ -37,7 +37,7 @@ domain="gui/$(id -u)"
 plist_path="$HOME/Library/LaunchAgents/$label.plist"
 backup_plist="$plist_path.previous-$$"
 process_pattern='^/Applications/Acouplet\.app/Contents/MacOS/Acouplet( |$)'
-ldac_owner_command='/Applications/Acouplet\.app/Contents/MacOS/Acouplet --ldac-owner'
+ldac_owner_command='/Applications/Acouplet\.app/Contents/MacOS/Acouplet --ldac-(owner|update-recovery [A-F0-9-]{36})'
 legacy_apps=("/Applications/XM5 Control Native.app" "/Applications/XM5 Control.app")
 legacy_identifiers=(local.xm5control.native local.xm5control)
 legacy_labels=(local.xm5control.native.agent local.xm5control.agent)
@@ -250,6 +250,8 @@ plist_written=false
 service_was_loaded=false
 service_should_start=true
 install_complete=false
+update_request="$HOME/Library/Caches/dev.baglayan.Acouplet/ldac-update-request"
+update_request_written=false
 login_item_removed=false
 if [[ -e "$plist_path" ]]; then
     service_should_start=false
@@ -293,6 +295,7 @@ restore_installation() {
 
 finish_installation() {
     local exit_code=$?
+    if [[ "$update_request_written" == true ]]; then rm -f "$update_request"; fi
     if [[ "$install_complete" == false && "$update_started" == true ]]; then
         print -u2 "Installation failed; restoring the previous installation."
         if ! restore_installation; then
@@ -333,6 +336,12 @@ fi
 
 quit_patterns=("$process_pattern" "$legacy_patterns[@]")
 quit_identifiers=(dev.baglayan.Acouplet "$legacy_identifiers[@]")
+update_pids="$(running_pids "$process_pattern")"
+if [[ -n "$update_pids" ]] && { [[ "$service_should_start" == true ]] || /bin/launchctl print "$domain/$label" >/dev/null 2>&1; }; then
+    mkdir -p "${update_request:h}"
+    (umask 077; print -r -- "$$ $(/bin/date +%s) ${(j: :)${(f)update_pids}}" > "$update_request")
+    update_request_written=true
+fi
 for index in {1..3}; do
     original_pids="$(running_pids "$quit_patterns[$index]")"
     if [[ -n "$original_pids" ]]; then

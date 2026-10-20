@@ -5,6 +5,10 @@ import tempfile
 source = (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift").read_text()
 
 fixture = r'''
+struct LDACUpdateHandoff {
+    func claim(address: String) throws -> Bool { false }
+}
+
 enum PipeSetupCheck {
     nonisolated(unsafe) static var failureCall = 0
     nonisolated(unsafe) static var calls = 0
@@ -99,6 +103,26 @@ extension LDACNativeSession.Helpers {
     }
 }
 extension LDACNativeSession {
+    static func updateHandoffCheck(executable: URL) throws {
+        let session = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01",
+            helpers: Helpers(fixture: executable), gain: 0) { _ in }
+        defer { cleanUp(Array(session.children.values)) }
+        let disconnect = try LDACNativeChild(executable: executable, arguments: ["fixture-disconnect"], inheritedPCM: nil)
+        session.children["disconnect"] = disconnect
+        try waitUntil { _ = try disconnect.readLines(); disconnect.reap(); return disconnect.finished }
+        session.stopForUpdate()
+        try session.beginRestore()
+        try require(session.children["restore-disconnect"] != nil,
+            "Update failed to close the old connection without a priority request")
+        let closing = session.children["restore-disconnect"]!
+        try waitUntil { _ = try closing.readLines(); closing.reap(); return closing.finished }
+        session.restoreDisconnected = true
+        try session.beginRestore()
+        try require(session.children["restore"] == nil && session.restoring,
+            "Update reconnected ordinary Bluetooth audio before the replacement")
+        print("PASS update handoff: old ACL closes, no intermediate native reconnect, priority request optional")
+    }
+
     static func playbackRestartCheck(executable: URL, cancelled: Bool) throws {
         let session = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01",
             helpers: Helpers(fixture: executable), gain: 0) { _ in }
@@ -1130,6 +1154,7 @@ enum LDACSessionClosureCheck {
         }
         if CommandLine.arguments.dropFirst().first == "--fixture" { child() }
         let executable = URL(fileURLWithPath: CommandLine.arguments[0])
+        try LDACNativeSession.updateHandoffCheck(executable: executable)
         for cancelled in [false, true] {
             try LDACNativeSession.playbackRestartCheck(executable: executable, cancelled: cancelled)
         }

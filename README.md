@@ -16,7 +16,7 @@ controls depend on what the device supports.
 ## Getting started for users
 
 Requires macOS 15.4 or later. Testing has primarily used Apple silicon and
-macOS 27.2.
+macOS 26.7.1.
 
 After downloading the release .dmg file, drag Acouplet to Applications,
 open it, and allow Bluetooth access. Pair your device in

@@ -65,7 +65,7 @@ elif name == 'pgrep':
     processes = json.loads(process_file.read_text())
     owners = processes.get('owner', [])
     if args[0] == '-fx':
-        assert args[-1].endswith('/Acouplet --ldac-owner'), args
+        assert args[-1].endswith(('/Acouplet --ldac-owner', '/Acouplet --ldac-(owner|update-recovery [A-F0-9-]{36})')), args
         if not owners: sys.exit(1)
         print('\n'.join(str(pid) for pid in owners))
         sys.exit(0)
@@ -90,6 +90,12 @@ elif name == 'osascript':
         assert 'with timeout of 30 seconds' in script
         if mode in ('native-quit-declined', 'native-quit-timeout'): sys.exit(27)
         processes = json.loads(process_file.read_text())
+        request = root / 'Caches/dev.baglayan.Acouplet/ldac-update-request'
+        if request.exists():
+            fields = request.read_text().split()
+            assert int(fields[0]) > 1 and int(fields[1]) > 0
+            assert list(map(int, fields[2:])) == processes['native']
+            (root / 'handoff-requested').touch()
         processes['quit_requested'] = True
         if mode == 'native-partial-quit': processes['native'] = processes['native'][1:]
         elif mode == 'native-keepalive-relaunch': processes['native'] = [102]
@@ -275,7 +281,7 @@ def fixture(root, mode):
 
 
 def run(root, mode, name='Install.command', arguments=()):
-    script = (packaging / name).read_text().replace('/Applications', str(root / 'Applications')).replace('$HOME/Library/LaunchAgents', str(root / 'LaunchAgents')).replace('$HOME/Library/PreferencePanes', str(root / 'PreferencePanes'))
+    script = (packaging / name).read_text().replace('/Applications', str(root / 'Applications')).replace('$HOME/Library/LaunchAgents', str(root / 'LaunchAgents')).replace('$HOME/Library/PreferencePanes', str(root / 'PreferencePanes')).replace('$HOME/Library/Caches', str(root / 'Caches'))
     script = re.sub(r'for attempt in \{1\.\.(?:20|80|120)\}', 'for attempt in {1..4}', script)
     for original, stub in replacements.items(): script = script.replace(original, str(root / 'stubs' / stub))
     assert not any(original in script for original in replacements)
@@ -360,6 +366,11 @@ def check_install(scenario):
             if scenario == 'concurrent-install': fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             result = run(root, scenario)
         output = result.stdout + result.stderr
+        assert not (root / 'Caches/dev.baglayan.Acouplet/ldac-update-request').exists(), scenario
+        if scenario in ('success', 'native-delayed-quit', 'native-quit-declined', 'native-quit-stalled'):
+            assert (root / 'handoff-requested').exists() == (scenario != 'native-quit-declined'), scenario
+        if scenario == 'inactive-update':
+            assert not (root / 'handoff-requested').exists(), scenario
         state = json.loads((root / 'state.json').read_text())
         successful = scenario in ('success', 'matching-plist', 'previous-plist', 'fresh-install', 'inactive-update',
                                   'native-keepalive-relaunch', 'native-delayed-quit', 'legacy-quit-success', 'ldac-owner-running',
