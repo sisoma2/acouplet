@@ -140,15 +140,45 @@ Run just the fixtures, select matching scripts, or focus XCTest on a class:
 python3 Packaging/check-all.py --fixtures-only
 python3 Packaging/check-all.py --fixtures-only --filter '*LDAC*'
 python3 Packaging/check-all.py --xctest-only --only-testing AcoupletTests/LDACCallAudioTests
-python3 Packaging/check-all.py --ui-only
-python3 Packaging/check-all.py --include-ui
+python3 Packaging/check-all.py --ui-only --ui-vm acouplet-ui-base
+python3 Packaging/check-all.py --include-ui --ui-vm acouplet-ui-base
 python3 Packaging/check-all.py --list
 ```
 
-`--ui-only` runs the GUI suite, including the screenshot galleries. `--include-ui`
-runs unit tests, GUI tests and the offline fixtures; combine it with `--xctest-only`
-to omit fixtures. Both modes reuse the same build products and accept
-`--only-testing` for focused reruns. GUI tests run serially because they share the
+`--ui-only` runs the GUI suite, including the screenshot galleries. GUI automation
+requires an isolated macOS VM. On macOS 26.7.1, disabling XCTest automation has
+crashed Code, Chrome and Finder inside Apple's `XCTAutomationSupport` framework.
+The runner refuses to start GUI automation on a physical host. The `Acouplet`
+Xcode scheme runs only unit tests; `Acouplet UI Tests` and `Acouplet Public UI Tests`
+build the GUI target only inside a guest. Run `test-without-building` only inside
+the guest as well.
+
+Prepare a stopped local [Tart](https://tart.run/quick-start/) base VM with Xcode 27
+or later, Python 3, the Tart guest agent, an unlocked desktop, and permission to
+run UI automation and capture screenshots. For example, start from the published
+[Xcode 27 image](https://github.com/cirruslabs/macos-image-templates/releases/tag/27):
+
+```sh
+brew install openai/tools/tart
+TART_NO_AUTO_PRUNE=1 tart clone ghcr.io/cirruslabs/macos-tahoe-xcode:27 acouplet-ui-base
+tart set acouplet-ui-base --cpu 4 --memory 8192
+tart run acouplet-ui-base
+```
+
+Finish desktop setup and grant test permissions inside the guest, then stop it
+with `tart stop acouplet-ui-base`. Keep personal apps and accounts out of the
+base VM. `--ui-vm acouplet-ui-base` clones it for each run, copies current tracked
+and untracked source files that Git does not ignore plus the cached Sparkle
+dependency, runs tests on the guest disk, and saves logs and XCTest results under
+`.build/ui-test-vm/run-*/results/`. Each run stops and deletes its own clone;
+the base VM is kept. Source is shared read-only, clipboard, audio and USB sharing
+are disabled, and automatic Tart cache pruning is disabled. GUI runs inside an
+already isolated guest can omit `--ui-vm`.
+
+`--include-ui` runs unit tests, GUI tests and the offline fixtures; combine it with `--xctest-only`
+to omit fixtures. Local phases reuse build products; disposable VM runs build
+from the copied source. Both modes accept `--only-testing` for focused reruns.
+GUI tests run serially because they share the
 desktop, after unit tests finish. Each phase must execute passing tests; an empty
 or failing phase fails the command. The default command runs unit tests and
 offline fixtures.

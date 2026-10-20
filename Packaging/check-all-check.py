@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 runner = runpy.run_path(str(Path(__file__).with_name('check-all.py')))
 main = runner['main']
+main.__globals__['require_guest'] = lambda: None
 
 with tempfile.TemporaryDirectory(prefix='acouplet-check-all-check-') as directory:
     repo = Path(directory)
@@ -90,6 +91,7 @@ with tempfile.TemporaryDirectory(prefix='acouplet-check-all-check-') as director
     with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
         main(['--ui-only'])
     assert '-only-testing:AcoupletUITests' in commands[0]
+    assert commands[0][commands[0].index('-scheme') + 1] == 'Acouplet UI Tests'
     assert '-only-testing:AcoupletTests' not in commands[0]
     assert not any(str(repo / path) in command for path in runner['python_checks'] for command in commands)
     commands.clear()
@@ -103,6 +105,8 @@ with tempfile.TemporaryDirectory(prefix='acouplet-check-all-check-') as director
     assert commands[1][commands[1].index('-parallel-testing-enabled') + 1] == 'NO'
     assert '-test-timeouts-enabled' not in commands[1]
     assert commands[0][-2:] == ['clean', 'test'] and 'clean' not in commands[1]
+    assert commands[0][commands[0].index('-scheme') + 1] == 'Acouplet'
+    assert commands[1][commands[1].index('-scheme') + 1] == 'Acouplet UI Tests'
     commands.clear()
     with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
         main(['--include-ui'])
@@ -128,8 +132,37 @@ with tempfile.TemporaryDirectory(prefix='acouplet-check-all-check-') as director
         else:
             raise AssertionError('An empty GUI phase was accepted after passing unit tests')
     assert len(commands) == 2
+    for arguments in (['--ui-only'], ['--include-ui'], ['--xctest-only', '--only-testing', 'AcoupletUITests/AppUITests/testNativeMenuBarControlsAndDismissal']):
+        with patch.dict(main.__globals__, require_guest=lambda: (_ for _ in ()).throw(ValueError('isolated macOS VM required'))), \
+                patch('subprocess.run', side_effect=AssertionError('Unsafe selection started a subprocess')), \
+                patch('subprocess.check_output', side_effect=AssertionError('Unsafe selection queried Xcode')):
+            try:
+                main(arguments)
+            except ValueError as error:
+                assert str(error) == 'isolated macOS VM required'
+            else:
+                raise AssertionError('GUI automation was allowed on the host desktop')
+    commands.clear()
+    vm_calls = []
+    with patch.dict(main.__globals__, repo=repo, validate_vm=lambda name: vm_calls.append(name),
+                    run_in_vm=lambda *args: vm_calls.append(args),
+                    require_guest=lambda: (_ for _ in ()).throw(AssertionError('VM run queried the host guard'))), \
+            patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
+        main(['--ui-only', '--ui-vm', 'test-base', '--jobs', '4'])
+    assert commands == []
+    assert vm_calls == ['test-base', (repo, 'test-base', ['AcoupletUITests'], 4)]
+    vm_calls.clear()
+    with patch.dict(main.__globals__, repo=repo, validate_vm=lambda name: vm_calls.append(name),
+                    run_in_vm=lambda *args: vm_calls.append(args)), \
+            patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
+        main(['--xctest-only', '--include-ui', '--ui-vm', 'test-base', '--jobs', '2'])
+    assert '-only-testing:AcoupletTests' in commands[0]
+    assert not any('AcoupletUITests' in word for command in commands for word in command)
+    assert vm_calls == ['test-base', (repo, 'test-base', ['AcoupletUITests'], 2)]
+    commands.clear()
     for arguments in (['--fixtures-only', '--include-ui'], ['--ui-only', '--include-ui'],
-                      ['--ui-only', '--only-testing', 'AcoupletTests'], ['--test-workers', '0']):
+                      ['--ui-only', '--only-testing', 'AcoupletTests'], ['--test-workers', '0'],
+                      ['--ui-vm', 'base'], ['--fixtures-only', '--ui-vm', 'base'], ['--only-testing', 'UnknownTests']):
         with patch('subprocess.run', side_effect=AssertionError('Invalid options ran a check')), redirect_stderr(StringIO()):
             try:
                 main(arguments)

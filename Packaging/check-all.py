@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from check_runner import CheckCases
+from ui_test_vm import require_guest, run_in_vm, validate_vm
 
 repo = Path(__file__).resolve().parent.parent
 python_checks = (
@@ -48,6 +49,7 @@ python_checks = (
     'Helpers/LDAC/LDACOwnerLifecycleCheck.py',
     'Helpers/LDAC/LDACOwnerExitCheck.py',
     'Packaging/check-all-check.py',
+    'Packaging/check-ui-test-vm.py',
 )
 
 
@@ -73,7 +75,8 @@ def main(arguments=None):
     mode.add_argument('--fixtures-only', action='store_true', help='Run independent checks without building the app or running XCTest.')
     mode.add_argument('--xctest-only', action='store_true', help='Run XCTest and bundle checks without fixture suites.')
     mode.add_argument('--ui-only', action='store_true', help='Run GUI tests and bundle checks without unit tests or fixture suites.')
-    parser.add_argument('--include-ui', action='store_true', help='Include the complete GUI suite alongside unit tests; requires an interactive desktop.')
+    parser.add_argument('--include-ui', action='store_true', help='Include the complete GUI suite alongside unit tests; GUI tests require an isolated macOS VM.')
+    parser.add_argument('--ui-vm', help='Run GUI tests in a disposable clone of this stopped local Tart macOS VM.')
     parser.add_argument('--jobs', type=int, default=os.environ.get('ACOUPLET_CHECK_JOBS', min(4, os.cpu_count() or 1)), help='Concurrent check suites and fixture cases (default: up to 4).')
     parser.add_argument('--test-workers', type=int, help='Unit-test processes (default: up to 4 for the full suite, 1 for focused runs). GUI tests remain serial.')
     parser.add_argument('--filter', default='*', help='Select independent checks by filename wildcard.')
@@ -93,6 +96,13 @@ def main(arguments=None):
         parser.error('--include-ui requires unit tests; use --ui-only for GUI tests alone')
     if options.ui_only and any(selector.split('/')[0] != 'AcoupletUITests' for selector in options.only_testing):
         parser.error('--ui-only selectors must belong to AcoupletUITests')
+    if any(selector.split('/')[0] not in ('AcoupletTests', 'AcoupletUITests') for selector in options.only_testing):
+        parser.error('--only-testing selectors must belong to AcoupletTests or AcoupletUITests')
+    selectors = options.only_testing or (['AcoupletUITests'] if options.ui_only else
+                                        ['AcoupletTests', 'AcoupletUITests'] if options.include_ui else ['AcoupletTests'])
+    wants_ui = any(selector.split('/')[0] == 'AcoupletUITests' for selector in selectors)
+    if options.ui_vm and (not wants_ui or options.fixtures_only):
+        parser.error('--ui-vm requires GUI tests')
     if (options.xctest_only or options.ui_only) and options.filter != '*':
         parser.error('--filter selects independent checks; use --only-testing for XCTest')
     independent = [*python_checks, 'Packaging/check-virtual-output.sh', 'Helpers/NativeBatterySelfTestCheck.sh',
@@ -105,6 +115,11 @@ def main(arguments=None):
             listing.add(path, lambda: None)
         listing.main(['--list', '--filter', options.filter])
         return
+    if wants_ui:
+        if options.ui_vm:
+            validate_vm(options.ui_vm)
+        else:
+            require_guest()
     derived = repo / '.build/check-all'
     sdk = subprocess.check_output(['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-path'], cwd=repo, text=True).strip()
     environment = {'CLANG_MODULE_CACHE_PATH': str(derived / 'ModuleCache'), 'SDKROOT': sdk, 'ACOUPLET_CHECK_JOBS': str(options.jobs)}
@@ -154,11 +169,15 @@ def run_xctest(options, derived, environment):
     other = [selector for selector in selectors if selector not in unit]
     groups = [group for group in (unit, other) if group]
     for index, group in enumerate(groups):
+        if group != unit and options.ui_vm:
+            run_in_vm(repo, options.ui_vm, group, options.jobs)
+            continue
         result = Path(tempfile.mkdtemp(prefix='run-', dir=results)) / 'Acouplet.xcresult'
         workers = (options.test_workers or (1 if options.only_testing else min(4, options.jobs))) if group == unit else 1
         parallel = ['-maximum-parallel-testing-workers', str(workers)] if workers > 1 else []
         timeouts = ['-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '60'] if group == unit else []
-        run('/usr/bin/xcrun', 'xcodebuild', '-project', repo / 'Acouplet.xcodeproj', '-scheme', 'Acouplet',
+        scheme = 'Acouplet' if group == unit else 'Acouplet UI Tests'
+        run('/usr/bin/xcrun', 'xcodebuild', '-project', repo / 'Acouplet.xcodeproj', '-scheme', scheme,
             '-configuration', 'Debug', '-destination', 'platform=macOS', '-derivedDataPath', derived,
             '-resultBundlePath', result,
             '-parallel-testing-enabled', 'YES' if workers > 1 else 'NO', *parallel, *timeouts,
@@ -169,6 +188,8 @@ def run_xctest(options, derived, environment):
         summary = json.loads(subprocess.check_output(['/usr/bin/xcrun', 'xcresulttool', 'get', 'test-results', 'summary', '--path', str(result)], cwd=repo))
         if summary['passedTests'] <= 0 or summary['failedTests'] != 0:
             raise ValueError('XCTest must execute passing tests with no failures. Results: ' + str(result))
+    if not unit and options.ui_vm:
+        return
     app = derived / 'Build/Products/Debug/Acouplet.app'
     extraction = list((derived / 'Build/Intermediates.noindex/Acouplet.build/Debug/Acouplet.build/Objects-normal').glob('*/Acouplet.SwiftFileList'))
     if not extraction:
@@ -205,5 +226,7 @@ def refresh_extraction(derived):
 if __name__ == '__main__':
     try:
         main()
-    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         sys.exit(str(error))
