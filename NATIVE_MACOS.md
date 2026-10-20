@@ -117,16 +117,59 @@ individual logs under `.build/check-all/Logs/`. Use `--jobs 1` for serial checks
 Suites and their child cases share the worker budget to avoid nested pools
 overloading the machine. Swift fixture compilers reuse the module cache.
 
+By default, the full unit suite uses up to four separate test processes,
+bounded by `--jobs`. Use `--test-workers 1` for a serial unit run, or choose another process limit
+explicitly. Focused `--only-testing` runs use one test process by default.
+Unit tests have a 60-second execution allowance so an unexpected system call
+cannot leave the entire run waiting indefinitely. GUI galleries retain their
+normal execution allowance. LDAC recovery fixtures inject the local Bluetooth
+address instead of querying the real host controller.
+
+The native HUD, LDAC helper compilers and standalone Swift checks also reuse
+unchanged build outputs. Reuse checks source and header contents, compiler
+arguments, toolchain, SDK and build settings. Missing or changed outputs are
+rebuilt or restored from verified compiler artifacts. LDAC bundles still receive
+the current version metadata and fresh signatures on every build. Artwork
+preparation preserves an unchanged catalog so Xcode can reuse asset compilation.
+Test executables still run every time; passing test results are never cached.
+Set `ACOUPLET_BUILD_CACHE=NO` to bypass this reuse for troubleshooting or timing.
+
 Run just the fixtures, select matching scripts, or focus XCTest on a class:
 
 ```sh
 python3 Packaging/check-all.py --fixtures-only
 python3 Packaging/check-all.py --fixtures-only --filter '*LDAC*'
 python3 Packaging/check-all.py --xctest-only --only-testing AcoupletTests/LDACCallAudioTests
+python3 Packaging/check-all.py --ui-only
+python3 Packaging/check-all.py --include-ui
 python3 Packaging/check-all.py --list
 ```
 
-UI tests, native HUD presentation and the launch service check run separately.
+`--ui-only` runs the GUI suite, including the screenshot galleries. `--include-ui`
+runs unit tests, GUI tests and the offline fixtures; combine it with `--xctest-only`
+to omit fixtures. Both modes reuse the same build products and accept
+`--only-testing` for focused reruns. GUI tests run serially because they share the
+desktop, after unit tests finish. Each phase must execute passing tests; an empty
+or failing phase fails the command. The default command runs unit tests and
+offline fixtures.
+
+GUI waits first check the current state, avoiding XCTest's initial polling delay
+when the element already exists, has disappeared or has the expected value.
+Changing states are checked every 50 milliseconds within the original timeout,
+using the run loop so UI automation can continue processing events.
+Family galleries open Settings with its keyboard shortcut and avoid activating
+an app that the test host already activated during launch. They still capture
+every model, finish, appearance, noise mode, equalizer and Settings page.
+Automatic XCTest screen captures are disabled to avoid recording every UI action;
+explicitly requested gallery screenshots and contrast evidence are always kept,
+including on success.
+GUI fixtures place titled windows on the primary display, keeping captures and
+controls reachable when the desktop has multiple displays with different scales.
+Noise-control contrast checks crop each button from the panel screenshot already
+captured for that state, preserving all mode, appearance, selection and readability checks
+without requesting separate screenshots for each button.
+
+Native HUD presentation and the launch service check run separately.
 Bluetooth, audio and connection recovery still need testing with real hardware.
 
 Packaging, app installation, LDAC driver installation, and direct-release

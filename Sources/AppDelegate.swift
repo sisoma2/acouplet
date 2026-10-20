@@ -104,6 +104,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func finishLaunching() {
+        #if DEBUG
+        if CommandLine.arguments.contains("-ui-testing") {
+            NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)
+                .sink { notification in
+                    guard let window = notification.object as? NSWindow, window.styleMask.contains(.titled),
+                          let screen = NSScreen.screens.first, window.screen != screen else { return }
+                    let visible = screen.visibleFrame
+                    window.setFrameOrigin(NSPoint(x: visible.midX - window.frame.width / 2,
+                                                  y: visible.midY - window.frame.height / 2))
+                }
+                .store(in: &cancellables)
+        }
+        #endif
         environment.settings.backgroundServiceMigrationError = backgroundServiceMigrationError
         environment.settings.retryBackgroundServiceMigration = { [weak self] in
             guard let self, self.backgroundServiceMigrationError != nil else { return }

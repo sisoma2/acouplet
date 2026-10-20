@@ -20,6 +20,7 @@ python_checks = (
     'Packaging/check-release-source.py',
     'Packaging/check-ldac-packing.py',
     'Packaging/check-ldac-build.py',
+    'Packaging/check-build-cache.py',
     'Packaging/check-ldac-session-stats.py',
     'Packaging/check-ldac-packet-timing.py',
     'Packaging/check-ldac-qualification.py',
@@ -71,7 +72,10 @@ def main(arguments=None):
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--fixtures-only', action='store_true', help='Run independent checks without building the app or running XCTest.')
     mode.add_argument('--xctest-only', action='store_true', help='Run XCTest and bundle checks without fixture suites.')
+    mode.add_argument('--ui-only', action='store_true', help='Run GUI tests and bundle checks without unit tests or fixture suites.')
+    parser.add_argument('--include-ui', action='store_true', help='Include the complete GUI suite alongside unit tests; requires an interactive desktop.')
     parser.add_argument('--jobs', type=int, default=os.environ.get('ACOUPLET_CHECK_JOBS', min(4, os.cpu_count() or 1)), help='Concurrent check suites and fixture cases (default: up to 4).')
+    parser.add_argument('--test-workers', type=int, help='Unit-test processes (default: up to 4 for the full suite, 1 for focused runs). GUI tests remain serial.')
     parser.add_argument('--filter', default='*', help='Select independent checks by filename wildcard.')
     parser.add_argument('--only-testing', action='append', default=[], help='XCTest selector, such as AcoupletTests/LDACCallAudioTests; repeat to select more.')
     parser.add_argument('--clean', action='store_true', help='Clean Xcode build products before testing.')
@@ -79,9 +83,17 @@ def main(arguments=None):
     options = parser.parse_args(arguments)
     if options.jobs < 1:
         parser.error('--jobs must be positive')
+    if options.test_workers is not None and options.test_workers < 1:
+        parser.error('--test-workers must be positive')
+    if options.fixtures_only and options.test_workers is not None:
+        parser.error('--test-workers requires XCTest')
     if options.fixtures_only and (options.only_testing or options.clean):
         parser.error('--only-testing and --clean require XCTest')
-    if options.xctest_only and options.filter != '*':
+    if options.include_ui and (options.fixtures_only or options.ui_only):
+        parser.error('--include-ui requires unit tests; use --ui-only for GUI tests alone')
+    if options.ui_only and any(selector.split('/')[0] != 'AcoupletUITests' for selector in options.only_testing):
+        parser.error('--ui-only selectors must belong to AcoupletUITests')
+    if (options.xctest_only or options.ui_only) and options.filter != '*':
         parser.error('--filter selects independent checks; use --only-testing for XCTest')
     independent = [*python_checks, 'Packaging/check-virtual-output.sh', 'Helpers/NativeBatterySelfTestCheck.sh',
                    'Helpers/NativeHUD/BannerLifetimeCheck.swift', 'Helpers/LDAC/LDACSessionDiagnosticsCheck.swift']
@@ -98,7 +110,7 @@ def main(arguments=None):
     environment = {'CLANG_MODULE_CACHE_PATH': str(derived / 'ModuleCache'), 'SDKROOT': sdk, 'ACOUPLET_CHECK_JOBS': str(options.jobs)}
     if not options.fixtures_only:
         run_xctest(options, derived, environment)
-    if options.xctest_only:
+    if options.xctest_only or options.ui_only:
         print('\nXCTest checks passed.', flush=True)
         return
     logs = derived / 'Logs'
@@ -114,13 +126,14 @@ def main(arguments=None):
         checks.add_parallel(path, workers, run, sys.executable, repo / path, *arguments, log=log_directory / (Path(path).stem + '.log'), environment=environment, workers=workers)
     for path in ('Packaging/check-virtual-output.sh', 'Helpers/NativeBatterySelfTestCheck.sh'):
         checks.add(path, run, '/bin/sh', repo / path, log=log_directory / (Path(path).stem + '.log'), environment=environment, workers=1)
-    with tempfile.TemporaryDirectory(prefix='acouplet-standalone-checks-') as directory:
-        for source, check in (
-            ('Helpers/NativeHUD/BannerLifetime.swift', 'Helpers/NativeHUD/BannerLifetimeCheck.swift'),
-            ('Sources/LDACNativeSession.swift', 'Helpers/LDAC/LDACSessionDiagnosticsCheck.swift'),
-        ):
-            checks.add(check, standalone, source, check, Path(directory), log_directory, environment)
-        checks.main(['--jobs', str(options.jobs), '--filter', options.filter])
+    directory = derived / 'Standalone'
+    directory.mkdir(parents=True, exist_ok=True)
+    for source, check in (
+        ('Helpers/NativeHUD/BannerLifetime.swift', 'Helpers/NativeHUD/BannerLifetimeCheck.swift'),
+        ('Sources/LDACNativeSession.swift', 'Helpers/LDAC/LDACSessionDiagnosticsCheck.swift'),
+    ):
+        checks.add(check, standalone, source, check, directory, log_directory, environment)
+    checks.main(['--jobs', str(options.jobs), '--filter', options.filter])
     print('\nAll selected local checks passed.', flush=True)
 
 
@@ -135,16 +148,27 @@ def run_xctest(options, derived, environment):
         refresh_extraction(derived)
     results = derived / 'Results'
     results.mkdir(parents=True, exist_ok=True)
-    result = Path(tempfile.mkdtemp(prefix='run-', dir=results)) / 'Acouplet.xcresult'
-    run('/usr/bin/xcrun', 'xcodebuild', '-project', repo / 'Acouplet.xcodeproj', '-scheme', 'Acouplet',
-        '-configuration', 'Debug', '-destination', 'platform=macOS', '-derivedDataPath', derived,
-        '-resultBundlePath', result,
-        '-parallel-testing-enabled', 'NO', *['-only-testing:' + selector for selector in (options.only_testing or ['AcoupletTests'])],
-        'ACOUPLET_PUBLIC_APIS_ONLY=NO', 'ACOUPLET_NO_SONY_ARTWORK=YES', 'ACOUPLET_SONY_ARTWORK_DIR=',
-        'ACOUPLET_DISTRIBUTION=development', 'ENABLE_DEBUG_DYLIB=NO', 'CODE_SIGN_IDENTITY=-', 'CODE_SIGN_STYLE=Manual', 'DEVELOPMENT_TEAM=', *(['clean'] if options.clean else []), 'test', environment=environment)
-    summary = json.loads(subprocess.check_output(['/usr/bin/xcrun', 'xcresulttool', 'get', 'test-results', 'summary', '--path', str(result)], cwd=repo))
-    if summary['passedTests'] <= 0 or summary['failedTests'] != 0:
-        raise ValueError('XCTest must execute passing tests with no failures. Results: ' + str(result))
+    selectors = options.only_testing or (['AcoupletUITests'] if options.ui_only else
+                                        ['AcoupletTests', 'AcoupletUITests'] if options.include_ui else ['AcoupletTests'])
+    unit = [selector for selector in selectors if selector.split('/')[0] == 'AcoupletTests']
+    other = [selector for selector in selectors if selector not in unit]
+    groups = [group for group in (unit, other) if group]
+    for index, group in enumerate(groups):
+        result = Path(tempfile.mkdtemp(prefix='run-', dir=results)) / 'Acouplet.xcresult'
+        workers = (options.test_workers or (1 if options.only_testing else min(4, options.jobs))) if group == unit else 1
+        parallel = ['-maximum-parallel-testing-workers', str(workers)] if workers > 1 else []
+        timeouts = ['-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '60'] if group == unit else []
+        run('/usr/bin/xcrun', 'xcodebuild', '-project', repo / 'Acouplet.xcodeproj', '-scheme', 'Acouplet',
+            '-configuration', 'Debug', '-destination', 'platform=macOS', '-derivedDataPath', derived,
+            '-resultBundlePath', result,
+            '-parallel-testing-enabled', 'YES' if workers > 1 else 'NO', *parallel, *timeouts,
+            *['-only-testing:' + selector for selector in group],
+            'ACOUPLET_PUBLIC_APIS_ONLY=NO', 'ACOUPLET_NO_SONY_ARTWORK=YES', 'ACOUPLET_SONY_ARTWORK_DIR=',
+            'ACOUPLET_DISTRIBUTION=development', 'ENABLE_DEBUG_DYLIB=NO', 'CODE_SIGN_IDENTITY=-', 'CODE_SIGN_STYLE=Manual', 'DEVELOPMENT_TEAM=',
+            *(['clean'] if options.clean and index == 0 else []), 'test', environment=environment)
+        summary = json.loads(subprocess.check_output(['/usr/bin/xcrun', 'xcresulttool', 'get', 'test-results', 'summary', '--path', str(result)], cwd=repo))
+        if summary['passedTests'] <= 0 or summary['failedTests'] != 0:
+            raise ValueError('XCTest must execute passing tests with no failures. Results: ' + str(result))
     app = derived / 'Build/Products/Debug/Acouplet.app'
     extraction = list((derived / 'Build/Intermediates.noindex/Acouplet.build/Debug/Acouplet.build/Objects-normal').glob('*/Acouplet.SwiftFileList'))
     if not extraction:
@@ -158,7 +182,8 @@ def run_xctest(options, derived, environment):
 
 def standalone(source, check, directory, logs, environment):
     binary = directory / Path(check).stem
-    run('/usr/bin/xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', repo / source, repo / check, '-o', binary,
+    run(sys.executable, repo / 'Packaging/build_cache.py', '--cache', directory / 'CompileCache', '--compiler', '--',
+        '/usr/bin/xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', repo / source, repo / check, '-o', binary,
         log=logs / (binary.name + '-build.log'), environment=environment, workers=1)
     run(binary, log=logs / (binary.name + '.log'), environment=environment, workers=1)
 

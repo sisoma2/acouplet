@@ -4,7 +4,7 @@ import plistlib
 import runpy
 import subprocess
 import tempfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -86,6 +86,57 @@ with tempfile.TemporaryDirectory(prefix='acouplet-check-all-check-') as director
     assert '-only-testing:AcoupletTests/LDACRecoveryTests' in commands[0]
     assert '-only-testing:AcoupletTests' not in commands[0]
     assert not any(str(repo / path) in command for path in runner['python_checks'] for command in commands)
+    commands.clear()
+    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
+        main(['--ui-only'])
+    assert '-only-testing:AcoupletUITests' in commands[0]
+    assert '-only-testing:AcoupletTests' not in commands[0]
+    assert not any(str(repo / path) in command for path in runner['python_checks'] for command in commands)
+    commands.clear()
+    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
+        main(['--xctest-only', '--include-ui', '--jobs', '4', '--clean'])
+    assert '-only-testing:AcoupletTests' in commands[0] and '-only-testing:AcoupletUITests' in commands[1]
+    assert '-only-testing:AcoupletUITests' not in commands[0]
+    assert commands[0][commands[0].index('-parallel-testing-enabled') + 1] == 'YES'
+    assert commands[0][commands[0].index('-maximum-parallel-testing-workers') + 1] == '4'
+    assert commands[0][commands[0].index('-default-test-execution-time-allowance') + 1] == '60'
+    assert commands[1][commands[1].index('-parallel-testing-enabled') + 1] == 'NO'
+    assert '-test-timeouts-enabled' not in commands[1]
+    assert commands[0][-2:] == ['clean', 'test'] and 'clean' not in commands[1]
+    commands.clear()
+    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
+        main(['--include-ui'])
+    assert '-only-testing:AcoupletTests' in commands[0] and '-only-testing:AcoupletUITests' in commands[1]
+    assert all(any(str(repo / path) in command for command in commands) for path in runner['python_checks'])
+    commands.clear()
+    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
+        main(['--xctest-only', '--test-workers', '1'])
+    assert commands[0][commands[0].index('-parallel-testing-enabled') + 1] == 'NO'
+    commands.clear()
+    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
+        main(['--xctest-only', '--test-workers', '2', '--only-testing', 'AcoupletTests/LDACCallAudioTests'])
+    assert commands[0][commands[0].index('-maximum-parallel-testing-workers') + 1] == '2'
+    commands.clear()
+    phase_results = ['/mock/SDK\n', json.dumps({'passedTests': 1, 'failedTests': 0}).encode(),
+                     json.dumps({'passedTests': 0, 'failedTests': 0}).encode()]
+    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), \
+            patch('subprocess.check_output', side_effect=phase_results):
+        try:
+            main(['--include-ui'])
+        except ValueError as error:
+            assert 'execute passing tests with no failures' in str(error)
+        else:
+            raise AssertionError('An empty GUI phase was accepted after passing unit tests')
+    assert len(commands) == 2
+    for arguments in (['--fixtures-only', '--include-ui'], ['--ui-only', '--include-ui'],
+                      ['--ui-only', '--only-testing', 'AcoupletTests'], ['--test-workers', '0']):
+        with patch('subprocess.run', side_effect=AssertionError('Invalid options ran a check')), redirect_stderr(StringIO()):
+            try:
+                main(arguments)
+            except SystemExit as error:
+                assert error.code == 2
+            else:
+                raise AssertionError('Invalid test selection was accepted: ' + str(arguments))
     for result_summary in ({'passedTests': 0, 'failedTests': 0},
                            {'passedTests': 0, 'failedTests': 0, 'skippedTests': 4},
                            {'passedTests': 1, 'failedTests': 1}):

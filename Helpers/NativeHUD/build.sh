@@ -2,6 +2,12 @@
 set -eu
 
 hud_source="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if [ "${4:-}" != --uncached ]; then
+    DEVELOPER_DIR="${DEVELOPER_DIR:-$(/usr/bin/xcode-select -p)}"
+    export DEVELOPER_DIR
+    exec /usr/bin/python3 "$hud_source/../../Packaging/build_cache.py" --cache "$2/Cache" \
+        --input "$hud_source" --output "$1" --output "$3" -- /bin/sh "$0" "$@" --uncached
+fi
 hud_output="$1"
 hud_build="$2"
 hud_check="$3"

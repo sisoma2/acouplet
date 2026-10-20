@@ -42,6 +42,17 @@ with tempfile.TemporaryDirectory(prefix='acouplet-artwork-check-') as directory:
     assert {p.stem for p in destination.glob('*.imageset')} == set(artwork.mini_icons)
     assert not list(destination.rglob('*.png'))
     assert all((destination / name).read_bytes() == (source / name).read_bytes() for name in hashes(destination))
+    timestamps = {name: (destination / name).stat().st_mtime_ns for name in hashes(destination)}
+    artwork.prepare(source, destination)
+    assert timestamps == {name: (destination / name).stat().st_mtime_ns for name in hashes(destination)}
+    damaged = destination / 'EarbudLeft.imageset/EarbudLeft.svg'
+    damaged.write_text('damaged output')
+    artwork.prepare(source, destination)
+    assert damaged.read_bytes() == (source / damaged.relative_to(destination)).read_bytes()
+    empty = destination / 'Empty.imageset'
+    empty.mkdir()
+    artwork.prepare(source, destination)
+    assert not empty.exists()
     stale = destination / 'StalePhoto.imageset'
     stale.mkdir()
     (stale / 'photo.png').write_bytes(b'photograph')

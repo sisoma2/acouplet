@@ -2,6 +2,42 @@ import AppKit
 import CoreGraphics
 import XCTest
 
+private extension XCUIElement {
+    var stringValue: String? { value as? String }
+    var integerValue: Int? { (value as? NSNumber)?.intValue }
+
+    @MainActor
+    func waitUntilExists(timeout: TimeInterval) -> Bool {
+        waitUntil(timeout: timeout) { exists }
+    }
+
+    @MainActor
+    func waitUntilGone(timeout: TimeInterval) -> Bool {
+        waitUntil(timeout: timeout) { !exists }
+    }
+
+    @MainActor
+    func waitUntil<Value: Equatable>(_ keyPath: KeyPath<XCUIElement, Value>, equals expected: Value, timeout: TimeInterval) -> Bool {
+        waitUntil(timeout: timeout) { self[keyPath: keyPath] == expected }
+    }
+
+    @MainActor
+    func waitUntil(_ predicate: NSPredicate, timeout: TimeInterval) -> Bool {
+        waitUntil(timeout: timeout) { predicate.evaluate(with: self) }
+    }
+
+    @MainActor
+    private func waitUntil(timeout: TimeInterval, condition: () -> Bool) -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while true {
+            if condition() { return true }
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else { return false }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: min(0.05, remaining)))
+        }
+    }
+}
+
 final class AppUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -16,13 +52,13 @@ final class AppUITests: XCTestCase {
             app.launchArguments = ["-ui-testing", "--\(appearance)-appearance", "-AppleLanguages", "(en)"]
             app.launch()
             let status = app.statusItems.firstMatch
-            XCTAssertTrue(status.waitForExistence(timeout: 5))
+            XCTAssertTrue(status.waitUntilExists(timeout: 5))
             status.click()
             let dashboard = app.descendants(matching: .any)["headphones.dashboard"]
-            if !dashboard.waitForExistence(timeout: 3) { status.click() }
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+            if !dashboard.waitUntilExists(timeout: 3) { status.click() }
+            XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
             app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-            XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
             let statusFrame = status.frame
             for mode in ["off", "ambient", "anc"] {
                 finder.activate()
@@ -33,19 +69,17 @@ final class AppUITests: XCTestCase {
                 }
                 click(statusFrame)
                 let button = app.buttons["noiseControl.\(mode)"]
-                XCTAssertTrue(button.waitForExistence(timeout: 3))
+                XCTAssertTrue(button.waitUntilExists(timeout: 3))
                 XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.bundleIdentifier, "com.apple.finder")
                 XCTAssertTrue(button.isEnabled)
                 click(button.frame)
-                XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "isSelected == true"), object: button
-                )], timeout: 3), .completed)
+                XCTAssertTrue(button.waitUntil(\.isSelected, equals: true, timeout: 3))
                 let attachment = XCTAttachment(screenshot: app.screenshot())
                 attachment.name = "Noise control with Finder active — \(appearance), \(mode)"
                 attachment.lifetime = .keepAlways
                 add(attachment)
                 app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-                XCTAssertTrue(button.waitForNonExistence(timeout: 3))
+                XCTAssertTrue(button.waitUntilGone(timeout: 3))
             }
             app.terminate()
         }
@@ -60,16 +94,16 @@ final class AppUITests: XCTestCase {
             app.launchArguments = ["-ui-testing", "--ui-test-host", "--\(appearance)-appearance", "-AppleLanguages", "(en)"]
             app.launch()
             let panel = app.windows["Headphone Controls"]
-            XCTAssertTrue(panel.waitForExistence(timeout: 5))
+            XCTAssertTrue(panel.waitUntilExists(timeout: 5))
             for mode in ["off", "anc", "ambient", "off", "ambient", "anc", "off"] {
                 let selected = app.buttons["noiseControl.\(mode)"]
-                XCTAssertTrue(selected.waitForExistence(timeout: 3))
+                XCTAssertTrue(selected.waitUntilExists(timeout: 3))
                 selected.click()
-                XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "isSelected == true"), object: selected
-                )], timeout: 3), .completed)
+                XCTAssertTrue(selected.waitUntil(\.isSelected, equals: true, timeout: 3))
                 finder.activate()
                 let screenshot = panel.screenshot()
+                let panelFrame = panel.frame
+                let panelBitmap = try XCTUnwrap(NSBitmapImageRep(data: screenshot.pngRepresentation)?.cgImage)
                 let attachment = XCTAttachment(screenshot: screenshot)
                 attachment.name = "Noise selection — \(appearance), \(mode)"
                 attachment.lifetime = .keepAlways
@@ -78,7 +112,14 @@ final class AppUITests: XCTestCase {
                 for identifier in ["off", "anc", "ambient"] {
                     let button = app.buttons["noiseControl.\(identifier)"]
                     XCTAssertEqual(button.isSelected, identifier == mode)
-                    let bitmap = try XCTUnwrap(NSBitmapImageRep(data: button.screenshot().pngRepresentation))
+                    let frame = button.frame
+                    let scaleX = CGFloat(panelBitmap.width) / panelFrame.width
+                    let scaleY = CGFloat(panelBitmap.height) / panelFrame.height
+                    let crop = CGRect(x: (frame.minX - panelFrame.minX) * scaleX,
+                                      y: (frame.minY - panelFrame.minY) * scaleY,
+                                      width: frame.width * scaleX, height: frame.height * scaleY).integral
+                    XCTAssertTrue(CGRect(x: 0, y: 0, width: panelBitmap.width, height: panelBitmap.height).contains(crop))
+                    let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(panelBitmap.cropping(to: crop)))
                     var total: CGFloat = 0
                     var count = 0
                     for y in (bitmap.pixelsHigh * 35 / 100)..<(bitmap.pixelsHigh * 65 / 100) {
@@ -119,19 +160,19 @@ final class AppUITests: XCTestCase {
             app.launchArguments = ["-ui-testing", "--\(appearance)-appearance", "-AppleAccentColor", "0", "-AppleLanguages", "(en)"]
             app.launch()
             let status = app.statusItems.firstMatch
-            XCTAssertTrue(status.waitForExistence(timeout: 5))
+            XCTAssertTrue(status.waitUntilExists(timeout: 5))
             status.click()
             let voice = app.checkBoxes["Focus on Voice"]
-            XCTAssertTrue(voice.waitForExistence(timeout: 3))
+            XCTAssertTrue(voice.waitUntilExists(timeout: 3))
             voice.click()
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == 1"), object: voice)], timeout: 3), .completed)
+            XCTAssertTrue(voice.waitUntil(\.integerValue, equals: 1, timeout: 3))
             app.buttons["noiseControl.anc"].click()
-            XCTAssertTrue(voice.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(voice.waitUntilGone(timeout: 3))
             app.buttons["noiseControl.ambient"].click()
-            XCTAssertTrue(voice.waitForExistence(timeout: 3))
+            XCTAssertTrue(voice.waitUntilExists(timeout: 3))
             XCTAssertEqual((voice.value as? NSNumber)?.intValue, 1)
             app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-            XCTAssertTrue(voice.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(voice.waitUntilGone(timeout: 3))
             let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
             finder.activate()
             let statusFrame = status.frame
@@ -139,7 +180,7 @@ final class AppUITests: XCTestCase {
             finder.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
                 dx: statusFrame.midX - finderFrame.minX, dy: statusFrame.midY - finderFrame.minY
             )).click()
-            XCTAssertTrue(voice.waitForExistence(timeout: 3))
+            XCTAssertTrue(voice.waitUntilExists(timeout: 3))
             let screenshot = voice.screenshot()
             let attachment = XCTAttachment(screenshot: screenshot)
             attachment.name = "Focus on Voice system accent — \(appearance)"
@@ -172,13 +213,13 @@ final class AppUITests: XCTestCase {
             app.launch()
             app.typeKey(",", modifierFlags: .command)
             let window = app.windows["com_apple_SwiftUI_Settings_window"]
-            XCTAssertTrue(window.waitForExistence(timeout: 5))
+            XCTAssertTrue(window.waitUntilExists(timeout: 5))
             let tab = window.toolbars.buttons[language == "tr" ? "Kulaklıklar" : "Headphones"]
-            XCTAssertTrue(tab.waitForExistence(timeout: 3))
+            XCTAssertTrue(tab.waitUntilExists(timeout: 3))
             tab.click()
             let label = language == "tr" ? "Ses Ayarları…" : "Sound Settings…"
             let link = window.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch
-            XCTAssertTrue(link.waitForExistence(timeout: 3))
+            XCTAssertTrue(link.waitUntilExists(timeout: 3))
             XCTAssertTrue(link.isHittable)
             let screenshot = link.screenshot()
             captureGalleryScreenshot(screenshot, named: "Sound Settings accent — \(appearance), \(language), \(accent)")
@@ -213,7 +254,7 @@ final class AppUITests: XCTestCase {
             app.launch()
             let panel = app.windows["Headphone Controls"]
             let artwork = app.images["device.artwork.openCase"]
-            XCTAssertTrue(artwork.waitForExistence(timeout: 5))
+            XCTAssertTrue(artwork.waitUntilExists(timeout: 5))
             XCTAssertTrue(artwork.isHittable)
             XCTAssertTrue(panel.frame.contains(artwork.frame))
             XCTAssertFalse(app.images["device.artwork.case"].exists)
@@ -232,7 +273,7 @@ final class AppUITests: XCTestCase {
                                    "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
             app.launch()
             let preview = app.buttons["Preview Noise Change"]
-            XCTAssertTrue(preview.waitForExistence(timeout: 5))
+            XCTAssertTrue(preview.waitUntilExists(timeout: 5))
             let window = app.windows["Headphone Controls"]
             let status = app.statusItems.firstMatch
             let title = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 12))
@@ -257,8 +298,8 @@ final class AppUITests: XCTestCase {
                     return frames
                 }
                 button.click()
-                XCTAssertTrue(indicator.waitForExistence(timeout: 1))
-                XCTAssertTrue(indicator.staticTexts[label].waitForExistence(timeout: 2), indicator.debugDescription)
+                XCTAssertTrue(indicator.waitUntilExists(timeout: 1))
+                XCTAssertTrue(indicator.staticTexts[label].waitUntilExists(timeout: 2), indicator.debugDescription)
                 let firstContentFrame = indicator.staticTexts[label].frame
                 let frames = try await sampling.value
                 let finalFrame = indicator.frame
@@ -307,7 +348,7 @@ final class AppUITests: XCTestCase {
             XCTAssertEqual(indicator.frame.width, initialFrame.width, accuracy: 1)
             XCTAssertEqual(indicator.frame.height, initialFrame.height, accuracy: 1)
             preview.hover()
-            XCTAssertTrue(indicator.waitForNonExistence(timeout: 6), indicator.debugDescription)
+            XCTAssertTrue(indicator.waitUntilGone(timeout: 6), indicator.debugDescription)
             _ = try await present(preview, label: "Noise Cancellation", phase: "entry after dismissal")
             XCTAssertEqual(indicator.frame.minX, initialFrame.minX, accuracy: 1)
             XCTAssertEqual(indicator.frame.minY, initialFrame.minY, accuracy: 1)
@@ -315,8 +356,8 @@ final class AppUITests: XCTestCase {
             XCTAssertEqual(indicator.frame.height, initialFrame.height, accuracy: 1)
             status.click()
             let dashboard = app.popovers.containing(.group, identifier: "headphones.dashboard").firstMatch
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
-            XCTAssertTrue(indicator.waitForNonExistence(timeout: 1))
+            XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
+            XCTAssertTrue(indicator.waitUntilGone(timeout: 1))
             app.terminate()
         }
     }
@@ -330,7 +371,7 @@ final class AppUITests: XCTestCase {
                                    "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
             app.launch()
             let battery = app.buttons["Preview Low Battery"]
-            XCTAssertTrue(battery.waitForExistence(timeout: 5))
+            XCTAssertTrue(battery.waitUntilExists(timeout: 5))
             app.activate()
             let foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
             for (button, title) in [("Preview Low Battery", "Left Earbud Low (10%)"),
@@ -338,7 +379,7 @@ final class AppUITests: XCTestCase {
                                     ("Preview Firmware Update", "Firmware 6.0.0 Available")] {
                 app.buttons[button].click()
                 let indicator = app.dialogs[title]
-                XCTAssertTrue(indicator.waitForExistence(timeout: 1))
+                XCTAssertTrue(indicator.waitUntilExists(timeout: 1))
                 XCTAssertTrue(indicator.staticTexts[title].exists, indicator.debugDescription)
                 XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.processIdentifier, foreground)
                 captureGalleryScreenshot(indicator.screenshot(), named: "Native alert — \(button), \(appearance), simulated")
@@ -353,7 +394,7 @@ final class AppUITests: XCTestCase {
                     XCTAssertGreaterThan(ring.frame.midX, indicator.staticTexts[title].frame.maxX)
                 }
                 battery.hover()
-                XCTAssertTrue(indicator.waitForNonExistence(timeout: 6), indicator.debugDescription)
+                XCTAssertTrue(indicator.waitUntilGone(timeout: 6), indicator.debugDescription)
             }
             app.terminate()
         }
@@ -369,7 +410,7 @@ final class AppUITests: XCTestCase {
             if material { app.launchArguments.append("--material-hud-preview") }
             app.launch()
             let preview = app.buttons["Preview Noise Change"]
-            XCTAssertTrue(preview.waitForExistence(timeout: 5))
+            XCTAssertTrue(preview.waitUntilExists(timeout: 5))
             let foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
             for (button, label, isMode) in [("Preview Noise Change", "Noise Cancellation", true),
                                            ("Preview Noise Replacement", "Ambient Sound", true),
@@ -377,7 +418,7 @@ final class AppUITests: XCTestCase {
                                            ("Preview Firmware Update", "Firmware 6.0.0 Available", false)] {
                 app.buttons[button].click()
                 let panel = app.dialogs[isMode ? "Noise Control" : label]
-                XCTAssertTrue(panel.waitForExistence(timeout: 2))
+                XCTAssertTrue(panel.waitUntilExists(timeout: 2))
                 let title = panel.staticTexts[label]
                 XCTAssertTrue(title.exists)
                 XCTAssertGreaterThan(panel.frame.width, 80)
@@ -394,7 +435,7 @@ final class AppUITests: XCTestCase {
                 }
                 captureGalleryScreenshot(panel.screenshot(), named: "Compatible status — \(material ? "material" : "glass"), \(button), simulated")
                 preview.hover()
-                XCTAssertTrue(panel.waitForNonExistence(timeout: 6))
+                XCTAssertTrue(panel.waitUntilGone(timeout: 6))
             }
             app.terminate()
         }
@@ -409,18 +450,18 @@ final class AppUITests: XCTestCase {
             app.launch()
             app.typeKey(",", modifierFlags: .command)
             let window = app.windows["com_apple_SwiftUI_Settings_window"]
-            XCTAssertTrue(window.waitForExistence(timeout: 5))
+            XCTAssertTrue(window.waitUntilExists(timeout: 5))
             let generalTab = window.toolbars.buttons[language == "tr" ? "Genel" : "General"]
-            XCTAssertTrue(generalTab.waitForExistence(timeout: 3))
+            XCTAssertTrue(generalTab.waitUntilExists(timeout: 3))
             generalTab.click()
             let picker = window.popUpButtons["settings.appLanguage"]
-            XCTAssertTrue(picker.waitForExistence(timeout: 3))
+            XCTAssertTrue(picker.waitUntilExists(timeout: 3))
             XCTAssertEqual(picker.value as? String, systemLabel)
             XCTAssertFalse(window.staticTexts["settings.appLanguageRestart"].exists)
             picker.click()
             app.menuItems["Türkçe"].click()
             XCTAssertEqual(picker.value as? String, "Türkçe")
-            XCTAssertTrue(window.staticTexts["settings.appLanguageRestart"].waitForExistence(timeout: 3))
+            XCTAssertTrue(window.staticTexts["settings.appLanguageRestart"].waitUntilExists(timeout: 3))
             picker.click()
             app.menuItems["English"].click()
             XCTAssertEqual(picker.value as? String, "English")
@@ -440,11 +481,11 @@ final class AppUITests: XCTestCase {
                                    "-preferences.useSystemAccentColor", systemAccent ? "YES" : "NO", "-AppleLanguages", "(en)"]
             app.launch()
             let panel = app.windows["Headphone Controls"]
-            XCTAssertTrue(panel.waitForExistence(timeout: 5))
+            XCTAssertTrue(panel.waitUntilExists(timeout: 5))
             panel.buttons["multipoint.open"].click()
             let manager = app.descendants(matching: .any).matching(identifier: "multipoint.popover").firstMatch
             let toggle = manager.descendants(matching: .any).matching(identifier: "multipoint.enabled").firstMatch
-            XCTAssertTrue(toggle.waitForExistence(timeout: 3))
+            XCTAssertTrue(toggle.waitUntilExists(timeout: 3))
             XCTAssertEqual(toggle.value as? Int, 1)
             let screenshot = toggle.screenshot()
             captureGalleryScreenshot(screenshot, named: "Multipoint switch — \(systemAccent ? "system red" : "app gold")")
@@ -472,10 +513,10 @@ final class AppUITests: XCTestCase {
         app.launch()
         app.typeKey(",", modifierFlags: .command)
         let window = app.windows["com_apple_SwiftUI_Settings_window"]
-        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        XCTAssertTrue(window.waitUntilExists(timeout: 5))
         selectSettingsPane("general", in: window)
         let version = window.staticTexts["settings.version"]
-        XCTAssertTrue(version.waitForExistence(timeout: 3))
+        XCTAssertTrue(version.waitUntilExists(timeout: 3))
         XCTAssertTrue(window.frame.contains(version.frame))
         XCTAssertTrue(version.label.hasPrefix("Version 0.") || (version.value as? String)?.hasPrefix("Version 0.") == true,
                       version.debugDescription)
@@ -510,11 +551,11 @@ final class AppUITests: XCTestCase {
         app.launch()
         let panel = app.windows["Headphone Controls"]
         let noise = panel.staticTexts["Gürültü Denetimi"]
-        XCTAssertTrue(noise.waitForExistence(timeout: 5))
+        XCTAssertTrue(noise.waitUntilExists(timeout: 5))
         XCTAssertTrue(panel.frame.contains(noise.frame))
         panel.buttons["Ayarlar…"].click()
         let window = app.windows["com_apple_SwiftUI_Settings_window"]
-        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        XCTAssertTrue(window.waitUntilExists(timeout: 5))
         let panes = [
             ("Genel", ["Pil yüzdesini göster", "Otomatik yeniden bağlan", "Oturum açıldığında başlat"]),
             ("Kulaklıklar", ["Aygıt", "Kulaklık kodeği", "Bağlantı tercihi"]),
@@ -523,20 +564,20 @@ final class AppUITests: XCTestCase {
         var generalFrame = CGRect.zero
         for (title, labels) in panes {
             let tab = window.toolbars.buttons[title]
-            XCTAssertTrue(tab.waitForExistence(timeout: 3))
+            XCTAssertTrue(tab.waitUntilExists(timeout: 3))
             XCTAssertTrue(window.frame.contains(tab.frame))
             tab.click()
             XCTAssertEqual(window.title, title)
             for label in labels {
                 let text = window.staticTexts[label].firstMatch
-                XCTAssertTrue(text.waitForExistence(timeout: 3), label)
+                XCTAssertTrue(text.waitUntilExists(timeout: 3), label)
                 XCTAssertGreaterThan(text.frame.width, 0)
                 XCTAssertTrue(window.frame.contains(text.frame), "\(title) clips \(label): \(text.frame)")
             }
             if title == "Genel" {
                 generalFrame = window.frame
                 let check = window.buttons["Güncellemeleri Denetle…"]
-                XCTAssertTrue(check.waitForExistence(timeout: 3))
+                XCTAssertTrue(check.waitUntilExists(timeout: 3))
                 let version = window.staticTexts["settings.version"]
                 XCTAssertTrue(version.exists)
                 XCTAssertTrue(version.label.hasPrefix("Sürüm 0.") || (version.value as? String)?.hasPrefix("Sürüm 0.") == true,
@@ -555,7 +596,7 @@ final class AppUITests: XCTestCase {
                 }
                 for label in ["Güncellemeleri otomatik denetle", "Güncellemeleri otomatik indir ve yükle"] {
                     let text = window.staticTexts[label].firstMatch
-                    XCTAssertTrue(text.waitForExistence(timeout: 3), label)
+                    XCTAssertTrue(text.waitUntilExists(timeout: 3), label)
                     XCTAssertTrue(text.isHittable, label)
                     XCTAssertTrue(window.frame.contains(text.frame), "Updates clips \(label): \(text.frame)")
                     XCTAssertLessThan(text.frame.maxY, version.frame.minY)
@@ -587,7 +628,7 @@ final class AppUITests: XCTestCase {
                                        "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
                 app.launch()
                 let panel = app.windows["Headphone Controls"]
-                XCTAssertTrue(panel.waitForExistence(timeout: 5))
+                XCTAssertTrue(panel.waitUntilExists(timeout: 5))
                 let artwork = panel.descendants(matching: .any)["device.artwork.\(model)"]
                 XCTAssertTrue(artwork.exists)
                 XCTAssertTrue(panel.frame.contains(artwork.frame))
@@ -621,7 +662,7 @@ final class AppUITests: XCTestCase {
                 captureGalleryScreenshot(panel.screenshot(), named: "Miniature-only main — \(model), \(appearance), simulated")
                 app.typeKey(",", modifierFlags: .command)
                 let settings = app.windows["com_apple_SwiftUI_Settings_window"]
-                XCTAssertTrue(settings.waitForExistence(timeout: 5))
+                XCTAssertTrue(settings.waitUntilExists(timeout: 5))
                 selectSettingsPane("headphones", in: settings)
                 captureGalleryScreenshot(settings.screenshot(), named: "Miniature-only Settings — \(model), \(appearance), simulated")
                 #if ACOUPLET_PUBLIC_APIS_ONLY
@@ -643,10 +684,10 @@ final class AppUITests: XCTestCase {
         app.launch()
         app.typeKey(",", modifierFlags: .command)
         let window = app.windows["com_apple_SwiftUI_Settings_window"]
-        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        XCTAssertTrue(window.waitUntilExists(timeout: 5))
         selectSettingsPane("headphones", in: window)
         let care = window.descendants(matching: .any)["power.batteryCare"]
-        XCTAssertTrue(care.waitForExistence(timeout: 3))
+        XCTAssertTrue(care.waitUntilExists(timeout: 3))
         let scroll = window.scrollViews.firstMatch
         for _ in 0..<6 where !care.isHittable { scroll.scroll(byDeltaX: 0, deltaY: -400) }
         XCTAssertTrue(care.isHittable)
@@ -655,13 +696,12 @@ final class AppUITests: XCTestCase {
         XCTAssertTrue(cancel.exists)
         if !cancel.isHittable { scroll.scroll(byDeltaX: 0, deltaY: -180) }
         cancel.click()
-        XCTAssertTrue(cancel.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(cancel.waitUntilGone(timeout: 3))
         let automatic = window.descendants(matching: .any)["power.autoPowerSave"]
         XCTAssertEqual((automatic.value as? NSNumber)?.intValue, 1)
         if !care.isHittable { scroll.scroll(byDeltaX: 0, deltaY: 150) }
         care.click()
-        let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == 0"), object: care)
-        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 3), .completed)
+        XCTAssertTrue(care.waitUntil(\.integerValue, equals: 0, timeout: 3))
         XCTAssertTrue(window.staticTexts["85%"].exists)
         let screenshot = XCTAttachment(screenshot: window.screenshot())
         screenshot.name = "Battery Care and Auto Power Save — simulated device"
@@ -676,28 +716,26 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         let settings = app.buttons["menu.settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertTrue(settings.waitUntilExists(timeout: 5))
         settings.click()
         let window = app.windows["com_apple_SwiftUI_Settings_window"]
-        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        XCTAssertTrue(window.waitUntilExists(timeout: 5))
         selectSettingsPane("headphones", in: window)
         let adaptation = window.descendants(matching: .any)["noise.adaptation"]
-        XCTAssertTrue(adaptation.waitForExistence(timeout: 3))
+        XCTAssertTrue(adaptation.waitUntilExists(timeout: 3))
         adaptation.click()
         let sensitivity = window.popUpButtons["noise.sensitivity"]
-        XCTAssertTrue(sensitivity.waitForExistence(timeout: 3))
-        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: sensitivity)
-        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 3), .completed)
+        XCTAssertTrue(sensitivity.waitUntilExists(timeout: 3))
+        XCTAssertTrue(sensitivity.waitUntil(\.isEnabled, equals: true, timeout: 3))
         sensitivity.click()
         app.menuItems["High"].click()
-        let confirmed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "High"), object: sensitivity)
-        XCTAssertEqual(XCTWaiter.wait(for: [confirmed], timeout: 3), .completed)
+        XCTAssertTrue(sensitivity.waitUntil(\.stringValue, equals: "High", timeout: 3))
         app.terminate()
         app.launchArguments += ["--gallery-model", "wfXM5"]
         app.launch()
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertTrue(settings.waitUntilExists(timeout: 5))
         settings.click()
-        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        XCTAssertTrue(window.waitUntilExists(timeout: 5))
         selectSettingsPane("headphones", in: window)
         XCTAssertFalse(window.descendants(matching: .any)["noise.adaptation"].exists)
     }
@@ -710,30 +748,28 @@ final class AppUITests: XCTestCase {
         app.launch()
         let panel = app.windows["Headphone Controls"]
         let surround = panel.popUpButtons["audio.surround"]
-        XCTAssertTrue(surround.waitForExistence(timeout: 5))
+        XCTAssertTrue(surround.waitUntilExists(timeout: 5))
         XCTAssertEqual(surround.value as? String, "Off")
         surround.click()
         app.menuItems["Concert Hall"].click()
-        let confirmed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Concert Hall"), object: surround)
-        XCTAssertEqual(XCTWaiter.wait(for: [confirmed], timeout: 3), .completed)
+        XCTAssertTrue(surround.waitUntil(\.stringValue, equals: "Concert Hall", timeout: 3))
         panel.buttons["menu.settings"].click()
         let settings = app.windows["com_apple_SwiftUI_Settings_window"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertTrue(settings.waitUntilExists(timeout: 5))
         selectSettingsPane("headphones", in: settings)
         XCTAssertEqual(settings.popUpButtons["audio.surround"].value as? String, "Concert Hall")
         let position = settings.popUpButtons["audio.soundPosition"]
-        XCTAssertTrue(position.waitForExistence(timeout: 3))
+        XCTAssertTrue(position.waitUntilExists(timeout: 3))
         XCTAssertEqual(settings.popUpButtons["audio.surround"].frame.maxX, position.frame.maxX, accuracy: 1)
         XCTAssertEqual(position.frame.maxX, settings.popUpButtons["audio.dsee"].frame.maxX, accuracy: 1)
         position.click()
         app.menuItems["Rear Right"].click()
-        let moved = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Rear Right"), object: position)
-        XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 3), .completed)
+        XCTAssertTrue(position.waitUntil(\.stringValue, equals: "Rear Right", timeout: 3))
         for model in ["wfXM5", "whXM4"] {
             app.terminate()
             app.launchArguments = ["-ui-testing", "--ui-test-host", "--gallery-model", model, "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
             app.launch()
-            XCTAssertTrue(panel.images["device.artwork.\(model)"].waitForExistence(timeout: 5))
+            XCTAssertTrue(panel.images["device.artwork.\(model)"].waitUntilExists(timeout: 5))
             XCTAssertFalse(panel.popUpButtons["audio.surround"].exists)
             XCTAssertFalse(panel.popUpButtons["audio.soundPosition"].exists)
         }
@@ -746,20 +782,19 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--gallery-model", "whXM4", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         let settings = app.buttons["menu.settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertTrue(settings.waitUntilExists(timeout: 5))
         settings.click()
         let window = app.windows["com_apple_SwiftUI_Settings_window"]
-        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        XCTAssertTrue(window.waitUntilExists(timeout: 5))
         selectSettingsPane("headphones", in: window)
         let open = window.buttons["optimizer.open"]
-        XCTAssertTrue(open.waitForExistence(timeout: 3))
+        XCTAssertTrue(open.waitUntilExists(timeout: 3))
         let parentFrame = window.frame
         open.click()
         let sheet = app.sheets.firstMatch
         let start = app.buttons["optimizer.start"]
-        XCTAssertTrue(start.waitForExistence(timeout: 5))
-        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: start)
-        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 3), .completed)
+        XCTAssertTrue(start.waitUntilExists(timeout: 5))
+        XCTAssertTrue(start.waitUntil(\.isEnabled, equals: true, timeout: 3))
         let heading = sheet.staticTexts["optimizer.title"]
         XCTAssertTrue(heading.exists)
         let headingFrame = heading.frame
@@ -771,7 +806,7 @@ final class AppUITests: XCTestCase {
         XCTAssertTrue(start.isHittable)
         start.click()
         let result = app.descendants(matching: .any)["optimizer.result"].firstMatch
-        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        XCTAssertTrue(result.waitUntilExists(timeout: 5))
         let screenshot = XCTAttachment(screenshot: window.screenshot())
         screenshot.name = "Native optimizer results, contained sheet actions"
         screenshot.lifetime = .keepAlways
@@ -787,7 +822,7 @@ final class AppUITests: XCTestCase {
         done.click()
         XCTAssertFalse(app.sheets.firstMatch.exists)
         open.click()
-        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        XCTAssertTrue(start.waitUntilExists(timeout: 5))
         app.buttons["optimizer.cancel"].click()
         XCTAssertFalse(app.sheets.firstMatch.exists)
     }
@@ -800,7 +835,7 @@ final class AppUITests: XCTestCase {
                                "--gallery-hold-test-replies", "--settings-lifecycle", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         let panel = app.windows["Headphone Controls"]
-        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        XCTAssertTrue(panel.waitUntilExists(timeout: 5))
         let title = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 12))
         title.press(forDuration: 0.1, thenDragTo: title.withOffset(CGVector(
             dx: 20 - panel.frame.minX, dy: 90 - panel.frame.minY
@@ -810,18 +845,16 @@ final class AppUITests: XCTestCase {
         selectSettingsPane("headphones", in: settings)
         settings.buttons["optimizer.open"].click()
         let start = app.buttons["optimizer.start"]
-        XCTAssertTrue(start.waitForExistence(timeout: 3))
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "isEnabled == true"), object: start
-        )], timeout: 3), .completed)
+        XCTAssertTrue(start.waitUntilExists(timeout: 3))
+        XCTAssertTrue(start.waitUntil(\.isEnabled, equals: true, timeout: 3))
         start.click()
-        XCTAssertTrue(app.descendants(matching: .any)["optimizer.progress"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["optimizer.progress"].waitUntilExists(timeout: 3))
         panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 12)).click()
         let disconnect = panel.buttons["Disconnect"]
         XCTAssertTrue(disconnect.isHittable)
         disconnect.click()
         let message = panel.staticTexts["Controls disconnected. Optimization status is unknown. Check Sound Connect before reconnecting controls."]
-        XCTAssertTrue(message.waitForExistence(timeout: 3))
+        XCTAssertTrue(message.waitUntilExists(timeout: 3))
         XCTAssertTrue(message.isHittable)
         let status = panel.descendants(matching: .any).matching(identifier: "headphones.connectionStatus").firstMatch
         XCTAssertEqual(status.value as? String ?? status.label, "Noise Cancelling Optimizer")
@@ -833,11 +866,9 @@ final class AppUITests: XCTestCase {
     @MainActor
     private func selectSettingsPane(_ pane: String, in window: XCUIElement) {
         let tab = window.toolbars.buttons[pane.capitalized]
-        XCTAssertTrue(tab.waitForExistence(timeout: 3))
+        XCTAssertTrue(tab.waitUntilExists(timeout: 3))
         tab.click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "title == %@", pane.capitalized), object: window
-        )], timeout: 3), .completed)
+        XCTAssertTrue(window.waitUntil(\.title, equals: pane.capitalized, timeout: 3))
     }
 
     @MainActor
@@ -923,14 +954,14 @@ final class AppUITests: XCTestCase {
             app.launchArguments = ["-ui-testing", "--\(appearance)-appearance", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
             app.launch()
             let status = app.statusItems.firstMatch
-            XCTAssertTrue(status.waitForExistence(timeout: 5))
+            XCTAssertTrue(status.waitUntilExists(timeout: 5))
             guard status.frame.minX >= 0 else { throw XCTSkip("The status icon is in macOS menu bar overflow.") }
             status.click()
             let dashboard = app.descendants(matching: .any)["headphones.dashboard"]
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+            XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
             app.typeKey(",", modifierFlags: .command)
             let settings = app.windows["com_apple_SwiftUI_Settings_window"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 3))
+            XCTAssertTrue(settings.waitUntilExists(timeout: 3))
             selectSettingsPane("general", in: settings)
             XCTAssertTrue(settings.descendants(matching: .any)["settings.systemAccent"].exists)
             for pane in ["general", "headphones", "advanced"] {
@@ -938,15 +969,15 @@ final class AppUITests: XCTestCase {
                 contrastFailures += try auditContrast(settings, in: app, named: "Settings \(pane) — \(variant)")
             }
             app.typeKey("w", modifierFlags: .command)
-            XCTAssertTrue(settings.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(settings.waitUntilGone(timeout: 3))
             status.click()
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+            XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
             let panel = app.popovers.containing(.group, identifier: "headphones.dashboard").firstMatch
             contrastFailures += try auditContrast(panel, in: app, named: "Menu panel — \(variant)")
             app.menuButtons["More"].click()
             app.menuItems["Custom Equalizer…"].click()
             let editor = app.windows["Equalizer"]
-            XCTAssertTrue(editor.waitForExistence(timeout: 3))
+            XCTAssertTrue(editor.waitUntilExists(timeout: 3))
             let bass = editor.sliders["Clear Bass"]
             let previousBass = try XCTUnwrap((bass.value as? NSNumber)?.intValue)
             bass.adjust(toNormalizedSliderPosition: 0.75)
@@ -955,16 +986,16 @@ final class AppUITests: XCTestCase {
             name.click()
             name.typeText("Appearance Preset")
             editor.buttons["Save"].click()
-            XCTAssertTrue(editor.buttons["Appearance Preset"].waitForExistence(timeout: 2))
+            XCTAssertTrue(editor.buttons["Appearance Preset"].waitUntilExists(timeout: 2))
             contrastFailures += try auditContrast(editor, in: app, named: "Equalizer — \(variant)")
             editor.buttons["Delete Appearance Preset"].click()
-            XCTAssertTrue(editor.sheets.firstMatch.waitForExistence(timeout: 2))
+            XCTAssertTrue(editor.sheets.firstMatch.waitUntilExists(timeout: 2))
             contrastFailures += try auditContrast(editor.sheets.firstMatch, in: app, named: "Preset confirmation — \(variant)")
             app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-            XCTAssertTrue(editor.sheets.firstMatch.waitForNonExistence(timeout: 2))
+            XCTAssertTrue(editor.sheets.firstMatch.waitUntilGone(timeout: 2))
             XCTAssertTrue(editor.buttons["Appearance Preset"].exists)
             app.typeKey("w", modifierFlags: .command)
-            XCTAssertTrue(editor.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(editor.waitUntilGone(timeout: 3))
             app.terminate()
         }
         XCTAssertTrue(contrastFailures.isEmpty, contrastFailures.joined(separator: "\n"))
@@ -978,18 +1009,18 @@ final class AppUITests: XCTestCase {
         for appearance in ["light", "dark"] {
             app.launchArguments = ["-ui-testing", "--ui-test-host", "--\(appearance)-appearance", "-AppleLanguages", "(en)"]
             app.launch()
-            XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
             app.menuButtons["More"].click()
             app.menuItems["Custom Equalizer…"].click()
             let editor = app.windows["Equalizer"]
-            XCTAssertTrue(editor.waitForExistence(timeout: 3))
+            XCTAssertTrue(editor.waitUntilExists(timeout: 3))
             editor.textFields["Preset name"].click()
             editor.textFields["Preset name"].typeText("Contrast Check")
             editor.buttons["Save"].click()
-            XCTAssertTrue(editor.buttons["Delete Contrast Check"].waitForExistence(timeout: 3))
+            XCTAssertTrue(editor.buttons["Delete Contrast Check"].waitUntilExists(timeout: 3))
             editor.buttons["Delete Contrast Check"].click()
             let sheet = editor.sheets.firstMatch
-            XCTAssertTrue(sheet.waitForExistence(timeout: 3))
+            XCTAssertTrue(sheet.waitUntilExists(timeout: 3))
             XCTAssertTrue(sheet.buttons["Cancel"].isHittable)
             XCTAssertTrue(sheet.buttons["Delete"].isHittable)
             failures += try auditContrast(sheet, in: app, named: "Native preset confirmation — \(appearance)")
@@ -1008,11 +1039,11 @@ final class AppUITests: XCTestCase {
             app.launchArguments = ["-ui-testing", "--\(appearance)-appearance", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
             app.launch()
             let status = app.statusItems.firstMatch
-            XCTAssertTrue(status.waitForExistence(timeout: 5))
+            XCTAssertTrue(status.waitUntilExists(timeout: 5))
             guard status.frame.minX >= 0 else { throw XCTSkip("The status icon is in macOS menu bar overflow.") }
             status.click()
             let dashboard = app.descendants(matching: .any)["headphones.dashboard"]
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+            XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
             let panel = app.popovers.containing(.group, identifier: "headphones.dashboard").firstMatch
             XCTAssertTrue(panel.frame.contains(app.buttons["menu.settings"].frame))
             XCTAssertTrue(panel.frame.contains(app.buttons["Refresh headphone status"].frame))
@@ -1023,9 +1054,9 @@ final class AppUITests: XCTestCase {
             add(footerCapture)
             app.menuButtons["More"].click()
             try XCTUnwrap(app.menuItems.matching(identifier: "About Acouplet").allElementsBoundByIndex.first(where: { $0.isHittable })).click()
-            XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
             let about = app.windows["About Acouplet"]
-            XCTAssertTrue(about.waitForExistence(timeout: 3))
+            XCTAssertTrue(about.waitUntilExists(timeout: 3))
             XCTAssertLessThan(about.frame.width, 500)
             XCTAssertLessThan(about.frame.height, 400)
             XCTAssertTrue(about.staticTexts["about.version"].exists)
@@ -1034,14 +1065,14 @@ final class AppUITests: XCTestCase {
             XCTAssertTrue(about.buttons["about.checkForUpdates"].exists)
             about.buttons["about.license"].click()
             let license = app.windows["License"]
-            XCTAssertTrue(license.waitForExistence(timeout: 3))
+            XCTAssertTrue(license.waitUntilExists(timeout: 3))
             let licenseText = try XCTUnwrap(license.staticTexts["legal.contents"].value as? String)
             XCTAssertTrue(licenseText.contains("MIT License"))
             XCTAssertTrue(licenseText.contains("2026 Meriç Bağlayan\nCopyright (c) 2026 Mohamed Emad"))
             license.buttons[XCUIIdentifierCloseWindow].click()
             about.buttons["about.thirdPartyNotices"].click()
             let notices = app.windows["Third-Party Notices"]
-            XCTAssertTrue(notices.waitForExistence(timeout: 3))
+            XCTAssertTrue(notices.waitUntilExists(timeout: 3))
             let noticeText = try XCTUnwrap(notices.staticTexts["legal.contents"].value as? String)
             XCTAssertTrue(noticeText.contains("Sparkle"))
             XCTAssertTrue(noticeText.contains("Apache License"))
@@ -1052,7 +1083,7 @@ final class AppUITests: XCTestCase {
             capture.lifetime = .keepAlways
             add(capture)
             about.buttons[XCUIIdentifierCloseWindow].click()
-            XCTAssertTrue(about.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(about.waitUntilGone(timeout: 3))
             app.terminate()
         }
     }
@@ -1064,25 +1095,25 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         let status = app.statusItems.firstMatch
-        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertTrue(status.waitUntilExists(timeout: 5))
         guard status.frame.minX >= 0 else { throw XCTSkip("The status icon is in macOS menu bar overflow.") }
         let dashboard = app.descendants(matching: .any)["headphones.dashboard"]
         for startsVisible in [false, true] {
             if startsVisible {
                 status.click()
-                XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+                XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
             }
             for pairs in [1, 2, 3] {
                 for _ in 0..<pairs { status.doubleClick() }
                 if startsVisible {
-                    XCTAssertTrue(dashboard.waitForExistence(timeout: 3), "\(pairs * 2) clicks while open")
+                    XCTAssertTrue(dashboard.waitUntilExists(timeout: 3), "\(pairs * 2) clicks while open")
                 } else {
-                    XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3), "\(pairs * 2) clicks while closed")
+                    XCTAssertTrue(dashboard.waitUntilGone(timeout: 3), "\(pairs * 2) clicks while closed")
                 }
             }
             if startsVisible {
                 app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-                XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+                XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
             }
         }
     }
@@ -1094,44 +1125,44 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         let status = app.statusItems.firstMatch
-        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertTrue(status.waitUntilExists(timeout: 5))
         XCTAssertLessThanOrEqual(status.frame.width, 40)
         guard status.frame.minX >= 0 else { throw XCTSkip("The status icon is in macOS menu bar overflow.") }
         status.click()
         let dashboard = app.descendants(matching: .any)["headphones.dashboard"]
-        XCTAssertTrue(dashboard.waitForExistence(timeout: 5))
+        XCTAssertTrue(dashboard.waitUntilExists(timeout: 5))
         for _ in 0..<4 {
             status.click()
-            XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
             status.click()
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+            XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
         }
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-        XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
         status.doubleClick()
-        XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
         status.click()
-        XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
         XCTAssertTrue(app.images["device.artwork.wfXM5"].exists)
         XCTAssertTrue(app.buttons["noiseControl.anc"].exists)
         app.buttons["noiseControl.anc"].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: app.buttons["noiseControl.anc"])], timeout: 2), .completed)
+        XCTAssertTrue(app.buttons["noiseControl.anc"].waitUntil(\.isSelected, equals: true, timeout: 2))
         XCTAssertTrue(app.buttons["noiseControl.anc"].isSelected)
         XCTAssertFalse(app.buttons["noiseControl.ambient"].isSelected)
         XCTAssertFalse(app.buttons["noiseControl.off"].isSelected)
         app.buttons["Office"].click()
-        XCTAssertTrue(app.sliders["Ambient sound level"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.sliders["Ambient sound level"].waitUntilExists(timeout: 2))
         let connected = XCTAttachment(screenshot: app.screenshot())
         connected.name = "WF native panel"
         connected.lifetime = .keepAlways
         add(connected)
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-        XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
         status.click()
-        XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
         let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
         finder.activate()
-        XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
         let statusFrame = status.frame
         let finderFrame = finder.frame
         let icon = finder.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
@@ -1139,30 +1170,30 @@ final class AppUITests: XCTestCase {
         ))
         for _ in 0..<2 {
             icon.click()
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+            XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
             icon.click()
-            XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
         }
         status.click()
-        XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
         finder.menuBars.menuBarItems["Finder"].click()
-        XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
         finder.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         status.click()
-        XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
         app.menuButtons["More"].click()
-        XCTAssertTrue(app.menuItems["Custom Equalizer…"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.menuItems["Custom Equalizer…"].waitUntilExists(timeout: 2))
         XCTAssertTrue(dashboard.exists)
         finder.menuBars.menuBarItems["Finder"].click()
-        XCTAssertTrue(app.menuItems["Custom Equalizer…"].waitForNonExistence(timeout: 3))
-        XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.menuItems["Custom Equalizer…"].waitUntilGone(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
         finder.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         status.click()
-        XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
         app.buttons["menu.settings"].click()
-        XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
-        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 3))
+        XCTAssertTrue(settingsWindow.waitUntilExists(timeout: 3))
         XCTAssertTrue(settingsWindow.isHittable)
         XCTAssertEqual(app.windows.firstMatch.identifier, settingsWindow.identifier)
     }
@@ -1176,7 +1207,7 @@ final class AppUITests: XCTestCase {
             app.launchArguments = ["-ui-testing", "--\(appearance)-appearance", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
             app.launch()
             let status = app.statusItems.firstMatch
-            XCTAssertTrue(status.waitForExistence(timeout: 5))
+            XCTAssertTrue(status.waitUntilExists(timeout: 5))
             let dashboard = app.popovers.containing(.group, identifier: "headphones.dashboard").firstMatch
             let equalizer = app.windows["Equalizer"]
             func clickStatus() throws {
@@ -1190,18 +1221,18 @@ final class AppUITests: XCTestCase {
             for _ in 0..<2 {
                 finder.activate()
                 try clickStatus()
-                XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+                XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
                 app.menuButtons["More"].click()
-                XCTAssertTrue(app.menuItems["Custom Equalizer…"].waitForExistence(timeout: 2))
+                XCTAssertTrue(app.menuItems["Custom Equalizer…"].waitUntilExists(timeout: 2))
                 app.menuItems["Custom Equalizer…"].click()
-                XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
-                XCTAssertTrue(equalizer.waitForExistence(timeout: 3))
+                XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
+                XCTAssertTrue(equalizer.waitUntilExists(timeout: 3))
                 equalizer.buttons[XCUIIdentifierCloseWindow].click()
-                XCTAssertTrue(equalizer.waitForNonExistence(timeout: 3))
+                XCTAssertTrue(equalizer.waitUntilGone(timeout: 3))
                 try clickStatus()
-                XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+                XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
                 try clickStatus()
-                XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+                XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
             }
             app.terminate()
         }
@@ -1213,12 +1244,12 @@ final class AppUITests: XCTestCase {
         defer { app.terminate() }
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--gallery-model", "wfXM5", "-AppleLanguages", "(en)"]
         app.launch()
-        XCTAssertTrue(app.images["device.artwork.wfXM5"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.images["device.artwork.wfXM5"].waitUntilExists(timeout: 5))
         XCTAssertFalse(app.descendants(matching: .any)["headphones.devicePicker"].firstMatch.exists)
         app.buttons["noiseControl.anc"].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: app.buttons["noiseControl.anc"])], timeout: 2), .completed)
+        XCTAssertTrue(app.buttons["noiseControl.anc"].waitUntil(\.isSelected, equals: true, timeout: 2))
         app.buttons["Office"].click()
-        XCTAssertTrue(app.sliders["Ambient sound level"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.sliders["Ambient sound level"].waitUntilExists(timeout: 2))
         let screenshot = XCTAttachment(screenshot: app.windows["Headphone Controls"].screenshot())
         screenshot.name = "WF native controls"
         screenshot.lifetime = .keepAlways
@@ -1233,7 +1264,7 @@ final class AppUITests: XCTestCase {
         app.launch()
         let panel = app.windows["Headphone Controls"]
         let picker = panel.menuButtons["headphones.devicePicker"]
-        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        XCTAssertTrue(picker.waitUntilExists(timeout: 5))
         let hierarchy = XCTAttachment(string: panel.debugDescription)
         hierarchy.name = "Main device selector accessibility hierarchy"
         hierarchy.lifetime = .keepAlways
@@ -1251,20 +1282,20 @@ final class AppUITests: XCTestCase {
         add(mainSelector)
         picker.click()
         app.menuItems["WH-1000XM5"].click()
-        XCTAssertTrue(panel.images["device.artwork.whXM5"].waitForExistence(timeout: 3))
+        XCTAssertTrue(panel.images["device.artwork.whXM5"].waitUntilExists(timeout: 3))
         XCTAssertEqual(picker.value as? String, "WH-1000XM5")
         XCTAssertEqual(title.frame.midX, panel.frame.midX, accuracy: 1)
         panel.buttons["noiseControl.anc"].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: panel.buttons["noiseControl.anc"])], timeout: 2), .completed)
+        XCTAssertTrue(panel.buttons["noiseControl.anc"].waitUntil(\.isSelected, equals: true, timeout: 2))
         picker.click()
         app.menuItems["WF-1000XM5"].click()
-        XCTAssertTrue(panel.images["device.artwork.wfXM5"].waitForExistence(timeout: 3))
+        XCTAssertTrue(panel.images["device.artwork.wfXM5"].waitUntilExists(timeout: 3))
         XCTAssertTrue(panel.sliders["Ambient sound level"].exists)
         picker.click()
         app.menuItems["WH-1000XM5"].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: panel.buttons["noiseControl.anc"])], timeout: 2), .completed)
+        XCTAssertTrue(panel.buttons["noiseControl.anc"].waitUntil(\.isSelected, equals: true, timeout: 2))
         panel.buttons["Disconnect Other Headphones"].click()
-        XCTAssertTrue(picker.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(picker.waitUntilGone(timeout: 3))
         XCTAssertTrue(panel.staticTexts["menu.title"].exists)
         XCTAssertEqual(title.frame.midX, panel.frame.midX, accuracy: 1)
         let single = XCTAttachment(screenshot: panel.descendants(matching: .any)["test.mainPanel"].firstMatch.screenshot())
@@ -1273,7 +1304,7 @@ final class AppUITests: XCTestCase {
         add(single)
         panel.buttons["menu.settings"].click()
         let settings = app.windows["com_apple_SwiftUI_Settings_window"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        XCTAssertTrue(settings.waitUntilExists(timeout: 3))
         selectSettingsPane("headphones", in: settings)
         XCTAssertFalse(settings.popUpButtons["headphones.devicePicker"].exists)
         XCTAssertEqual(settings.staticTexts["headphones.deviceName"].value as? String, "WH-1000XM5")
@@ -1281,10 +1312,10 @@ final class AppUITests: XCTestCase {
         app.terminate()
         app.launch()
         panel.buttons["menu.settings"].click()
-        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        XCTAssertTrue(settings.waitUntilExists(timeout: 3))
         selectSettingsPane("headphones", in: settings)
         let settingsPicker = settings.popUpButtons["headphones.devicePicker"]
-        XCTAssertTrue(settingsPicker.waitForExistence(timeout: 3))
+        XCTAssertTrue(settingsPicker.waitUntilExists(timeout: 3))
         XCTAssertFalse(settings.staticTexts["Model"].exists)
         XCTAssertFalse(settings.staticTexts["headphones.deviceName"].exists)
         let multiple = XCTAttachment(screenshot: settings.screenshot())
@@ -1293,11 +1324,11 @@ final class AppUITests: XCTestCase {
         add(multiple)
         settingsPicker.click()
         app.menuItems["WH-1000XM5"].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "WH-1000XM5"), object: settingsPicker)], timeout: 3), .completed)
+        XCTAssertTrue(settingsPicker.waitUntil(\.stringValue, equals: "WH-1000XM5", timeout: 3))
         XCTAssertTrue(app.statusItems.firstMatch.label.contains("WH-1000XM5"))
         settingsPicker.click()
         app.menuItems["WF-1000XM5"].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "WF-1000XM5"), object: settingsPicker)], timeout: 3), .completed)
+        XCTAssertTrue(settingsPicker.waitUntil(\.stringValue, equals: "WF-1000XM5", timeout: 3))
         XCTAssertTrue(app.statusItems.firstMatch.label.contains("WF-1000XM5"))
     }
 
@@ -1373,27 +1404,23 @@ final class AppUITests: XCTestCase {
                     if let color { app.launchArguments += ["--gallery-color", String(color)] }
                     if allFinishes && color == nil { app.launchArguments += ["--gallery-finish", finish] }
                     app.launch()
-                    app.activate()
                     let panel = app.windows["Headphone Controls"]
-                    XCTAssertTrue(panel.waitForExistence(timeout: 5))
+                    XCTAssertTrue(panel.waitUntilExists(timeout: 5))
                     XCTAssertTrue(panel.images["device.artwork.\(model)"].exists)
                     for mode in ["off", "anc", "ambient"] {
                         panel.buttons["noiseControl.\(mode)"].click()
-                        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"),
-                                                                 object: panel.buttons["noiseControl.\(mode)"])
-                        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 3), .completed)
+                        XCTAssertTrue(panel.buttons["noiseControl.\(mode)"].waitUntil(\.isSelected, equals: true, timeout: 3))
                         captureGalleryScreenshot(panel.screenshot(), named: "\(variant)-main-\(mode)")
                     }
                     panel.menuButtons["More"].click()
                     app.menuItems["Custom Equalizer…"].click()
                     let equalizer = app.windows["Equalizer"]
-                    XCTAssertTrue(equalizer.waitForExistence(timeout: 3))
+                    XCTAssertTrue(equalizer.waitUntilExists(timeout: 3))
                     captureGalleryScreenshot(equalizer.screenshot(), named: "\(variant)-equalizer-01")
-                    equalizer.buttons[XCUIIdentifierCloseWindow].click()
-                    app.statusItems.firstMatch.click()
-                    app.buttons["menu.settings"].click()
+                    app.typeKey(",", modifierFlags: .command)
                     let settings = app.windows["com_apple_SwiftUI_Settings_window"]
-                    XCTAssertTrue(settings.waitForExistence(timeout: 3))
+                    XCTAssertTrue(settings.waitUntilExists(timeout: 3))
+                    equalizer.buttons[XCUIIdentifierCloseWindow].click()
                     for pane in ["general", "headphones", "advanced"] {
                         selectSettingsPane(pane, in: settings)
                         if pane == "advanced", ["wfXM4", "wfXM3", "whXM4", "whXM3"].contains(model) {
@@ -1444,7 +1471,7 @@ final class AppUITests: XCTestCase {
                 app.launch()
                 app.activate()
                 let panel = app.windows["Headphone Controls"]
-                XCTAssertTrue(panel.waitForExistence(timeout: 5))
+                XCTAssertTrue(panel.waitUntilExists(timeout: 5))
                 XCTAssertEqual(panel.descendants(matching: .any).matching(identifier: "headphones.connectionStatus").firstMatch.exists, state != "disconnected")
                 XCTAssertEqual(panel.buttons["headphones.connect"].exists, state != "permission")
                 XCTAssertFalse(panel.buttons["noiseControl.anc"].exists)
@@ -1484,11 +1511,11 @@ final class AppUITests: XCTestCase {
                 app.activate()
                 let prefix = "wfXM5-black-\(appearance)-state"
                 let panel = app.windows["Headphone Controls"]
-                XCTAssertTrue(panel.waitForExistence(timeout: 5))
+                XCTAssertTrue(panel.waitUntilExists(timeout: 5))
                 if !held {
                     panel.menuButtons["More"].click()
                     app.menuItems["Turn Off Headphones…"].click()
-                    XCTAssertTrue(app.buttons["Turn Off"].waitForExistence(timeout: 3))
+                    XCTAssertTrue(app.buttons["Turn Off"].waitUntilExists(timeout: 3))
                     captureGalleryScreenshot(panel.screenshot(), named: "\(prefix)-power-confirmation")
                     panel.sheets.buttons["Cancel"].click()
                 }
@@ -1497,56 +1524,54 @@ final class AppUITests: XCTestCase {
                 selectSettingsPane("headphones", in: settings)
                 for kind in ["fit", "gesture"] {
                     let open = settings.buttons["\(kind).open"]
-                    XCTAssertTrue(open.waitForExistence(timeout: 3))
+                    XCTAssertTrue(open.waitUntilExists(timeout: 3))
                     for _ in 0..<12 where !open.isHittable {
                         settings.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: kind == "fit" ? -200 : 200)
                     }
                     XCTAssertTrue(open.isHittable)
                     open.click()
                     let start = app.buttons["\(kind).start"]
-                    XCTAssertTrue(start.waitForExistence(timeout: 3))
-                    XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                        predicate: NSPredicate(format: "isEnabled == true"), object: start
-                    )], timeout: 3), .completed)
+                    XCTAssertTrue(start.waitUntilExists(timeout: 3))
+                    XCTAssertTrue(start.waitUntil(\.isEnabled, equals: true, timeout: 3))
                     if held { captureGalleryScreenshot(settings.screenshot(), named: "\(prefix)-\(kind)-ready") }
                     start.click()
                     let marker = held ? (kind == "fit" ? "fit.progress" : "gesture.waiting")
                         : (kind == "fit" ? "fit.leftResult" : "gesture.detected")
-                    XCTAssertTrue(app.descendants(matching: .any)[marker].firstMatch.waitForExistence(timeout: 5))
+                    XCTAssertTrue(app.descendants(matching: .any)[marker].firstMatch.waitUntilExists(timeout: 5))
                     let state = held ? (kind == "fit" ? "measuring" : "waiting") : (kind == "fit" ? "results" : "detected")
                     captureGalleryScreenshot(settings.screenshot(), named: "\(prefix)-\(kind)-\(state)")
                     app.buttons["\(kind).cancel"].click()
-                    XCTAssertTrue(app.sheets.firstMatch.waitForNonExistence(timeout: 3))
+                    XCTAssertTrue(app.sheets.firstMatch.waitUntilGone(timeout: 3))
                 }
                 settings.buttons[XCUIIdentifierCloseWindow].click()
                 if !held {
                     app.statusItems.firstMatch.click()
-                    XCTAssertTrue(app.menuButtons["More"].waitForExistence(timeout: 3))
+                    XCTAssertTrue(app.menuButtons["More"].waitUntilExists(timeout: 3))
                     app.menuButtons["More"].click()
                     app.menuItems["Custom Equalizer…"].click()
                     let editor = app.windows["Equalizer"]
-                    XCTAssertTrue(editor.waitForExistence(timeout: 3))
+                    XCTAssertTrue(editor.waitUntilExists(timeout: 3))
                     editor.buttons["Sync Equalizer"].click()
                     XCTAssertTrue(editor.staticTexts["Reading equalizer…"].exists)
                     captureGalleryScreenshot(editor.screenshot(), named: "\(prefix)-equalizer-reading")
-                    XCTAssertTrue(editor.staticTexts["Reading equalizer…"].waitForNonExistence(timeout: 5))
+                    XCTAssertTrue(editor.staticTexts["Reading equalizer…"].waitUntilGone(timeout: 5))
                     let name = editor.textFields["Preset name"]
                     name.click()
                     name.typeText("Travel")
                     editor.buttons["Save"].click()
-                    XCTAssertTrue(editor.buttons["Travel"].waitForExistence(timeout: 3))
+                    XCTAssertTrue(editor.buttons["Travel"].waitUntilExists(timeout: 3))
                     name.click()
                     name.typeText("Travel")
                     editor.buttons["Save"].click()
-                    XCTAssertTrue(editor.sheets.buttons["Replace"].waitForExistence(timeout: 3))
+                    XCTAssertTrue(editor.sheets.buttons["Replace"].waitUntilExists(timeout: 3))
                     captureGalleryScreenshot(editor.screenshot(), named: "\(prefix)-equalizer-replace")
                     app.typeKey(.escape, modifierFlags: [])
-                    XCTAssertTrue(editor.sheets.firstMatch.waitForNonExistence(timeout: 3))
+                    XCTAssertTrue(editor.sheets.firstMatch.waitUntilGone(timeout: 3))
                     editor.buttons["Delete Travel"].click()
-                    XCTAssertTrue(editor.sheets.buttons["Delete"].waitForExistence(timeout: 3))
+                    XCTAssertTrue(editor.sheets.buttons["Delete"].waitUntilExists(timeout: 3))
                     captureGalleryScreenshot(editor.screenshot(), named: "\(prefix)-equalizer-delete")
                     app.typeKey(.escape, modifierFlags: [])
-                    XCTAssertTrue(editor.sheets.firstMatch.waitForNonExistence(timeout: 3))
+                    XCTAssertTrue(editor.sheets.firstMatch.waitUntilGone(timeout: 3))
                     editor.buttons[XCUIIdentifierCloseWindow].click()
                 }
                 app.terminate()
@@ -1568,36 +1593,34 @@ final class AppUITests: XCTestCase {
                 app.activate()
                 let prefix = "whXM4-unknown-\(appearance)-state"
                 let panel = app.windows["Headphone Controls"]
-                XCTAssertTrue(panel.waitForExistence(timeout: 5))
+                XCTAssertTrue(panel.waitUntilExists(timeout: 5))
                 panel.buttons["menu.settings"].click()
                 let settings = app.windows["com_apple_SwiftUI_Settings_window"]
                 selectSettingsPane("headphones", in: settings)
                 settings.buttons["optimizer.open"].click()
                 let start = app.buttons["optimizer.start"]
-                XCTAssertTrue(start.waitForExistence(timeout: 3))
-                XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "isEnabled == true"), object: start
-                )], timeout: 3), .completed)
+                XCTAssertTrue(start.waitUntilExists(timeout: 3))
+                XCTAssertTrue(start.waitUntil(\.isEnabled, equals: true, timeout: 3))
                 if held { captureGalleryScreenshot(settings.screenshot(), named: "\(prefix)-optimizer-ready") }
                 start.click()
                 let marker = held ? "optimizer.progress" : "optimizer.result"
-                XCTAssertTrue(app.descendants(matching: .any)[marker].firstMatch.waitForExistence(timeout: 5))
+                XCTAssertTrue(app.descendants(matching: .any)[marker].firstMatch.waitUntilExists(timeout: 5))
                 captureGalleryScreenshot(settings.screenshot(), named: "\(prefix)-optimizer-\(held ? "running" : "results")")
                 app.buttons["optimizer.cancel"].click()
-                XCTAssertTrue(app.sheets.firstMatch.waitForNonExistence(timeout: 3))
+                XCTAssertTrue(app.sheets.firstMatch.waitUntilGone(timeout: 3))
                 if !held {
                     let picker = settings.popUpButtons["audio.connectionMode"]
                     XCTAssertTrue(picker.isHittable)
                     picker.click()
                     app.menuItems["Stable Connection"].click()
                     let change = settings.sheets.buttons["Change Preference"]
-                    XCTAssertTrue(change.waitForExistence(timeout: 3))
+                    XCTAssertTrue(change.waitUntilExists(timeout: 3))
                     captureGalleryScreenshot(settings.screenshot(), named: "\(prefix)-connection-confirmation")
                     app.activate()
                     app.typeKey(.return, modifierFlags: [])
-                    XCTAssertTrue(change.waitForNonExistence(timeout: 3))
+                    XCTAssertTrue(change.waitUntilGone(timeout: 3))
                     let proceed = settings.sheets.buttons["Continue"]
-                    XCTAssertTrue(proceed.waitForExistence(timeout: 3))
+                    XCTAssertTrue(proceed.waitUntilExists(timeout: 3))
                     captureGalleryScreenshot(settings.screenshot(), named: "\(prefix)-connection-caution")
                     settings.sheets.buttons["Cancel"].click()
                 }
@@ -1622,7 +1645,7 @@ final class AppUITests: XCTestCase {
                 if !argument.isEmpty { app.launchArguments.append(argument) }
                 app.launch()
                 let artwork = app.images["device.artwork.wfXM5"]
-                XCTAssertTrue(artwork.waitForExistence(timeout: 5))
+                XCTAssertTrue(artwork.waitUntilExists(timeout: 5))
                 XCTAssertEqual(artwork.value as? String, value)
                 for (side, percentage) in [("Left", "78 percent"), ("Right", "82 percent"), ("Case", "64 percent")] {
                     let battery = app.descendants(matching: .any)["battery.\(side.lowercased())"]
@@ -1658,13 +1681,13 @@ final class AppUITests: XCTestCase {
             app.launchArguments = ["-ui-testing", "--\(appearance)-appearance", "-AppleLanguages", "(en)", "-AppleShowScrollBars", "Always"]
             app.launch()
             let status = app.statusItems.firstMatch
-            XCTAssertTrue(status.waitForExistence(timeout: 5))
+            XCTAssertTrue(status.waitUntilExists(timeout: 5))
             guard status.frame.minX >= 0 else { throw XCTSkip("The status icon is in macOS menu bar overflow.") }
             status.click()
             let dashboard = app.descendants(matching: .any)["headphones.dashboard"]
             let panel = app.popovers.containing(.group, identifier: "headphones.dashboard").firstMatch
-            if !dashboard.waitForExistence(timeout: 3) { status.click() }
-            XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+            if !dashboard.waitUntilExists(timeout: 3) { status.click() }
+            XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
             XCTAssertTrue(app.images["device.artwork.case"].exists)
             XCTAssertTrue(app.buttons["menu.settings"].isHittable)
             XCTAssertTrue(app.popUpButtons["audio.dsee"].isHittable)
@@ -1740,7 +1763,7 @@ final class AppUITests: XCTestCase {
                 XCTAssertTrue(panel.scrollBars.allElementsBoundByIndex.allSatisfy { !$0.isHittable })
             }
             try await measureResize(to: "off")
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: app.buttons["noiseControl.off"])], timeout: 3), .completed)
+            XCTAssertTrue(app.buttons["noiseControl.off"].waitUntil(\.isSelected, equals: true, timeout: 3))
             XCTAssertLessThan(panel.frame.height, ambientHeight)
             let compact = XCTAttachment(screenshot: panel.screenshot())
             compact.name = "Main-panel-\(appearance)-off"
@@ -1750,7 +1773,7 @@ final class AppUITests: XCTestCase {
             let artworkFrame = app.images["device.artwork.wfXM5"].frame
             for mode in ["anc", "off", "anc", "off"] {
                 app.buttons["noiseControl.\(mode)"].click()
-                XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: app.buttons["noiseControl.\(mode)"])], timeout: 3), .completed)
+                XCTAssertTrue(app.buttons["noiseControl.\(mode)"].waitUntil(\.isSelected, equals: true, timeout: 3))
                 XCTAssertEqual(panel.frame, steadyFrame)
                 XCTAssertEqual(app.images["device.artwork.wfXM5"].frame, artworkFrame)
                 XCTAssertTrue(app.buttons["menu.settings"].isHittable)
@@ -1759,10 +1782,10 @@ final class AppUITests: XCTestCase {
                 }
             }
             try await measureResize(to: "ambient")
-            XCTAssertTrue(app.sliders["Ambient sound level"].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.sliders["Ambient sound level"].waitUntilExists(timeout: 3))
             XCTAssertEqual(panel.frame.height, ambientHeight, accuracy: 1)
             app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-            XCTAssertTrue(dashboard.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(dashboard.waitUntilGone(timeout: 3))
             app.terminate()
         }
         XCTAssertTrue(resizeFailures.isEmpty, resizeFailures.joined(separator: "\n"))
@@ -1775,9 +1798,9 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--compact-panel", "--light-appearance", "-AppleLanguages", "(en)", "-AppleShowScrollBars", "Always"]
         app.launch()
         let panel = app.windows["Headphone Controls"]
-        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        XCTAssertTrue(panel.waitUntilExists(timeout: 5))
         let dashboard = panel.descendants(matching: .any)["test.mainPanel"].firstMatch
-        XCTAssertTrue(dashboard.waitForExistence(timeout: 3))
+        XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
         XCTAssertEqual(dashboard.frame.height, 480, accuracy: 1)
         let scroll = app.scrollViews["headphones.controlsScroll"]
         XCTAssertTrue(scroll.exists)
@@ -1792,7 +1815,7 @@ final class AppUITests: XCTestCase {
         let dsee = app.popUpButtons["audio.dsee"]
         XCTAssertTrue(panel.frame.contains(dsee.frame))
         dsee.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        XCTAssertTrue(app.menuItems["Off"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.menuItems["Off"].waitUntilExists(timeout: 3))
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
     }
 
@@ -1812,7 +1835,7 @@ final class AppUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing", "--disconnected", "-AppleLanguages", "(en)"]
         app.launch()
-        XCTAssertTrue(app.statusItems.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.statusItems.firstMatch.waitUntilGone(timeout: 3))
         XCTAssertEqual(app.windows.count, 0)
         XCUIApplication(bundleIdentifier: "com.apple.finder").activate()
         XCTAssertEqual(app.state, .runningBackground)
@@ -1820,24 +1843,24 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--disconnected", "--connection-lifecycle", "-AppleLanguages", "(en)"]
         app.launch()
         let window = app.windows["Headphone Controls"]
-        XCTAssertTrue(window.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.statusItems.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(window.waitUntilExists(timeout: 5))
+        XCTAssertTrue(app.statusItems.firstMatch.waitUntilGone(timeout: 3))
         window.buttons["Connect WF"].click()
-        XCTAssertTrue(app.statusItems.firstMatch.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.statusItems.firstMatch.waitUntilExists(timeout: 3))
         XCTAssertTrue(app.statusItems.firstMatch.label.contains("WF-1000XM5"))
         window.buttons["Controls Busy"].click()
         XCTAssertTrue(app.statusItems.firstMatch.exists)
         XCTAssertTrue(app.statusItems.firstMatch.label.contains("Controls busy"))
         window.buttons["Disconnect"].click()
-        XCTAssertTrue(app.statusItems.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.statusItems.firstMatch.waitUntilGone(timeout: 3))
         window.buttons["Connect WH"].click()
-        XCTAssertTrue(app.statusItems.firstMatch.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.statusItems.firstMatch.waitUntilExists(timeout: 3))
         XCTAssertTrue(app.statusItems.firstMatch.label.contains("WH-1000XM5"))
         XCTAssertTrue(app.images["device.artwork.whXM5"].exists)
         window.buttons["Disconnect"].click()
-        XCTAssertTrue(app.statusItems.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.statusItems.firstMatch.waitUntilGone(timeout: 3))
         window.buttons[XCUIIdentifierCloseWindow].click()
-        XCTAssertTrue(window.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(window.waitUntilGone(timeout: 3))
         XCUIApplication(bundleIdentifier: "com.apple.finder").activate()
         XCTAssertEqual(app.state, .runningBackground)
     }
@@ -1848,7 +1871,7 @@ final class AppUITests: XCTestCase {
         defer { app.terminate() }
         app.launchArguments = ["-ui-testing", "--disconnected", "-AppleLanguages", "(en)"]
         app.launch()
-        XCTAssertTrue(app.statusItems.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.statusItems.firstMatch.waitUntilGone(timeout: 3))
         XCTAssertEqual(app.windows.count, 0)
         XCUIApplication(bundleIdentifier: "com.apple.finder").activate()
         XCTAssertEqual(app.state, .runningBackground)
@@ -1863,18 +1886,18 @@ final class AppUITests: XCTestCase {
         try reopen.run()
         reopen.waitUntilExit()
         XCTAssertEqual(reopen.terminationStatus, 0)
-        XCTAssertFalse(app.descendants(matching: .any)["settings.form"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.descendants(matching: .any)["settings.form"].waitUntilExists(timeout: 3))
         XCTAssertEqual(app.windows.count, 0)
         XCTAssertFalse(app.statusItems.firstMatch.exists)
         app.terminate()
         app.launchArguments += ["--manual-launch"]
         app.launch()
-        XCTAssertTrue(app.statusItems.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.statusItems.firstMatch.waitUntilGone(timeout: 3))
         XCTAssertEqual(app.windows.count, 0)
         app.terminate()
         app.launchArguments += ["--background-service"]
         app.launch()
-        XCTAssertTrue(app.statusItems.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.statusItems.firstMatch.waitUntilGone(timeout: 3))
         XCTAssertEqual(app.windows.count, 0)
     }
 
@@ -1884,7 +1907,7 @@ final class AppUITests: XCTestCase {
         defer { app.terminate() }
         app.launchArguments = ["-ui-testing", "--disconnected", "-AppleLanguages", "(en)"]
         app.launch()
-        XCTAssertTrue(app.statusItems.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.statusItems.firstMatch.waitUntilGone(timeout: 3))
         XCTAssertEqual(app.windows.count, 0)
         XCUIApplication(bundleIdentifier: "com.apple.finder").activate()
         XCTAssertEqual(app.state, .runningBackground)
@@ -1910,7 +1933,7 @@ final class AppUITests: XCTestCase {
         XCTAssertEqual(NSRunningApplication.runningApplications(
             withBundleIdentifier: "dev.baglayan.Acouplet.debug"
         ).map(\.processIdentifier), [original.processIdentifier])
-        XCTAssertFalse(app.descendants(matching: .any)["settings.form"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.descendants(matching: .any)["settings.form"].waitUntilExists(timeout: 3))
         XCTAssertEqual(app.windows.count, 0)
         XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.bundleIdentifier, "com.apple.finder")
         XCTAssertFalse(app.statusItems.firstMatch.exists)
@@ -1922,16 +1945,16 @@ final class AppUITests: XCTestCase {
         defer { app.terminate() }
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--dark-appearance", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         let preset = app.popUpButtons["equalizer.preset"]
         XCTAssertEqual(preset.value as? String, "Bass Boost")
         preset.click()
         app.menuItems["Bright"].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Bright"), object: preset)], timeout: 3), .completed)
+        XCTAssertTrue(preset.waitUntil(\.stringValue, equals: "Bright", timeout: 3))
         app.menuButtons["More"].click()
         app.menuItems["Custom Equalizer…"].click()
         let editor = app.windows["Equalizer"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 3))
+        XCTAssertTrue(editor.waitUntilExists(timeout: 3))
         XCTAssertEqual(editor.sliders.count, 6)
         let faders = ["Clear Bass", "400 Hz", "1 kHz", "2.5 kHz", "6.3 kHz", "16 kHz"].map { editor.sliders[$0] }
         for (index, fader) in faders.enumerated() {
@@ -1959,7 +1982,7 @@ final class AppUITests: XCTestCase {
         name.typeText("Travel")
         XCTAssertEqual(name.value as? String, "Travel")
         editor.buttons["Save"].click()
-        XCTAssertTrue(editor.buttons["Travel"].waitForExistence(timeout: 2))
+        XCTAssertTrue(editor.buttons["Travel"].waitUntilExists(timeout: 2))
         editor.buttons["Reset Flat"].click()
         for fader in faders { XCTAssertEqual((fader.value as? NSNumber)?.intValue, 0) }
         editor.buttons["Travel"].click()
@@ -1969,30 +1992,30 @@ final class AppUITests: XCTestCase {
         name.click()
         name.typeText(" travel ")
         editor.buttons["Save"].click()
-        XCTAssertTrue(editor.sheets.firstMatch.waitForExistence(timeout: 2))
+        XCTAssertTrue(editor.sheets.firstMatch.waitUntilExists(timeout: 2))
         editor.sheets.buttons["Cancel"].click()
-        XCTAssertTrue(editor.sheets.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(editor.sheets.firstMatch.waitUntilGone(timeout: 3))
         editor.buttons["Travel"].click()
         XCTAssertEqual((bass.value as? NSNumber)?.intValue, savedBass)
         XCTAssertEqual((band.value as? NSNumber)?.intValue, savedBand)
         editor.buttons["Reset Flat"].click()
         editor.buttons["Save"].click()
-        XCTAssertTrue(editor.sheets.firstMatch.waitForExistence(timeout: 2))
+        XCTAssertTrue(editor.sheets.firstMatch.waitUntilExists(timeout: 2))
         editor.sheets.buttons["Replace"].click()
-        XCTAssertTrue(editor.sheets.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(editor.sheets.firstMatch.waitUntilGone(timeout: 3))
         bass.adjust(toNormalizedSliderPosition: 0.75)
         editor.buttons["Travel"].click()
         for fader in faders { XCTAssertEqual((fader.value as? NSNumber)?.intValue, 0) }
         editor.buttons["Delete Travel"].click()
-        XCTAssertTrue(editor.sheets.firstMatch.waitForExistence(timeout: 2))
+        XCTAssertTrue(editor.sheets.firstMatch.waitUntilExists(timeout: 2))
         editor.sheets.buttons["Cancel"].click()
-        XCTAssertTrue(editor.sheets.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(editor.sheets.firstMatch.waitUntilGone(timeout: 3))
         XCTAssertTrue(editor.buttons["Travel"].exists)
         editor.buttons["Delete Travel"].click()
-        XCTAssertTrue(editor.sheets.firstMatch.waitForExistence(timeout: 2))
+        XCTAssertTrue(editor.sheets.firstMatch.waitUntilExists(timeout: 2))
         editor.sheets.buttons["Delete"].click()
-        XCTAssertTrue(editor.sheets.firstMatch.waitForNonExistence(timeout: 3))
-        XCTAssertTrue(editor.buttons["Travel"].waitForNonExistence(timeout: 2))
+        XCTAssertTrue(editor.sheets.firstMatch.waitUntilGone(timeout: 3))
+        XCTAssertTrue(editor.buttons["Travel"].waitUntilGone(timeout: 2))
         let eq = XCTAttachment(screenshot: editor.screenshot())
         eq.name = "Native equalizer"
         eq.lifetime = .keepAlways
@@ -2006,11 +2029,11 @@ final class AppUITests: XCTestCase {
         defer { app.terminate() }
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--gallery-model", "wfXM3", "--light-appearance", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         app.menuButtons["More"].click()
         app.menuItems["Custom Equalizer…"].click()
         let editor = app.windows["Equalizer"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 3))
+        XCTAssertTrue(editor.waitUntilExists(timeout: 3))
         XCTAssertEqual(editor.sliders.count, 6)
         let bass = editor.sliders["Clear Bass"]
         bass.adjust(toNormalizedSliderPosition: 0.75)
@@ -2026,7 +2049,7 @@ final class AppUITests: XCTestCase {
         XCTAssertFalse(savedName.isEmpty)
         editor.buttons["Save"].click()
         let savedPreset = editor.buttons[savedName]
-        XCTAssertTrue(savedPreset.waitForExistence(timeout: 3))
+        XCTAssertTrue(savedPreset.waitUntilExists(timeout: 3))
         XCTAssertFalse(savedPreset.isEnabled)
         XCTAssertTrue(editor.staticTexts["Choose Manual to apply this draft."].exists)
         XCTAssertTrue(manual.isEnabled)
@@ -2035,11 +2058,11 @@ final class AppUITests: XCTestCase {
         captureGalleryScreenshot(editor.screenshot(), named: "Legacy equalizer — noneditable headphone state, saved local draft")
         manual.click()
         let apply = editor.buttons["Apply equalizer to headphones"]
-        XCTAssertTrue(apply.waitForExistence(timeout: 3))
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: apply)], timeout: 3), .completed)
+        XCTAssertTrue(apply.waitUntilExists(timeout: 3))
+        XCTAssertTrue(apply.waitUntil(\.isEnabled, equals: true, timeout: 3))
         XCTAssertEqual((bass.value as? NSNumber)?.intValue, draft)
         apply.click()
-        XCTAssertTrue(editor.staticTexts["Applied to headphones."].waitForExistence(timeout: 4))
+        XCTAssertTrue(editor.staticTexts["Applied to headphones."].waitUntilExists(timeout: 4))
         let screenshot = XCTAttachment(screenshot: editor.screenshot())
         screenshot.name = "Legacy equalizer confirmed Manual curve"
         screenshot.lifetime = .keepAlways
@@ -2052,7 +2075,7 @@ final class AppUITests: XCTestCase {
         defer { app.terminate() }
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--ten-band-equalizer", "--dark-appearance", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         let preset = app.popUpButtons["equalizer.preset"]
         preset.click()
         XCTAssertTrue(app.menuItems["Clear"].exists)
@@ -2061,7 +2084,7 @@ final class AppUITests: XCTestCase {
         app.menuButtons["More"].click()
         app.menuItems["Custom Equalizer…"].click()
         let editor = app.windows["Equalizer"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 3))
+        XCTAssertTrue(editor.waitUntilExists(timeout: 3))
         XCTAssertEqual(editor.sliders.count, 10)
         XCTAssertFalse(editor.sliders["Clear Bass"].exists)
         let labels = ["31 Hz", "63 Hz", "125 Hz", "250 Hz", "500 Hz", "1 kHz", "2 kHz", "4 kHz", "8 kHz", "16 kHz"]
@@ -2074,7 +2097,7 @@ final class AppUITests: XCTestCase {
         editor.sliders["16 kHz"].adjust(toNormalizedSliderPosition: 1)
         XCTAssertEqual((editor.sliders["31 Hz"].value as? NSNumber)?.intValue, -6)
         XCTAssertEqual((editor.sliders["16 kHz"].value as? NSNumber)?.intValue, 6)
-        XCTAssertTrue(editor.staticTexts["Applied to headphones."].waitForExistence(timeout: 4))
+        XCTAssertTrue(editor.staticTexts["Applied to headphones."].waitUntilExists(timeout: 4))
         let shot = XCTAttachment(screenshot: editor.screenshot())
         shot.name = "Ten-band native equalizer"
         shot.lifetime = .keepAlways
@@ -2088,16 +2111,16 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--open-equalizer-intent", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         let editor = app.windows["Equalizer"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertTrue(editor.waitUntilExists(timeout: 5))
         XCTAssertTrue(editor.sliders["Clear Bass"].isHittable)
         XCTAssertFalse(app.windows["com_apple_SwiftUI_Settings_window"].exists)
         XCTAssertFalse(app.windows["Headphone Controls"].exists)
         editor.buttons[XCUIIdentifierCloseWindow].click()
-        XCTAssertTrue(editor.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(editor.waitUntilGone(timeout: 3))
         app.statusItems.firstMatch.click()
         app.menuButtons["More"].click()
         app.menuItems["Custom Equalizer…"].click()
-        XCTAssertTrue(editor.waitForExistence(timeout: 3))
+        XCTAssertTrue(editor.waitUntilExists(timeout: 3))
         XCTAssertEqual(app.windows.matching(identifier: "Equalizer").count, 1)
         XCTAssertTrue(editor.sliders["Clear Bass"].isHittable)
     }
@@ -2113,7 +2136,7 @@ final class AppUITests: XCTestCase {
         let editor = app.windows["Equalizer"]
         let bass = editor.sliders["Clear Bass"]
         bass.adjust(toNormalizedSliderPosition: 0.75)
-        XCTAssertTrue(editor.staticTexts["Applied to headphones."].waitForExistence(timeout: 4))
+        XCTAssertTrue(editor.staticTexts["Applied to headphones."].waitUntilExists(timeout: 4))
         let statusLeft = editor.staticTexts["Applied to headphones."].frame.minX
         let editorFrame = editor.frame
         editor.buttons["Sync Equalizer"].click()
@@ -2123,14 +2146,14 @@ final class AppUITests: XCTestCase {
         bass.adjust(toNormalizedSliderPosition: 0.25)
         let draft = try XCTUnwrap((bass.value as? NSNumber)?.intValue)
         XCTAssertLessThan(draft, 0)
-        XCTAssertTrue(editor.staticTexts["Applied to headphones."].waitForExistence(timeout: 5))
+        XCTAssertTrue(editor.staticTexts["Applied to headphones."].waitUntilExists(timeout: 5))
         XCTAssertEqual((bass.value as? NSNumber)?.intValue, draft)
         editor.buttons[XCUIIdentifierCloseWindow].click()
-        XCTAssertTrue(editor.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(editor.waitUntilGone(timeout: 3))
         app.statusItems.firstMatch.click()
         app.menuButtons["More"].click()
         app.menuItems["Custom Equalizer…"].click()
-        XCTAssertTrue(editor.waitForExistence(timeout: 3))
+        XCTAssertTrue(editor.waitUntilExists(timeout: 3))
         XCTAssertEqual((bass.value as? NSNumber)?.intValue, draft)
     }
 
@@ -2140,20 +2163,20 @@ final class AppUITests: XCTestCase {
         defer { app.terminate() }
         app.launchArguments = ["-ui-testing", "-AppleLanguages", "(en)"]
         app.launch()
-        XCTAssertTrue(app.statusItems.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.statusItems.firstMatch.waitUntilExists(timeout: 5))
         XCTAssertEqual(app.windows.count, 0)
         app.statusItems.firstMatch.click()
         app.buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
-        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 5))
+        XCTAssertTrue(settingsWindow.waitUntilExists(timeout: 5))
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.statusItems.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertFalse(settingsWindow.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.statusItems.firstMatch.waitUntilExists(timeout: 5))
+        XCTAssertFalse(settingsWindow.waitUntilExists(timeout: 3))
         XCTAssertEqual(app.windows.count, 0)
         app.statusItems.firstMatch.click()
         app.buttons["menu.settings"].click()
-        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 5))
+        XCTAssertTrue(settingsWindow.waitUntilExists(timeout: 5))
     }
 
     @MainActor
@@ -2163,19 +2186,19 @@ final class AppUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         let panel = app.windows["Headphone Controls"]
-        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        XCTAssertTrue(panel.waitUntilExists(timeout: 5))
         panel.buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
-        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 5))
+        XCTAssertTrue(settingsWindow.waitUntilExists(timeout: 5))
         XCTAssertEqual(settingsWindow.title, "General")
         XCTAssertTrue(settingsWindow.descendants(matching: .any)["settings.systemAccent"].exists)
         selectSettingsPane("headphones", in: settingsWindow)
         selectSettingsPane("advanced", in: settingsWindow)
         settingsWindow.buttons[XCUIIdentifierCloseWindow].click()
-        XCTAssertTrue(settingsWindow.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(settingsWindow.waitUntilGone(timeout: 3))
         app.statusItems.firstMatch.click()
         app.buttons["menu.settings"].click()
-        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 3))
+        XCTAssertTrue(settingsWindow.waitUntilExists(timeout: 3))
         XCTAssertEqual(settingsWindow.title, "Advanced")
         let screenshot = XCTAttachment(screenshot: settingsWindow.screenshot())
         screenshot.name = "Native Settings reopened to Advanced"
@@ -2190,7 +2213,7 @@ final class AppUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         let panel = app.windows["Headphone Controls"]
-        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        XCTAssertTrue(panel.waitUntilExists(timeout: 5))
         let settings = app.windows["com_apple_SwiftUI_Settings_window"]
 
         func snapshot() async throws -> (phase: String, visible: Bool, body: Int, appeared: Int, disappeared: Int) {
@@ -2206,7 +2229,7 @@ final class AppUITests: XCTestCase {
         }
 
         panel.buttons["Open Settings"].click()
-        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        XCTAssertTrue(settings.waitUntilExists(timeout: 3))
         selectSettingsPane("headphones", in: settings)
         let frame = settings.frame
         let visible = try await snapshot()
@@ -2225,7 +2248,7 @@ final class AppUITests: XCTestCase {
 
         settings.toolbars.buttons["Headphones"].click()
         app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(settings.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(settings.waitUntilGone(timeout: 3))
         let closed = try await snapshot()
         XCTAssertFalse(closed.visible)
         XCTAssertEqual(closed.appeared, closed.disappeared)
@@ -2247,7 +2270,7 @@ final class AppUITests: XCTestCase {
         add(evidence)
 
         panel.buttons["Open Settings"].click()
-        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        XCTAssertTrue(settings.waitUntilExists(timeout: 3))
         XCTAssertEqual(settings.title, "Headphones")
         XCTAssertEqual(settings.frame, frame)
         XCTAssertTrue(settings.staticTexts["LDAC"].exists)
@@ -2264,9 +2287,9 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--bluetooth-permission-pending", "-AppleLanguages", "(en)"]
         app.launch()
         let window = app.windows["Headphone Controls"]
-        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        XCTAssertTrue(window.waitUntilExists(timeout: 5))
         let status = window.descendants(matching: .any).matching(identifier: "headphones.connectionStatus").firstMatch
-        XCTAssertTrue(status.waitForExistence(timeout: 3))
+        XCTAssertTrue(status.waitUntilExists(timeout: 3))
         XCTAssertEqual(status.value as? String ?? status.label, "Checking Bluetooth…")
         XCTAssertTrue(window.staticTexts["Waiting for Bluetooth permission…"].exists)
         XCTAssertFalse(window.buttons["headphones.connect"].exists)
@@ -2295,7 +2318,7 @@ final class AppUITests: XCTestCase {
             if systemRead { app.launchArguments.append("--optional-system-read-timeout") }
             app.launch()
             let panel = app.windows["Headphone Controls"]
-            XCTAssertTrue(panel.waitForExistence(timeout: 5))
+            XCTAssertTrue(panel.waitUntilExists(timeout: 5))
             let title = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 12))
             title.press(forDuration: 0.1, thenDragTo: title.withOffset(CGVector(
                 dx: 20 - panel.frame.minX, dy: 90 - panel.frame.minY
@@ -2304,7 +2327,7 @@ final class AppUITests: XCTestCase {
             panel.buttons["test.optionalRead.expire"].click()
             panel.buttons["test.optionalRead.settings"].click()
             let settings = app.windows["com_apple_SwiftUI_Settings_window"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 3))
+            XCTAssertTrue(settings.waitUntilExists(timeout: 3))
             settings.toolbars.buttons[language == "tr" ? "Kulaklıklar" : "Headphones"].click()
             let message = language == "tr" ? "Kulaklık ayarları alınamadı. Yeniden denemek için yenileyin."
                 : "Headphone settings were not received. Refresh to try again."
@@ -2330,20 +2353,18 @@ final class AppUITests: XCTestCase {
             refresh.click()
             XCTAssertFalse(panel.buttons["noiseControl.anc"].exists)
             panel.buttons["test.optionalRead.recover"].click()
-            XCTAssertTrue(panel.buttons["noiseControl.anc"].waitForExistence(timeout: 3))
+            XCTAssertTrue(panel.buttons["noiseControl.anc"].waitUntilExists(timeout: 3))
             settings.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 12)).click()
             settings.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: 2000)
             let pause = settings.switches["system.1"]
-            XCTAssertTrue(pause.waitForExistence(timeout: 3))
+            XCTAssertTrue(pause.waitUntilExists(timeout: 3))
             for _ in 0..<15 where !pause.isHittable {
                 settings.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -250)
             }
             XCTAssertTrue(pause.isEnabled)
             XCTAssertTrue(pause.isHittable)
             pause.click()
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "value == 0"), object: pause
-            )], timeout: 3), .completed)
+            XCTAssertTrue(pause.waitUntil(\.integerValue, equals: 0, timeout: 3))
             let assignment = settings.popUpButtons["touch.assignment.0"]
             for _ in 0..<15 where !assignment.isHittable {
                 settings.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -250)
@@ -2365,7 +2386,7 @@ final class AppUITests: XCTestCase {
                                    "-AppleLanguages", "(\(language))", "-AppleLocale", language == "tr" ? "tr_TR" : "en_US"]
             app.launch()
             let panel = app.windows["Headphone Controls"]
-            XCTAssertTrue(panel.waitForExistence(timeout: 5))
+            XCTAssertTrue(panel.waitUntilExists(timeout: 5))
             let title = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 12))
             title.press(forDuration: 0.1, thenDragTo: title.withOffset(CGVector(
                 dx: 20 - panel.frame.minX, dy: 90 - panel.frame.minY
@@ -2374,7 +2395,7 @@ final class AppUITests: XCTestCase {
             panel.buttons["test.optionalRead.expire"].click()
             panel.buttons["test.optionalRead.settings"].click()
             let settings = app.windows["com_apple_SwiftUI_Settings_window"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 3))
+            XCTAssertTrue(settings.waitUntilExists(timeout: 3))
             settings.toolbars.buttons[language == "tr" ? "Kulaklıklar" : "Headphones"].click()
             let messages = language == "tr"
                 ? ["DSEE ayarları kullanılamıyor.", "Çevresel Ses (VPT) ayarları kullanılamıyor."]
@@ -2383,12 +2404,12 @@ final class AppUITests: XCTestCase {
                 if phase == "reused handshake" {
                     panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 12)).click()
                     panel.buttons["test.optionalRead.rehandshake"].click()
-                    XCTAssertTrue(panel.buttons["noiseControl.anc"].waitForExistence(timeout: 3))
+                    XCTAssertTrue(panel.buttons["noiseControl.anc"].waitUntilExists(timeout: 3))
                     settings.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0)).withOffset(CGVector(dx: 0, dy: 12)).click()
                 }
                 for message in messages {
                     let error = settings.staticTexts[message]
-                    XCTAssertTrue(error.waitForExistence(timeout: 3), settings.debugDescription)
+                    XCTAssertTrue(error.waitUntilExists(timeout: 3), settings.debugDescription)
                     for _ in 0..<10 where !error.isHittable {
                         settings.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -150)
                     }
@@ -2404,7 +2425,7 @@ final class AppUITests: XCTestCase {
             panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 12)).click()
             panel.buttons["test.optionalRead.recover"].click()
             settings.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0)).withOffset(CGVector(dx: 0, dy: 12)).click()
-            for message in messages { XCTAssertTrue(settings.staticTexts[message].waitForNonExistence(timeout: 3)) }
+            for message in messages { XCTAssertTrue(settings.staticTexts[message].waitUntilGone(timeout: 3)) }
             let dsee = settings.popUpButtons["audio.dsee"]
             let surround = settings.popUpButtons["audio.surround"]
             XCTAssertTrue(dsee.isEnabled)
@@ -2413,9 +2434,7 @@ final class AppUITests: XCTestCase {
             XCTAssertTrue(surround.isHittable)
             surround.click()
             app.menuItems[language == "tr" ? "Konser Salonu" : "Concert Hall"].click()
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "value == %@", language == "tr" ? "Konser Salonu" : "Concert Hall"), object: surround
-            )], timeout: 3), .completed)
+            XCTAssertTrue(surround.waitUntil(\.stringValue, equals: language == "tr" ? "Konser Salonu" : "Concert Hall", timeout: 3))
             captureGalleryScreenshot(settings.screenshot(), named: "Legacy optional read timeout — \(language), recovered native picker")
             app.terminate()
         }
@@ -2430,12 +2449,12 @@ final class AppUITests: XCTestCase {
                                    "-AppleLocale", language == "tr" ? "tr_TR" : "en_US"]
             app.launch()
             let window = app.windows["Headphone Controls"]
-            XCTAssertTrue(window.waitForExistence(timeout: 5))
+            XCTAssertTrue(window.waitUntilExists(timeout: 5))
             let success = window.descendants(matching: .any).matching(identifier: "headphones.connected").firstMatch
             XCTAssertFalse(success.exists)
             window.buttons["test.controlsBusy"].click()
             let status = window.descendants(matching: .any).matching(identifier: "headphones.connectionStatus").firstMatch
-            XCTAssertTrue(status.waitForExistence(timeout: 3))
+            XCTAssertTrue(status.waitUntilExists(timeout: 3))
             XCTAssertEqual(status.value as? String ?? status.label, language == "tr" ? "Denetimlere bağlanılamadı" : "Couldn’t connect to controls")
             let retry = window.buttons["headphones.connect"]
             XCTAssertEqual(retry.label, language == "tr" ? "Yeniden Dene" : "Retry")
@@ -2452,11 +2471,11 @@ final class AppUITests: XCTestCase {
             XCTAssertTrue(retry.isEnabled)
             XCTAssertTrue(guidance.exists)
             XCTAssertEqual(status.value as? String ?? status.label, language == "tr" ? "Denetimlere bağlanılamadı" : "Couldn’t connect to controls")
-            XCTAssertFalse(status.waitForNonExistence(timeout: 2.5))
+            XCTAssertFalse(status.waitUntilGone(timeout: 2.5))
             XCTAssertFalse(success.exists)
             captureGalleryScreenshot(window.screenshot(), named: "Controls — connection unavailable — \(language)")
             window.buttons["test.connectWF"].click()
-            XCTAssertTrue(window.buttons["noiseControl.anc"].waitForExistence(timeout: 3))
+            XCTAssertTrue(window.buttons["noiseControl.anc"].waitUntilExists(timeout: 3))
             XCTAssertFalse(success.exists)
             captureGalleryScreenshot(window.screenshot(), named: "Controls — connection restored — \(language)")
             XCTAssertFalse(status.exists)
@@ -2472,8 +2491,8 @@ final class AppUITests: XCTestCase {
         defer { app.terminate() }
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--disconnected", "-AppleLanguages", "(en)"]
         app.launch()
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["headphones.connect"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
+        XCTAssertTrue(app.buttons["headphones.connect"].waitUntilExists(timeout: 3))
         XCTAssertFalse(app.buttons["noiseControl.anc"].exists)
         app.windows["Headphone Controls"].buttons["menu.settings"].click()
         let disconnectedSettings = app.windows["com_apple_SwiftUI_Settings_window"]
@@ -2492,8 +2511,8 @@ final class AppUITests: XCTestCase {
         app.terminate()
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--wh-device", "-AppleLanguages", "(en)"]
         app.launch()
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.images["device.artwork.whXM5"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
+        XCTAssertTrue(app.images["device.artwork.whXM5"].waitUntilExists(timeout: 3))
         app.windows["Headphone Controls"].buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         selectSettingsPane("headphones", in: settingsWindow)
@@ -2508,22 +2527,22 @@ final class AppUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing", "--ui-test-host", "-AppleLanguages", "(en)"]
         app.launch()
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         app.windows["Headphone Controls"].buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         selectSettingsPane("headphones", in: settingsWindow)
-        XCTAssertTrue(app.staticTexts["AAC"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["AAC"].waitUntilExists(timeout: 3))
         let connection = settingsWindow.popUpButtons["audio.connectionMode"]
-        XCTAssertTrue(connection.waitForExistence(timeout: 3))
+        XCTAssertTrue(connection.waitUntilExists(timeout: 3))
         XCTAssertEqual(connection.value as? String, "Sound Quality")
         let dsee = settingsWindow.popUpButtons["audio.dsee"]
-        XCTAssertTrue(dsee.waitForExistence(timeout: 3))
+        XCTAssertTrue(dsee.waitUntilExists(timeout: 3))
         dsee.click()
         app.menuItems["Off"].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Off"), object: dsee)], timeout: 3), .completed)
+        XCTAssertTrue(dsee.waitUntil(\.stringValue, equals: "Off", timeout: 3))
         dsee.click()
         app.menuItems["Auto"].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Auto"), object: dsee)], timeout: 3), .completed)
+        XCTAssertTrue(dsee.waitUntil(\.stringValue, equals: "Auto", timeout: 3))
         let screenshot = XCTAttachment(screenshot: settingsWindow.screenshot())
         screenshot.name = "Native codec and DSEE settings"
         screenshot.lifetime = .keepAlways
@@ -2540,7 +2559,7 @@ final class AppUITests: XCTestCase {
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         selectSettingsPane("headphones", in: settingsWindow)
         let connection = settingsWindow.popUpButtons["audio.connectionMode"]
-        XCTAssertTrue(connection.waitForExistence(timeout: 3))
+        XCTAssertTrue(connection.waitUntilExists(timeout: 3))
         XCTAssertFalse(settingsWindow.staticTexts["audio.connectionModeRequirement"].exists)
         XCTAssertFalse(settingsWindow.staticTexts.containing(NSPredicate(format: "value CONTAINS %@", "LE Audio is experimental")).firstMatch.exists)
         connection.click()
@@ -2554,28 +2573,28 @@ final class AppUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing", "--ui-test-host", "-AppleLanguages", "(en)"]
         app.launch()
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         app.windows["Headphone Controls"].buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         selectSettingsPane("headphones", in: settingsWindow)
         let connection = settingsWindow.popUpButtons["audio.connectionMode"]
-        XCTAssertTrue(connection.waitForExistence(timeout: 3))
+        XCTAssertTrue(connection.waitUntilExists(timeout: 3))
         connection.click()
         app.menuItems["Stable Connection"].click()
         let cancel = settingsWindow.sheets.buttons["Cancel"]
-        XCTAssertTrue(cancel.waitForExistence(timeout: 3))
+        XCTAssertTrue(cancel.waitUntilExists(timeout: 3))
         cancel.click()
         XCTAssertEqual(connection.value as? String, "Sound Quality")
         connection.click()
         app.menuItems["Stable Connection"].click()
         let proceed = settingsWindow.sheets.buttons["Continue"]
-        XCTAssertTrue(proceed.waitForExistence(timeout: 3))
+        XCTAssertTrue(proceed.waitUntilExists(timeout: 3))
         let alert = XCTAttachment(screenshot: app.screenshot())
         alert.name = "Sony connection confirmation in a native alert"
         alert.lifetime = .keepAlways
         add(alert)
         proceed.click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Stable Connection"), object: connection)], timeout: 3), .completed)
+        XCTAssertTrue(connection.waitUntil(\.stringValue, equals: "Stable Connection", timeout: 3))
         XCTAssertTrue(app.staticTexts["AAC"].exists)
     }
 
@@ -2590,7 +2609,7 @@ final class AppUITests: XCTestCase {
             if variant == "caution" { app.launchArguments.append("--legacy-quality-caution") }
             app.launch()
             let settings = app.buttons["menu.settings"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            XCTAssertTrue(settings.waitUntilExists(timeout: 5))
             settings.click()
             let window = app.windows["com_apple_SwiftUI_Settings_window"]
             selectSettingsPane("headphones", in: window)
@@ -2600,13 +2619,13 @@ final class AppUITests: XCTestCase {
                 app.terminate()
                 continue
             }
-            XCTAssertTrue(picker.waitForExistence(timeout: 3))
+            XCTAssertTrue(picker.waitUntilExists(timeout: 3))
             XCTAssertEqual(picker.value as? String, "Sound Quality")
             picker.click()
             XCTAssertFalse(app.menuItems["Low Latency"].exists)
             app.menuItems["Stable Connection"].click()
             let cancel = window.sheets.buttons["Cancel"]
-            XCTAssertTrue(cancel.waitForExistence(timeout: 3))
+            XCTAssertTrue(cancel.waitUntilExists(timeout: 3))
             XCTAssertTrue(window.sheets.buttons["Change Preference"].exists)
             cancel.click()
             XCTAssertEqual(picker.value as? String, "Sound Quality")
@@ -2614,17 +2633,16 @@ final class AppUITests: XCTestCase {
                 picker.click()
                 app.menuItems[target].click()
                 let change = window.sheets.buttons["Change Preference"]
-                XCTAssertTrue(change.waitForExistence(timeout: 3))
+                XCTAssertTrue(change.waitUntilExists(timeout: 3))
                 change.click()
                 if variant == "caution" {
                     let proceed = window.sheets.buttons["Continue"]
-                    XCTAssertTrue(proceed.waitForExistence(timeout: 3))
+                    XCTAssertTrue(proceed.waitUntilExists(timeout: 3))
                     XCTAssertTrue(window.sheets.staticTexts["Use Stable Connection?"].exists)
                     proceed.click()
                 }
                 let expected = variant == "caution" ? "Stable Connection" : target
-                XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "value == %@ AND isEnabled == true", expected), object: picker)], timeout: 3), .completed)
+                XCTAssertTrue(picker.waitUntil(NSPredicate(format: "value == %@ AND isEnabled == true", expected), timeout: 3))
             }
             let capture = XCTAttachment(screenshot: window.screenshot())
             capture.name = "Legacy connection preference — synthetic \(variant)"
@@ -2640,7 +2658,7 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--delayed-connection-alert", "-AppleLanguages", "(en)"]
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         app.windows["Headphone Controls"].buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         for pane in ["general", "advanced"] {
@@ -2650,7 +2668,7 @@ final class AppUITests: XCTestCase {
             app.menuItems["Stable Connection"].click()
             selectSettingsPane(pane, in: settingsWindow)
             let cancel = settingsWindow.sheets.buttons["Cancel"]
-            XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+            XCTAssertTrue(cancel.waitUntilExists(timeout: 5))
             let alert = XCTAttachment(screenshot: settingsWindow.screenshot())
             alert.name = "Connection confirmation received from \(pane)"
             alert.lifetime = .keepAlways
@@ -2670,7 +2688,7 @@ final class AppUITests: XCTestCase {
         let panel = app.windows["Headphone Controls"]
         let identifiers = ["02:00:00:00:00:01", "02:00:00:00:00:02", "02:00:00:00:00:04", "02:00:00:00:00:05"]
         let buttons = identifiers.map { panel.buttons["multipoint.sourcePicker.\($0)"] }
-        XCTAssertTrue(buttons[0].waitForExistence(timeout: 5))
+        XCTAssertTrue(buttons[0].waitUntilExists(timeout: 5))
         XCTAssertEqual(buttons[0].frame.minY, buttons[1].frame.minY, accuracy: 1)
         XCTAssertEqual(buttons[2].frame.minY, buttons[3].frame.minY, accuracy: 1)
         XCTAssertGreaterThan(buttons[2].frame.minY, buttons[0].frame.maxY)
@@ -2680,12 +2698,12 @@ final class AppUITests: XCTestCase {
         XCTAssertGreaterThan(buttons[0].frame.minY, panel.staticTexts["Focus on Voice"].firstMatch.frame.maxY)
         XCTAssertLessThan(buttons[3].frame.maxY, panel.staticTexts["Equalizer"].firstMatch.frame.minY)
         buttons[3].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Selected for audio"), object: buttons[3])], timeout: 4), .completed)
+        XCTAssertTrue(buttons[3].waitUntil(\.stringValue, equals: "Selected for audio", timeout: 4))
         XCTAssertEqual(buttons[0].value as? String, "Not selected")
         captureGalleryScreenshot(panel.screenshot(), named: "Compact source selector — four connected devices")
         panel.buttons["multipoint.open"].click()
         let manager = app.descendants(matching: .any).matching(identifier: "multipoint.popover").firstMatch
-        XCTAssertTrue(manager.waitForExistence(timeout: 3))
+        XCTAssertTrue(manager.waitUntilExists(timeout: 3))
         XCTAssertTrue(manager.staticTexts["Connected"].firstMatch.exists)
         XCTAssertTrue(manager.staticTexts["Saved"].firstMatch.exists)
         let phone = manager.buttons["multipoint.select.02:00:00:00:00:02"]
@@ -2693,7 +2711,7 @@ final class AppUITests: XCTestCase {
         phone.hover()
         XCTAssertTrue(manager.buttons["multipoint.disconnect.02:00:00:00:00:02"].isHittable)
         phone.click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Selected for audio"), object: phone)], timeout: 4), .completed)
+        XCTAssertTrue(phone.waitUntil(\.stringValue, equals: "Selected for audio", timeout: 4))
         let saved = manager.descendants(matching: .any).matching(identifier: "multipoint.row.02:00:00:00:00:03").firstMatch
         saved.hover()
         XCTAssertFalse(manager.buttons["multipoint.connect.02:00:00:00:00:03"].isEnabled)
@@ -2702,7 +2720,7 @@ final class AppUITests: XCTestCase {
         captureGalleryScreenshot(manager.screenshot(), named: "Connected and saved devices — hover actions")
         manager.buttons["multipoint.select.02:00:00:00:00:05"].hover()
         manager.buttons["multipoint.disconnect.02:00:00:00:00:05"].click()
-        XCTAssertTrue(manager.buttons["multipoint.select.02:00:00:00:00:05"].waitForNonExistence(timeout: 4))
+        XCTAssertTrue(manager.buttons["multipoint.select.02:00:00:00:00:05"].waitUntilGone(timeout: 4))
         let connect = manager.buttons["multipoint.connect.02:00:00:00:00:03"]
         saved.hover()
         let connectReady = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: connect)], timeout: 4)
@@ -2719,7 +2737,7 @@ final class AppUITests: XCTestCase {
         } else {
             connect.click()
         }
-        XCTAssertTrue(manager.buttons["multipoint.select.02:00:00:00:00:03"].waitForExistence(timeout: 4))
+        XCTAssertTrue(manager.buttons["multipoint.select.02:00:00:00:00:03"].waitUntilExists(timeout: 4))
         XCTAssertEqual(phone.value as? String, "Selected for audio")
     }
 
@@ -2732,19 +2750,19 @@ final class AppUITests: XCTestCase {
             app.launch()
             let panel = app.windows["Headphone Controls"]
             let manage = panel.buttons["multipoint.open"]
-            XCTAssertTrue(manage.waitForExistence(timeout: 5))
+            XCTAssertTrue(manage.waitUntilExists(timeout: 5))
             manage.click()
             let disconnect = app.buttons["multipoint.disconnect.02:00:00:00:00:02"]
             let phone = app.buttons["multipoint.select.02:00:00:00:00:02"]
-            XCTAssertTrue(phone.waitForExistence(timeout: 3))
+            XCTAssertTrue(phone.waitUntilExists(timeout: 3))
             phone.hover()
-            XCTAssertTrue(disconnect.waitForExistence(timeout: 3))
+            XCTAssertTrue(disconnect.waitUntilExists(timeout: 3))
             let manager = app.descendants(matching: .any).matching(identifier: "multipoint.popover").firstMatch
             XCTAssertLessThanOrEqual(manager.frame.width, 322)
             XCTAssertLessThanOrEqual(manager.frame.height, 400)
             captureGalleryScreenshot(manager.screenshot(), named: "Compact multipoint — \(appearance)")
             disconnect.click()
-            XCTAssertTrue(manage.waitForNonExistence(timeout: 5))
+            XCTAssertTrue(manage.waitUntilGone(timeout: 5))
             XCTAssertTrue(panel.buttons["menu.settings"].isHittable)
         }
     }
@@ -2756,11 +2774,11 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--hold-source-replies", "-AppleLanguages", "(en)"]
         app.launch()
         let panel = app.windows["Headphone Controls"]
-        XCTAssertTrue(panel.buttons["multipoint.open"].waitForExistence(timeout: 5))
+        XCTAssertTrue(panel.buttons["multipoint.open"].waitUntilExists(timeout: 5))
         panel.buttons["multipoint.open"].click()
         let manager = app.descendants(matching: .any).matching(identifier: "multipoint.popover").firstMatch
         let phone = manager.buttons["multipoint.select.02:00:00:00:00:02"]
-        XCTAssertTrue(phone.waitForExistence(timeout: 3))
+        XCTAssertTrue(phone.waitUntilExists(timeout: 3))
         let frame = manager.frame
         let rowFrame = phone.frame
         phone.click()
@@ -2781,11 +2799,11 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--hold-source-replies", "-AppleLanguages", "(en)"]
         app.launch()
         let panel = app.windows["Headphone Controls"]
-        XCTAssertTrue(panel.buttons["multipoint.open"].waitForExistence(timeout: 5))
+        XCTAssertTrue(panel.buttons["multipoint.open"].waitUntilExists(timeout: 5))
         panel.buttons["multipoint.open"].click()
         let manager = app.descendants(matching: .any).matching(identifier: "multipoint.popover").firstMatch
         let phone = manager.buttons["multipoint.select.02:00:00:00:00:02"]
-        XCTAssertTrue(phone.waitForExistence(timeout: 3))
+        XCTAssertTrue(phone.waitUntilExists(timeout: 3))
         phone.hover()
         let disconnect = manager.buttons["multipoint.disconnect.02:00:00:00:00:02"]
         XCTAssertTrue(disconnect.isHittable)
@@ -2794,7 +2812,7 @@ final class AppUITests: XCTestCase {
         let buttonFrame = disconnect.frame
         disconnect.click()
         let progress = manager.activityIndicators["multipoint.progress.02:00:00:00:00:02"]
-        XCTAssertTrue(progress.waitForExistence(timeout: 3))
+        XCTAssertTrue(progress.waitUntilExists(timeout: 3))
         XCTAssertEqual(progress.label, "Disconnecting device…")
         manager.staticTexts["Connected"].firstMatch.hover()
         XCTAssertFalse(disconnect.exists)
@@ -2816,48 +2834,44 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         let panel = app.windows["Headphone Controls"]
-        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        XCTAssertTrue(panel.waitUntilExists(timeout: 5))
         panel.buttons["multipoint.open"].click()
         let manager = app.descendants(matching: .any).matching(identifier: "multipoint.popover").firstMatch
         let compactMultipoint = manager.descendants(matching: .any).matching(identifier: "multipoint.enabled").firstMatch
-        XCTAssertTrue(compactMultipoint.waitForExistence(timeout: 3))
+        XCTAssertTrue(compactMultipoint.waitUntilExists(timeout: 3))
         compactMultipoint.click()
         let window = app.windows["com_apple_SwiftUI_Settings_window"]
-        XCTAssertTrue(window.waitForExistence(timeout: 3))
+        XCTAssertTrue(window.waitUntilExists(timeout: 3))
         let cancel = window.sheets.buttons["Cancel"]
-        XCTAssertTrue(cancel.waitForExistence(timeout: 3))
+        XCTAssertTrue(cancel.waitUntilExists(timeout: 3))
         XCTAssertEqual(app.sheets.count, 1)
         XCTAssertEqual(window.sheets.count, 1)
         XCTAssertFalse(app.buttons["multipoint.reviewChange"].exists)
         cancel.click()
-        XCTAssertTrue(window.sheets.firstMatch.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(window.sheets.firstMatch.waitUntilGone(timeout: 3))
         selectSettingsPane("headphones", in: window)
         let multipoint = window.descendants(matching: .any).matching(identifier: "multipoint.enabled").firstMatch
-        XCTAssertTrue(multipoint.waitForExistence(timeout: 3))
+        XCTAssertTrue(multipoint.waitUntilExists(timeout: 3))
         for _ in 0..<5 where !multipoint.isHittable {
             window.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -180)
         }
         XCTAssertEqual(multipoint.value as? Int, 1)
         multipoint.click()
-        XCTAssertTrue(cancel.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(cancel.waitUntilExists(timeout: 3), app.debugDescription)
         XCTAssertFalse(window.buttons["multipoint.reviewChange"].exists)
         cancel.click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == 1 AND isEnabled == true"), object: multipoint
-        )], timeout: 4), .completed)
+        XCTAssertTrue(multipoint.waitUntil(NSPredicate(format: "value == 1 AND isEnabled == true"), timeout: 4))
         multipoint.click()
         let proceed = window.sheets.buttons["Continue"]
-        XCTAssertTrue(proceed.waitForExistence(timeout: 3))
+        XCTAssertTrue(proceed.waitUntilExists(timeout: 3))
         XCTAssertFalse(window.buttons["multipoint.reviewChange"].exists)
         proceed.click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == 0 AND isEnabled == true"), object: multipoint
-        )], timeout: 4), .completed)
+        XCTAssertTrue(multipoint.waitUntil(NSPredicate(format: "value == 0 AND isEnabled == true"), timeout: 4))
         XCTAssertFalse(window.staticTexts["multipoint.settingError"].exists)
 
         for cancelWarning in [true, false] {
             multipoint.click()
-            XCTAssertTrue(proceed.waitForExistence(timeout: 3))
+            XCTAssertTrue(proceed.waitUntilExists(timeout: 3))
             XCTAssertTrue(window.sheets.staticTexts["Enable multipoint?"].exists)
             let warningText = "Audio may cut out when Sound Quality and multipoint are both enabled."
             let message = window.sheets.staticTexts.matching(NSPredicate(
@@ -2869,17 +2883,15 @@ final class AppUITests: XCTestCase {
             XCTAssertFalse(window.buttons["multipoint.reviewChange"].exists)
             XCTAssertEqual(multipoint.value as? Int, 0)
             if cancelWarning {
-                XCTAssertTrue(cancel.waitForExistence(timeout: 3))
+                XCTAssertTrue(cancel.waitUntilExists(timeout: 3))
                 cancel.click()
             } else {
-                XCTAssertTrue(proceed.waitForExistence(timeout: 3))
+                XCTAssertTrue(proceed.waitUntilExists(timeout: 3))
                 proceed.click()
             }
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "value == %d AND isEnabled == true", cancelWarning ? 0 : 1), object: multipoint
-            )], timeout: 4), .completed)
+            XCTAssertTrue(multipoint.waitUntil(NSPredicate(format: "value == %d AND isEnabled == true", cancelWarning ? 0 : 1), timeout: 4))
             XCTAssertFalse(window.staticTexts["multipoint.settingError"].exists)
-            XCTAssertTrue(window.sheets.firstMatch.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(window.sheets.firstMatch.waitUntilGone(timeout: 3))
             XCTAssertEqual(app.sheets.count, 0)
         }
     }
@@ -2895,7 +2907,7 @@ final class AppUITests: XCTestCase {
             selectSettingsPane("headphones", in: window)
             XCTAssertTrue(window.descendants(matching: .any).matching(identifier: "audio.macOutput").firstMatch.exists)
             let phoneButton = window.buttons["multipoint.select.02:00:00:00:00:02"]
-            XCTAssertTrue(phoneButton.waitForExistence(timeout: 3))
+            XCTAssertTrue(phoneButton.waitUntilExists(timeout: 3))
             for _ in 0..<5 where !phoneButton.isHittable {
                 window.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -180)
             }
@@ -2903,14 +2915,14 @@ final class AppUITests: XCTestCase {
             XCTAssertTrue(window.buttons["multipoint.disconnect.02:00:00:00:00:02"].isHittable)
             XCTAssertEqual(window.buttons.matching(identifier: "multipoint.refresh").count, 1)
             phoneButton.click()
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Selected for audio"), object: phoneButton)], timeout: 4), .completed)
+            XCTAssertTrue(phoneButton.waitUntil(\.stringValue, equals: "Selected for audio", timeout: 4))
             let keeping = window.descendants(matching: .any).matching(identifier: "multipoint.keeping").firstMatch
             for _ in 0..<5 where !keeping.isHittable {
                 window.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -120)
             }
             XCTAssertTrue(keeping.isHittable)
             keeping.click()
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == 1"), object: keeping)], timeout: 4), .completed)
+            XCTAssertTrue(keeping.waitUntil(\.integerValue, equals: 1, timeout: 4))
             let screenshot = XCTAttachment(screenshot: window.screenshot())
             screenshot.name = "Multipoint — \(appearance)"
             screenshot.lifetime = .keepAlways
@@ -2920,7 +2932,7 @@ final class AppUITests: XCTestCase {
                 window.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: 120)
             }
             macButton.click()
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Selected for audio"), object: macButton)], timeout: 4), .completed)
+            XCTAssertTrue(macButton.waitUntil(\.stringValue, equals: "Selected for audio", timeout: 4))
             XCTAssertEqual(keeping.value as? Int, 0)
             XCTAssertFalse(window.staticTexts["multipoint.error"].exists)
             app.terminate()
@@ -2938,7 +2950,7 @@ final class AppUITests: XCTestCase {
             }
             app.launch()
             let settings = app.buttons["menu.settings"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            XCTAssertTrue(settings.waitUntilExists(timeout: 5))
             settings.click()
             let window = app.windows["com_apple_SwiftUI_Settings_window"]
             selectSettingsPane("headphones", in: window)
@@ -2946,7 +2958,7 @@ final class AppUITests: XCTestCase {
             if state == "hidden" {
                 XCTAssertFalse(picker.exists)
             } else {
-                XCTAssertTrue(picker.waitForExistence(timeout: 3))
+                XCTAssertTrue(picker.waitUntilExists(timeout: 3))
                 for _ in 0..<6 where !picker.isHittable {
                     window.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -220)
                 }
@@ -2963,8 +2975,7 @@ final class AppUITests: XCTestCase {
                         XCTAssertFalse(app.menuItems["Sony voice assistant"].exists)
                         XCTAssertFalse(app.menuItems["Siri"].exists)
                         app.menuItems[expected].click()
-                        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                            predicate: NSPredicate(format: "value == %@ AND isEnabled == true", expected), object: picker)], timeout: 3), .completed)
+                        XCTAssertTrue(picker.waitUntil(NSPredicate(format: "value == %@ AND isEnabled == true", expected), timeout: 3))
                     }
                 }
                 let capture = XCTAttachment(screenshot: window.screenshot())
@@ -2983,13 +2994,13 @@ final class AppUITests: XCTestCase {
             if advertised { app.launchArguments.append("--legacy-power") }
             app.launch()
             let settings = app.buttons["menu.settings"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            XCTAssertTrue(settings.waitUntilExists(timeout: 5))
             settings.click()
             let window = app.windows["com_apple_SwiftUI_Settings_window"]
             selectSettingsPane("headphones", in: window)
             let picker = window.popUpButtons["system.automaticPowerOff"]
             if advertised {
-                XCTAssertTrue(picker.waitForExistence(timeout: 3))
+                XCTAssertTrue(picker.waitUntilExists(timeout: 3))
                 for _ in 0..<6 where !picker.isHittable {
                     window.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -250)
                 }
@@ -2999,8 +3010,7 @@ final class AppUITests: XCTestCase {
                     picker.click()
                     XCTAssertFalse(app.menuItems["After 15 minutes"].exists)
                     app.menuItems[expected].click()
-                    XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                        predicate: NSPredicate(format: "value == %@ AND isEnabled == true", expected), object: picker)], timeout: 3), .completed)
+                    XCTAssertTrue(picker.waitUntil(NSPredicate(format: "value == %@ AND isEnabled == true", expected), timeout: 3))
                 }
                 let capture = XCTAttachment(screenshot: window.screenshot())
                 capture.name = "Legacy automatic power off — synthetic advertised capability"
@@ -3021,13 +3031,13 @@ final class AppUITests: XCTestCase {
             if advertised { app.launchArguments.append("--legacy-wearing") }
             app.launch()
             let settings = app.buttons["menu.settings"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            XCTAssertTrue(settings.waitUntilExists(timeout: 5))
             settings.click()
             let window = app.windows["com_apple_SwiftUI_Settings_window"]
             selectSettingsPane("headphones", in: window)
             let pause = window.descendants(matching: .any).matching(identifier: "system.1").firstMatch
             if advertised {
-                XCTAssertTrue(pause.waitForExistence(timeout: 3))
+                XCTAssertTrue(pause.waitUntilExists(timeout: 3))
                 for _ in 0..<6 where !pause.isHittable {
                     window.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -250)
                 }
@@ -3035,8 +3045,7 @@ final class AppUITests: XCTestCase {
                 XCTAssertEqual(pause.value as? Int, 0)
                 for expected in [1, 0] {
                     pause.click()
-                    XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                        predicate: NSPredicate(format: "value == %d AND isEnabled == true", expected), object: pause)], timeout: 3), .completed)
+                    XCTAssertTrue(pause.waitUntil(NSPredicate(format: "value == %d AND isEnabled == true", expected), timeout: 3))
                 }
                 let capture = XCTAttachment(screenshot: window.screenshot())
                 capture.name = "Legacy pause on removal — synthetic advertised capability"
@@ -3058,13 +3067,13 @@ final class AppUITests: XCTestCase {
             if !fixture.isEmpty { app.launchArguments.append(fixture) }
             app.launch()
             let settings = app.buttons["menu.settings"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            XCTAssertTrue(settings.waitUntilExists(timeout: 5))
             settings.click()
             let window = app.windows["com_apple_SwiftUI_Settings_window"]
             selectSettingsPane("headphones", in: window)
             let wakeWord = window.descendants(matching: .any).matching(identifier: "system.5").firstMatch
             if fixture == "--voice-assistant" {
-                XCTAssertTrue(wakeWord.waitForExistence(timeout: 3))
+                XCTAssertTrue(wakeWord.waitUntilExists(timeout: 3))
                 for _ in 0..<6 where !wakeWord.isHittable {
                     window.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -250)
                 }
@@ -3072,8 +3081,7 @@ final class AppUITests: XCTestCase {
                 XCTAssertEqual(wakeWord.value as? Int, 0)
                 for expected in [1, 0] {
                     wakeWord.click()
-                    XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                        predicate: NSPredicate(format: "value == %d AND isEnabled == true", expected), object: wakeWord)], timeout: 3), .completed)
+                    XCTAssertTrue(wakeWord.waitUntil(NSPredicate(format: "value == %d AND isEnabled == true", expected), timeout: 3))
                 }
                 let capture = XCTAttachment(screenshot: window.screenshot())
                 capture.name = "Voice assistant wake word — synthetic advertised capability"
@@ -3094,12 +3102,12 @@ final class AppUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         let settings = app.buttons["menu.settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertTrue(settings.waitUntilExists(timeout: 5))
         settings.click()
         let window = app.windows["com_apple_SwiftUI_Settings_window"]
         selectSettingsPane("headphones", in: window)
         let left = window.popUpButtons["touch.action.0.0"]
-        XCTAssertTrue(left.waitForExistence(timeout: 3))
+        XCTAssertTrue(left.waitUntilExists(timeout: 3))
         for _ in 0..<6 where !left.isHittable {
             window.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -400)
         }
@@ -3111,22 +3119,20 @@ final class AppUITests: XCTestCase {
         let noiseAssignment = try XCTUnwrap(leftAssignment.value as? String)
         left.click()
         app.menuItems["Noise Cancelling / Off"].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", "Noise Cancelling / Off"), object: left)], timeout: 3), .completed)
+        XCTAssertTrue(left.waitUntil(\.stringValue, equals: "Noise Cancelling / Off", timeout: 3))
         XCTAssertEqual(rightAssignment.value as? String, "Playback Control")
         XCTAssertEqual(leftAssignment.value as? String, noiseAssignment)
         rightAssignment.click()
         app.menuItems[noiseAssignment].click()
         let right = window.popUpButtons["touch.action.1.0"]
-        XCTAssertTrue(right.waitForExistence(timeout: 3))
+        XCTAssertTrue(right.waitUntilExists(timeout: 3))
         XCTAssertEqual(right.value as? String, "Noise Cancelling / Off")
         XCTAssertTrue(window.staticTexts["touch.shared.0.0"].exists)
         XCTAssertTrue(window.staticTexts["touch.shared.1.0"].exists)
         right.click()
         app.menuItems["Ambient Sound / Off"].click()
         for picker in [left, right] {
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "value == %@", "Ambient Sound / Off"), object: picker)], timeout: 3), .completed)
+            XCTAssertTrue(picker.waitUntil(\.stringValue, equals: "Ambient Sound / Off", timeout: 3))
         }
         let capture = XCTAttachment(screenshot: window.screenshot())
         capture.name = "Touch noise cycle — synthetic shared-preset capability"
@@ -3145,7 +3151,7 @@ final class AppUITests: XCTestCase {
                 if appearance == "dark" { app.launchArguments.append("--dark-appearance") }
                 app.launch()
                 let settings = app.buttons["menu.settings"]
-                XCTAssertTrue(settings.waitForExistence(timeout: 5))
+                XCTAssertTrue(settings.waitUntilExists(timeout: 5))
                 settings.click()
                 let window = app.windows["com_apple_SwiftUI_Settings_window"]
                 selectSettingsPane("headphones", in: window)
@@ -3154,7 +3160,7 @@ final class AppUITests: XCTestCase {
                 if appearance == "hidden" {
                     XCTAssertFalse(picker.exists)
                 } else {
-                    XCTAssertTrue(picker.waitForExistence(timeout: 3))
+                    XCTAssertTrue(picker.waitUntilExists(timeout: 3))
                     for _ in 0..<6 where !picker.isHittable {
                         window.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -250)
                     }
@@ -3173,8 +3179,7 @@ final class AppUITests: XCTestCase {
                     let target = model == "wfXM4" ? "Volume Control" : "Google Assistant"
                     picker.click()
                     app.menuItems[target].click()
-                    XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                        predicate: NSPredicate(format: "value == %@ AND isEnabled == true", target), object: picker)], timeout: 3), .completed)
+                    XCTAssertTrue(picker.waitUntil(NSPredicate(format: "value == %@ AND isEnabled == true", target), timeout: 3))
                     if model == "wfXM4" {
                         XCTAssertEqual(window.staticTexts["touch.gesture.0.0"].value as? String, "Tap: Volume up")
                         XCTAssertEqual(window.staticTexts["touch.gesture.0.1"].value as? String, "Double tap: Volume down")
@@ -3196,13 +3201,13 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "-AppleLanguages", "(en)"]
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         app.windows["Headphone Controls"].buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         selectSettingsPane("headphones", in: settingsWindow)
         let left = settingsWindow.descendants(matching: .any).matching(identifier: "touch.assignment.0").firstMatch
         let right = settingsWindow.descendants(matching: .any).matching(identifier: "touch.assignment.1").firstMatch
-        XCTAssertTrue(left.waitForExistence(timeout: 3))
+        XCTAssertTrue(left.waitUntilExists(timeout: 3))
         for _ in 0..<6 where !left.isHittable {
             settingsWindow.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -400)
         }
@@ -3224,13 +3229,13 @@ final class AppUITests: XCTestCase {
         XCTAssertEqual(settingsWindow.staticTexts["touch.gesture.1.16"].value as? String, "Tap and hold: Voice Assistant")
         left.click()
         app.menuItems["Playback Control"].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Playback Control"), object: left)], timeout: 3), .completed)
+        XCTAssertTrue(left.waitUntil(\.stringValue, equals: "Playback Control", timeout: 3))
         XCTAssertEqual(right.value as? String, "Playback Control")
         XCTAssertEqual(leftGesture.value as? String, "Tap: Play / Pause")
         XCTAssertEqual(rightGesture.value as? String, "Tap: Play / Pause")
         left.click()
         app.menuItems[original].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", original), object: left)], timeout: 3), .completed)
+        XCTAssertTrue(left.waitUntil(\.stringValue, equals: original, timeout: 3))
         selectSettingsPane("general", in: settingsWindow)
         selectSettingsPane("headphones", in: settingsWindow)
         XCTAssertEqual(left.value as? String, original)
@@ -3251,7 +3256,7 @@ final class AppUITests: XCTestCase {
         left.click()
         let qualifiedAssignment = "Ambient Sound & Quick Access (Classic only)"
         app.menuItems[qualifiedAssignment].click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", qualifiedAssignment), object: left)], timeout: 3), .completed)
+        XCTAssertTrue(left.waitUntil(\.stringValue, equals: qualifiedAssignment, timeout: 3))
         XCTAssertEqual(right.value as? String, "Playback Control")
         XCTAssertEqual(left.elementType, .popUpButton)
         let qualifiedScreenshot = XCTAttachment(screenshot: settingsWindow.screenshot())
@@ -3270,15 +3275,15 @@ final class AppUITests: XCTestCase {
                                    "-AppleLocale", language == "tr" ? "tr_TR" : "en_US"]
             app.launch()
             let panel = app.windows["Headphone Controls"]
-            XCTAssertTrue(panel.waitForExistence(timeout: 5))
+            XCTAssertTrue(panel.waitUntilExists(timeout: 5))
             panel.buttons["menu.settings"].click()
             let settings = app.windows["com_apple_SwiftUI_Settings_window"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 3))
+            XCTAssertTrue(settings.waitUntilExists(timeout: 3))
             let tab = settings.toolbars.buttons[language == "tr" ? "Kulaklıklar" : "Headphones"]
-            XCTAssertTrue(tab.waitForExistence(timeout: 3))
+            XCTAssertTrue(tab.waitUntilExists(timeout: 3))
             tab.click()
             let device = settings.staticTexts["headphones.deviceName"]
-            XCTAssertTrue(device.waitForExistence(timeout: 3))
+            XCTAssertTrue(device.waitUntilExists(timeout: 3))
             XCTAssertEqual(device.value as? String, model == "wfXM5" ? "WF-1000XM5" : "WF-1000XM4")
             let heading = language == "tr" ? "Kulaklıkları Bul" : "Find Earbuds"
             let scroll = settings.scrollViews.firstMatch
@@ -3302,21 +3307,21 @@ final class AppUITests: XCTestCase {
                                    "-AppleLanguages", "(\(language))", "-AppleLocale", language == "tr" ? "tr_TR" : "en_US"]
             app.launch()
             let panel = app.windows["Headphone Controls"]
-            XCTAssertTrue(panel.waitForExistence(timeout: 5))
+            XCTAssertTrue(panel.waitUntilExists(timeout: 5))
             panel.buttons["menu.settings"].click()
             let settings = app.windows["com_apple_SwiftUI_Settings_window"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 3))
+            XCTAssertTrue(settings.waitUntilExists(timeout: 3))
             let tab = settings.toolbars.buttons[language == "tr" ? "Kulaklıklar" : "Headphones"]
-            XCTAssertTrue(tab.waitForExistence(timeout: 3))
+            XCTAssertTrue(tab.waitUntilExists(timeout: 3))
             tab.click()
             let open = settings.buttons["finder.open"]
-            XCTAssertTrue(open.waitForExistence(timeout: 3))
+            XCTAssertTrue(open.waitUntilExists(timeout: 3))
             for _ in 0..<5 where !open.isHittable {
                 settings.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -200)
             }
             open.click()
             let warning = app.staticTexts["finder.wearingUnavailable"]
-            XCTAssertTrue(warning.waitForExistence(timeout: 3))
+            XCTAssertTrue(warning.waitUntilExists(timeout: 3))
             let expected = language == "tr"
                 ? "Acouplet, bu kulaklıkların kulağınızda olup olmadığını algılayamıyor."
                 : "Acouplet can’t detect whether these earbuds are in your ears."
@@ -3337,55 +3342,49 @@ final class AppUITests: XCTestCase {
             if let failure { app.launchArguments.append(failure) }
             app.launch()
             let panel = app.windows["Headphone Controls"]
-            XCTAssertTrue(panel.waitForExistence(timeout: 5))
+            XCTAssertTrue(panel.waitUntilExists(timeout: 5))
             panel.buttons["menu.settings"].click()
             let settings = app.windows["com_apple_SwiftUI_Settings_window"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 3))
+            XCTAssertTrue(settings.waitUntilExists(timeout: 3))
             settings.toolbars.buttons["Headphones"].click()
             let open = settings.buttons["finder.open"]
-            XCTAssertTrue(open.waitForExistence(timeout: 3))
+            XCTAssertTrue(open.waitUntilExists(timeout: 3))
             for target in ["left", "right"] {
                 for _ in 0..<5 where !open.isHittable {
                     settings.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -200)
                 }
                 open.click()
                 let play = settings.buttons["finder.\(target)"]
-                XCTAssertTrue(play.waitForExistence(timeout: 3))
+                XCTAssertTrue(play.waitUntilExists(timeout: 3))
                 XCTAssertTrue(play.isEnabled)
                 play.click()
                 let confirm = settings.buttons["Play Sound"]
-                XCTAssertTrue(confirm.waitForExistence(timeout: 3))
+                XCTAssertTrue(confirm.waitUntilExists(timeout: 3))
                 confirm.click()
                 let proceed = settings.buttons["Play Anyway"]
-                XCTAssertTrue(proceed.waitForExistence(timeout: 3))
+                XCTAssertTrue(proceed.waitUntilExists(timeout: 3))
                 proceed.click()
                 let authorizedPlay = settings.buttons["finder.authorizedPlay"]
-                XCTAssertTrue(authorizedPlay.waitForExistence(timeout: 3))
+                XCTAssertTrue(authorizedPlay.waitUntilExists(timeout: 3))
                 XCTAssertFalse(authorizedPlay.isEnabled)
                 let verification = settings.checkBoxes["finder.verifyNotWorn"]
-                XCTAssertTrue(verification.waitForExistence(timeout: 3))
+                XCTAssertTrue(verification.waitUntilExists(timeout: 3))
                 verification.click()
-                XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "isEnabled == true"), object: authorizedPlay
-                )], timeout: 3), .completed)
+                XCTAssertTrue(authorizedPlay.waitUntil(\.isEnabled, equals: true, timeout: 3))
                 authorizedPlay.click()
                 if failure == nil {
                     let ringing = "Playing a sound in the \(target) earbud."
-                    XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                        predicate: NSPredicate(format: "label == %@ OR value == %@", ringing, ringing), object: app.staticTexts["finder.status"]
-                    )], timeout: 5), .completed)
+                    XCTAssertTrue(app.staticTexts["finder.status"].waitUntil(NSPredicate(format: "label == %@ OR value == %@", ringing, ringing), timeout: 5))
                     let stop = settings.buttons["finder.stop"]
                     XCTAssertTrue(stop.isEnabled)
                     stop.click()
                 }
                 let expected = failure == "--finder-rejected-start" ? "The earbuds declined the locating-sound request." : "Sound stopped."
-                XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "label == %@ OR value == %@", expected, expected), object: app.staticTexts["finder.status"]
-                )], timeout: 5), .completed)
+                XCTAssertTrue(app.staticTexts["finder.status"].waitUntil(NSPredicate(format: "label == %@ OR value == %@", expected, expected), timeout: 5))
                 let done = settings.buttons["finder.done"]
                 XCTAssertTrue(done.isEnabled)
                 done.click()
-                XCTAssertTrue(done.waitForNonExistence(timeout: 3))
+                XCTAssertTrue(done.waitUntilGone(timeout: 3))
                 XCTAssertTrue(settings.toolbars.buttons["General"].isEnabled)
                 settings.toolbars.buttons["General"].click()
                 settings.toolbars.buttons["Headphones"].click()
@@ -3402,42 +3401,37 @@ final class AppUITests: XCTestCase {
                                "--finder-controls-lost-after-stop", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         let panel = app.windows["Headphone Controls"]
-        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        XCTAssertTrue(panel.waitUntilExists(timeout: 5))
         panel.buttons["menu.settings"].click()
         let settings = app.windows["com_apple_SwiftUI_Settings_window"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        XCTAssertTrue(settings.waitUntilExists(timeout: 3))
         settings.toolbars.buttons["Headphones"].click()
         let open = settings.buttons["finder.open"]
-        XCTAssertTrue(open.waitForExistence(timeout: 3))
+        XCTAssertTrue(open.waitUntilExists(timeout: 3))
         for _ in 0..<5 where !open.isHittable {
             settings.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -200)
         }
         open.click()
         settings.buttons["finder.left"].click()
         let confirm = settings.buttons["Play Sound"]
-        XCTAssertTrue(confirm.waitForExistence(timeout: 3))
+        XCTAssertTrue(confirm.waitUntilExists(timeout: 3))
         confirm.click()
         let proceed = settings.buttons["Play Anyway"]
-        XCTAssertTrue(proceed.waitForExistence(timeout: 3))
+        XCTAssertTrue(proceed.waitUntilExists(timeout: 3))
         proceed.click()
         let authorizedPlay = settings.buttons["finder.authorizedPlay"]
-        XCTAssertTrue(authorizedPlay.waitForExistence(timeout: 3))
+        XCTAssertTrue(authorizedPlay.waitUntilExists(timeout: 3))
         XCTAssertFalse(authorizedPlay.isEnabled)
         let verification = settings.checkBoxes["finder.verifyNotWorn"]
-        XCTAssertTrue(verification.waitForExistence(timeout: 3))
+        XCTAssertTrue(verification.waitUntilExists(timeout: 3))
         verification.click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "isEnabled == true"), object: authorizedPlay
-        )], timeout: 3), .completed)
+        XCTAssertTrue(authorizedPlay.waitUntil(\.isEnabled, equals: true, timeout: 3))
         authorizedPlay.click()
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label == %@ OR value == %@", "Playing a sound in the left earbud.", "Playing a sound in the left earbud."),
-            object: app.staticTexts["finder.status"]
-        )], timeout: 5), .completed)
+        XCTAssertTrue(app.staticTexts["finder.status"].waitUntil(NSPredicate(format: "label == %@ OR value == %@", "Playing a sound in the left earbud.", "Playing a sound in the left earbud."), timeout: 5))
         settings.buttons["finder.stop"].click()
         let sheet = app.sheets.firstMatch
         let reconnect = sheet.buttons["headphones.connect"]
-        XCTAssertTrue(reconnect.waitForExistence(timeout: 3))
+        XCTAssertTrue(reconnect.waitUntilExists(timeout: 3))
         XCTAssertTrue(reconnect.isEnabled)
         XCTAssertTrue(sheet.descendants(matching: .any)["headphones.bluetoothSettings"].isHittable)
         XCTAssertFalse(sheet.buttons["finder.left"].isEnabled)
@@ -3446,7 +3440,7 @@ final class AppUITests: XCTestCase {
         let done = sheet.buttons["finder.done"]
         XCTAssertTrue(done.isEnabled)
         done.click()
-        XCTAssertTrue(done.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(done.waitUntilGone(timeout: 3))
         settings.toolbars.buttons["General"].click()
         XCTAssertTrue(settings.descendants(matching: .any)["menuBar.keepIcon"].isHittable)
     }
@@ -3461,15 +3455,15 @@ final class AppUITests: XCTestCase {
                                    "-AppleLocale", language == "tr" ? "tr_TR" : "en_US"]
             app.launch()
             let panel = app.windows["Headphone Controls"]
-            XCTAssertTrue(panel.waitForExistence(timeout: 5))
+            XCTAssertTrue(panel.waitUntilExists(timeout: 5))
             panel.buttons["menu.settings"].click()
             let settings = app.windows["com_apple_SwiftUI_Settings_window"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 3))
+            XCTAssertTrue(settings.waitUntilExists(timeout: 3))
             let tab = settings.toolbars.buttons[language == "tr" ? "Kulaklıklar" : "Headphones"]
-            XCTAssertTrue(tab.waitForExistence(timeout: 3))
+            XCTAssertTrue(tab.waitUntilExists(timeout: 3))
             tab.click()
             let open = settings.buttons["finder.open"]
-            XCTAssertTrue(open.waitForExistence(timeout: 3))
+            XCTAssertTrue(open.waitUntilExists(timeout: 3))
             for _ in 0..<5 where !open.isHittable {
                 settings.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -200)
             }
@@ -3482,37 +3476,35 @@ final class AppUITests: XCTestCase {
             let playSound = language == "tr" ? "Ses Çal" : "Play Sound"
             let playAnyway = language == "tr" ? "Yine de Çal" : "Play Anyway"
             let alertTitle = language == "tr" ? "Sağ kulaklık kulağa takılı olarak algılandı" : "Left earbud detected in ear"
-            XCTAssertTrue(play.waitForExistence(timeout: 3))
+            XCTAssertTrue(play.waitUntilExists(timeout: 3))
             XCTAssertFalse(app.staticTexts["finder.wearingUnavailable"].exists)
             XCTAssertFalse(stop.exists)
             XCTAssertFalse(warning.exists)
             XCTAssertFalse(otherWarning.exists)
             for confirmationStage in 0..<4 {
-                XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "isEnabled == true"), object: play
-                )], timeout: 3), .completed)
+                XCTAssertTrue(play.waitUntil(\.isEnabled, equals: true, timeout: 3))
                 play.click()
                 let confirm = settings.buttons[playSound]
-                XCTAssertTrue(confirm.waitForExistence(timeout: 3))
+                XCTAssertTrue(confirm.waitUntilExists(timeout: 3))
                 confirm.click()
                 let proceed = settings.buttons[playAnyway]
-                XCTAssertTrue(proceed.waitForExistence(timeout: 3))
+                XCTAssertTrue(proceed.waitUntilExists(timeout: 3))
                 XCTAssertTrue(app.staticTexts[alertTitle].exists)
                 XCTAssertFalse(warning.exists)
                 XCTAssertFalse(otherWarning.exists)
                 if confirmationStage == 0 {
                     app.typeKey(.return, modifierFlags: [])
-                    XCTAssertTrue(proceed.waitForNonExistence(timeout: 3))
-                    XCTAssertTrue(stop.waitForNonExistence(timeout: 3))
+                    XCTAssertTrue(proceed.waitUntilGone(timeout: 3))
+                    XCTAssertTrue(stop.waitUntilGone(timeout: 3))
                     XCTAssertFalse(warning.exists)
                     XCTAssertFalse(otherWarning.exists)
                 } else {
                     captureGalleryScreenshot(settings.screenshot(), named: "find-earbuds-\(language)-\(appearance)-wearing-alert")
                     proceed.click()
                     let authorizedPlay = settings.buttons["finder.authorizedPlay"]
-                    XCTAssertTrue(authorizedPlay.waitForExistence(timeout: 3))
+                    XCTAssertTrue(authorizedPlay.waitUntilExists(timeout: 3))
                     let verification = settings.checkBoxes["finder.verifyNotWorn"]
-                    XCTAssertTrue(verification.waitForExistence(timeout: 3))
+                    XCTAssertTrue(verification.waitUntilExists(timeout: 3))
                     XCTAssertEqual(verification.value as? Int, 0)
                     XCTAssertFalse(authorizedPlay.isEnabled)
                     let verificationText = language == "tr"
@@ -3532,28 +3524,24 @@ final class AppUITests: XCTestCase {
                     XCTAssertTrue(settings.frame.contains(verification.frame))
                     if confirmationStage == 1 {
                         app.typeKey(.return, modifierFlags: [])
-                        XCTAssertTrue(authorizedPlay.waitForNonExistence(timeout: 3))
-                        XCTAssertTrue(stop.waitForNonExistence(timeout: 3))
+                        XCTAssertTrue(authorizedPlay.waitUntilGone(timeout: 3))
+                        XCTAssertTrue(stop.waitUntilGone(timeout: 3))
                         XCTAssertFalse(warning.exists)
                         XCTAssertFalse(otherWarning.exists)
                     } else {
                         verification.click()
-                        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                            predicate: NSPredicate(format: "isEnabled == true"), object: authorizedPlay
-                        )], timeout: 3), .completed)
+                        XCTAssertTrue(authorizedPlay.waitUntil(\.isEnabled, equals: true, timeout: 3))
                         XCTAssertEqual(verification.value as? Int, 1)
                         XCTAssertFalse(warning.exists)
                         verification.click()
                         XCTAssertEqual(verification.value as? Int, 0)
                         XCTAssertFalse(authorizedPlay.isEnabled)
                         verification.click()
-                        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                            predicate: NSPredicate(format: "isEnabled == true"), object: authorizedPlay
-                        )], timeout: 3), .completed)
+                        XCTAssertTrue(authorizedPlay.waitUntil(\.isEnabled, equals: true, timeout: 3))
                         if confirmationStage == 2 {
                             app.typeKey(.return, modifierFlags: [])
-                            XCTAssertTrue(authorizedPlay.waitForNonExistence(timeout: 3))
-                            XCTAssertTrue(stop.waitForNonExistence(timeout: 3))
+                            XCTAssertTrue(authorizedPlay.waitUntilGone(timeout: 3))
+                            XCTAssertTrue(stop.waitUntilGone(timeout: 3))
                             XCTAssertFalse(warning.exists)
                             XCTAssertFalse(otherWarning.exists)
                         } else {
@@ -3562,9 +3550,9 @@ final class AppUITests: XCTestCase {
                     }
                 }
             }
-            XCTAssertTrue(warning.waitForExistence(timeout: 3))
+            XCTAssertTrue(warning.waitUntilExists(timeout: 3))
             XCTAssertFalse(otherWarning.exists)
-            XCTAssertTrue(stop.waitForExistence(timeout: 3))
+            XCTAssertTrue(stop.waitUntilExists(timeout: 3))
             XCTAssertTrue(stop.isEnabled)
             let warningText = language == "tr" ? "Bu kulaklık kulağınızdaysa DERHAL çıkarın!" : "If you’re wearing this earbud, take it out NOW!"
             XCTAssertEqual(warning.label, warningText)
@@ -3577,13 +3565,11 @@ final class AppUITests: XCTestCase {
             XCTAssertGreaterThanOrEqual(warning.frame.height + 1, textHeight)
             captureGalleryScreenshot(settings.screenshot(), named: "find-earbuds-\(language)-\(appearance)-wearing-warning")
             stop.click()
-            XCTAssertTrue(warning.waitForNonExistence(timeout: 3))
-            XCTAssertTrue(stop.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(warning.waitUntilGone(timeout: 3))
+            XCTAssertTrue(stop.waitUntilGone(timeout: 3))
             XCTAssertFalse(otherWarning.exists)
             let stopped = language == "tr" ? "Ses durduruldu." : "Sound stopped."
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "label == %@ OR value == %@", stopped, stopped), object: app.staticTexts["finder.status"]
-            )], timeout: 3), .completed)
+            XCTAssertTrue(app.staticTexts["finder.status"].waitUntil(NSPredicate(format: "label == %@ OR value == %@", stopped, stopped), timeout: 3))
             app.terminate()
         }
     }
@@ -3594,12 +3580,12 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--fit-retry-both-good", "-AppleLanguages", "(en)"]
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         app.windows["Headphone Controls"].buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         selectSettingsPane("headphones", in: settingsWindow)
         let open = settingsWindow.buttons["fit.open"]
-        XCTAssertTrue(open.waitForExistence(timeout: 3))
+        XCTAssertTrue(open.waitUntilExists(timeout: 3))
         for _ in 0..<5 where !open.isHittable {
             settingsWindow.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -200)
         }
@@ -3610,14 +3596,14 @@ final class AppUITests: XCTestCase {
         open.click()
         let sheet = app.sheets.firstMatch
         let start = app.buttons["fit.start"]
-        XCTAssertTrue(start.waitForExistence(timeout: 3))
+        XCTAssertTrue(start.waitUntilExists(timeout: 3))
         XCTAssertTrue(start.isEnabled)
         XCTAssertEqual(backgroundControls.map { $0.frame.origin }, backgroundOrigins)
         XCTAssertFalse(app.staticTexts["Good seal"].exists)
         app.buttons["fit.cancel"].click()
-        XCTAssertTrue(start.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(start.waitUntilGone(timeout: 3))
         open.click()
-        XCTAssertTrue(start.waitForExistence(timeout: 3))
+        XCTAssertTrue(start.waitUntilExists(timeout: 3))
         let heading = sheet.staticTexts["fit.title"]
         XCTAssertTrue(heading.exists)
         let headingFrame = heading.frame
@@ -3625,7 +3611,7 @@ final class AppUITests: XCTestCase {
         XCTAssertFalse(headingFrame.isEmpty)
         start.click()
         let again = app.buttons["fit.again"]
-        XCTAssertTrue(again.waitForExistence(timeout: 5))
+        XCTAssertTrue(again.waitUntilExists(timeout: 5))
         let left = app.descendants(matching: .any)["fit.leftResult"].firstMatch
         let right = app.descendants(matching: .any)["fit.rightResult"].firstMatch
         XCTAssertTrue(left.exists)
@@ -3655,7 +3641,7 @@ final class AppUITests: XCTestCase {
         XCTAssertTrue(again.isHittable)
         XCTAssertTrue(done.isHittable)
         app.typeKey(.return, modifierFlags: [])
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Right, Good seal"), object: right)], timeout: 5), .completed)
+        XCTAssertTrue(right.waitUntil(\.stringValue, equals: "Right, Good seal", timeout: 5))
         XCTAssertTrue(again.exists)
         XCTAssertFalse(start.exists)
         XCTAssertTrue(left.exists)
@@ -3675,11 +3661,11 @@ final class AppUITests: XCTestCase {
         XCTAssertTrue(again.isHittable)
         XCTAssertTrue(done.isHittable)
         app.typeKey(.escape, modifierFlags: [])
-        XCTAssertTrue(again.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(again.waitUntilGone(timeout: 3))
         XCTAssertTrue(open.isEnabled)
         XCTAssertEqual(backgroundControls.map { $0.frame.origin }, backgroundOrigins)
         open.click()
-        XCTAssertTrue(start.waitForExistence(timeout: 3))
+        XCTAssertTrue(start.waitUntilExists(timeout: 3))
         start.click()
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
@@ -3691,12 +3677,12 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--fit-both-good", "-AppleLanguages", "(en)"]
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         app.windows["Headphone Controls"].buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         selectSettingsPane("headphones", in: settingsWindow)
         let open = settingsWindow.buttons["fit.open"]
-        XCTAssertTrue(open.waitForExistence(timeout: 3))
+        XCTAssertTrue(open.waitUntilExists(timeout: 3))
         for _ in 0..<5 where !open.isHittable {
             settingsWindow.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -200)
         }
@@ -3706,7 +3692,7 @@ final class AppUITests: XCTestCase {
             open.click()
             let sheet = app.sheets.firstMatch
             let start = app.buttons["fit.start"]
-            XCTAssertTrue(start.waitForExistence(timeout: 3))
+            XCTAssertTrue(start.waitUntilExists(timeout: 3))
             XCTAssertTrue(start.isEnabled)
             let heading = sheet.staticTexts["fit.title"]
             XCTAssertTrue(heading.exists)
@@ -3716,7 +3702,7 @@ final class AppUITests: XCTestCase {
             XCTAssertEqual(open.frame.origin, openOrigin)
             start.click()
             let again = app.buttons["fit.again"]
-            XCTAssertTrue(again.waitForExistence(timeout: 5))
+            XCTAssertTrue(again.waitUntilExists(timeout: 5))
             let left = app.descendants(matching: .any)["fit.leftResult"].firstMatch
             let right = app.descendants(matching: .any)["fit.rightResult"].firstMatch
             XCTAssertEqual(left.value as? String, "Left, Good seal")
@@ -3735,7 +3721,7 @@ final class AppUITests: XCTestCase {
             XCTAssertTrue(sheet.frame.contains(app.buttons["fit.cancel"].frame))
             XCTAssertTrue(app.buttons["fit.cancel"].isHittable)
             app.typeKey(key, modifierFlags: [])
-            XCTAssertTrue(sheet.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(sheet.waitUntilGone(timeout: 3))
             XCTAssertTrue(open.isEnabled)
             XCTAssertEqual(open.frame.origin, openOrigin)
         }
@@ -3747,12 +3733,12 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "-AppleLanguages", "(en)"]
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         app.windows["Headphone Controls"].buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         selectSettingsPane("headphones", in: settingsWindow)
         let open = settingsWindow.buttons["gesture.open"]
-        XCTAssertTrue(open.waitForExistence(timeout: 3))
+        XCTAssertTrue(open.waitUntilExists(timeout: 3))
         for _ in 0..<5 where !open.isHittable {
             settingsWindow.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -200)
         }
@@ -3760,7 +3746,7 @@ final class AppUITests: XCTestCase {
         open.click()
         let sheet = app.sheets.firstMatch
         let start = app.buttons["gesture.start"]
-        XCTAssertTrue(start.waitForExistence(timeout: 3))
+        XCTAssertTrue(start.waitUntilExists(timeout: 3))
         XCTAssertTrue(start.isEnabled)
         let heading = sheet.staticTexts["gesture.title"]
         XCTAssertTrue(heading.exists)
@@ -3780,19 +3766,17 @@ final class AppUITests: XCTestCase {
         XCTAssertTrue(sheet.frame.contains(start.frame))
         XCTAssertTrue(start.isHittable)
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-        XCTAssertTrue(start.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(start.waitUntilGone(timeout: 3))
         XCTAssertEqual(open.label, "Practice Head Gestures…")
         open.click()
-        XCTAssertTrue(start.waitForExistence(timeout: 3))
+        XCTAssertTrue(start.waitUntilExists(timeout: 3))
         let shake = sheet.radioButtons["Shake"]
         XCTAssertTrue(shake.exists)
         shake.click()
         start.click()
         let count = app.staticTexts["gesture.count"]
-        XCTAssertTrue(count.waitForExistence(timeout: 3))
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label == %@ OR value == %@", "1 of 3 gestures detected", "1 of 3 gestures detected"), object: count
-        )], timeout: 3), .completed)
+        XCTAssertTrue(count.waitUntilExists(timeout: 3))
+        XCTAssertTrue(count.waitUntil(NSPredicate(format: "label == %@ OR value == %@", "1 of 3 gestures detected", "1 of 3 gestures detected"), timeout: 3))
         XCTAssertTrue(app.descendants(matching: .any)["gesture.detected"].firstMatch.exists)
         XCTAssertFalse(app.descendants(matching: .any)["gesture.success"].firstMatch.exists)
         let screenshot = XCTAttachment(screenshot: sheet.screenshot())
@@ -3809,12 +3793,12 @@ final class AppUITests: XCTestCase {
         XCTAssertTrue(sheet.frame.contains(done.frame))
         XCTAssertTrue(done.isHittable)
         done.click()
-        XCTAssertTrue(count.waitForNonExistence(timeout: 3))
-        XCTAssertTrue(done.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(count.waitUntilGone(timeout: 3))
+        XCTAssertTrue(done.waitUntilGone(timeout: 3))
         XCTAssertEqual(open.label, "Practice Head Gestures…")
         XCTAssertTrue(open.isEnabled)
         open.click()
-        XCTAssertTrue(start.waitForExistence(timeout: 3))
+        XCTAssertTrue(start.waitUntilExists(timeout: 3))
         let reopenedScreenshot = XCTAttachment(screenshot: settingsWindow.screenshot())
         reopenedScreenshot.name = "Native head-gesture practice, stable new presentation"
         reopenedScreenshot.lifetime = .keepAlways
@@ -3824,7 +3808,7 @@ final class AppUITests: XCTestCase {
         XCTAssertTrue(sheet.frame.contains(start.frame))
         XCTAssertTrue(start.isHittable)
         start.click()
-        XCTAssertTrue(count.waitForExistence(timeout: 3))
+        XCTAssertTrue(count.waitUntilExists(timeout: 3))
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }
@@ -3836,21 +3820,21 @@ final class AppUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         let panel = app.windows["Headphone Controls"]
-        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        XCTAssertTrue(panel.waitUntilExists(timeout: 5))
         panel.buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         let headphones = settingsWindow.toolbars.buttons["Kulaklıklar"]
-        XCTAssertTrue(headphones.waitForExistence(timeout: 3))
+        XCTAssertTrue(headphones.waitUntilExists(timeout: 3))
         headphones.click()
         let open = settingsWindow.buttons["gesture.open"]
-        XCTAssertTrue(open.waitForExistence(timeout: 3))
+        XCTAssertTrue(open.waitUntilExists(timeout: 3))
         for _ in 0..<5 where !open.isHittable {
             settingsWindow.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -200)
         }
         open.click()
         let sheet = app.sheets.firstMatch
         let start = sheet.buttons["gesture.start"]
-        XCTAssertTrue(start.waitForExistence(timeout: 3))
+        XCTAssertTrue(start.waitUntilExists(timeout: 3))
         let heading = sheet.staticTexts["gesture.title"]
         XCTAssertTrue(sheet.frame.contains(heading.frame))
         for label in ["Yukarı aşağı", "Sağa sola"] {
@@ -3870,10 +3854,8 @@ final class AppUITests: XCTestCase {
         let sheetFrame = sheet.frame
         start.click()
         let count = sheet.staticTexts["gesture.count"]
-        XCTAssertTrue(count.waitForExistence(timeout: 3))
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label == %@ OR value == %@", "Algılanan hareket: 1 / 3", "Algılanan hareket: 1 / 3"), object: count
-        )], timeout: 3), .completed)
+        XCTAssertTrue(count.waitUntilExists(timeout: 3))
+        XCTAssertTrue(count.waitUntil(NSPredicate(format: "label == %@ OR value == %@", "Algılanan hareket: 1 / 3", "Algılanan hareket: 1 / 3"), timeout: 3))
         XCTAssertEqual(sheet.frame, sheetFrame)
         for label in ["Yukarı aşağı", "Sağa sola"] {
             let segment = sheet.radioButtons[label]
@@ -3885,7 +3867,7 @@ final class AppUITests: XCTestCase {
         practicingScreenshot.lifetime = .keepAlways
         add(practicingScreenshot)
         sheet.buttons["gesture.cancel"].click()
-        XCTAssertTrue(sheet.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(sheet.waitUntilGone(timeout: 3))
         XCTAssertTrue(open.isEnabled)
     }
 
@@ -3895,24 +3877,24 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--head-gesture-practice-success", "-AppleLanguages", "(en)"]
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         app.windows["Headphone Controls"].buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         selectSettingsPane("headphones", in: settingsWindow)
         let open = settingsWindow.buttons["gesture.open"]
-        XCTAssertTrue(open.waitForExistence(timeout: 3))
+        XCTAssertTrue(open.waitUntilExists(timeout: 3))
         for _ in 0..<5 where !open.isHittable {
             settingsWindow.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -200)
         }
         open.click()
         let sheet = app.sheets.firstMatch
         let start = sheet.buttons["gesture.start"]
-        XCTAssertTrue(start.waitForExistence(timeout: 3))
+        XCTAssertTrue(start.waitUntilExists(timeout: 3))
         let sheetFrame = sheet.frame
         sheet.radioButtons["Shake"].click()
         start.click()
         let success = sheet.descendants(matching: .any)["gesture.success"].firstMatch
-        XCTAssertTrue(success.waitForExistence(timeout: 4))
+        XCTAssertTrue(success.waitUntilExists(timeout: 4))
         let count = sheet.staticTexts["gesture.count"]
         XCTAssertEqual(count.value as? String, "3 of 3 gestures detected")
         XCTAssertEqual(sheet.frame, sheetFrame)
@@ -3924,14 +3906,14 @@ final class AppUITests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
         sheet.radioButtons["Nod"].click()
-        XCTAssertTrue(success.waitForNonExistence(timeout: 2))
+        XCTAssertTrue(success.waitUntilGone(timeout: 2))
         XCTAssertEqual(count.value as? String, "0 of 3 gestures detected")
         XCTAssertTrue(sheet.descendants(matching: .any)["gesture.waiting"].firstMatch.exists)
         sheet.radioButtons["Shake"].click()
         XCTAssertEqual(count.value as? String, "0 of 3 gestures detected")
         XCTAssertFalse(success.exists)
         done.click()
-        XCTAssertTrue(sheet.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(sheet.waitUntilGone(timeout: 3))
         XCTAssertEqual(open.label, "Practice Head Gestures…")
     }
 
@@ -3941,17 +3923,17 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--connection-lifecycle", "-AppleLanguages", "(en)"]
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         app.menuButtons["More"].click()
         app.menuItems["Turn Off Headphones…"].click()
-        XCTAssertTrue(app.buttons["Turn Off"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Turn Off"].waitUntilExists(timeout: 3))
         app.buttons["Cancel"].click()
-        XCTAssertTrue(app.buttons["Turn Off"].waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Turn Off"].waitUntilGone(timeout: 3))
         XCTAssertTrue(app.buttons["noiseControl.ambient"].isEnabled)
         app.menuButtons["More"].click()
         app.menuItems["Turn Off Headphones…"].click()
         app.buttons["Turn Off"].click()
-        XCTAssertTrue(app.staticTexts["Power Off Requested"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Power Off Requested"].waitUntilExists(timeout: 3))
         let reconnect = app.buttons["headphones.connect"]
         XCTAssertTrue(reconnect.isEnabled)
         XCTAssertFalse(app.buttons["noiseControl.ambient"].exists)
@@ -3961,9 +3943,9 @@ final class AppUITests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
         reconnect.click()
-        XCTAssertTrue(app.staticTexts["Power Off Requested"].waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Power Off Requested"].waitUntilGone(timeout: 3))
         app.buttons["Connect WF"].click()
-        XCTAssertTrue(app.buttons["noiseControl.ambient"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["noiseControl.ambient"].waitUntilExists(timeout: 3))
     }
 
     @MainActor
@@ -3973,12 +3955,12 @@ final class AppUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         let panel = app.windows["Headphone Controls"]
-        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        XCTAssertTrue(panel.waitUntilExists(timeout: 5))
         panel.buttons["Open Settings"].click()
         let settings = app.windows["com_apple_SwiftUI_Settings_window"]
         selectSettingsPane("headphones", in: settings)
         let volume = settings.popUpButtons["guidance.volume"]
-        XCTAssertTrue(volume.waitForExistence(timeout: 3))
+        XCTAssertTrue(volume.waitUntilExists(timeout: 3))
         for _ in 0..<6 where !volume.isHittable {
             settings.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -400)
         }
@@ -4001,21 +3983,17 @@ final class AppUITests: XCTestCase {
         panel.buttons["Schedule Settings Refresh"].click()
         volume.click()
         let high = app.menuItems["High"]
-        XCTAssertTrue(high.waitForExistence(timeout: 2))
+        XCTAssertTrue(high.waitUntilExists(timeout: 2))
         let codec = panel.staticTexts["test.settingsCodec"]
         XCTAssertEqual(codec.value as? String, "AAC")
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", "LDAC"), object: codec
-        )], timeout: 8), .completed)
+        XCTAssertTrue(codec.waitUntil(\.stringValue, equals: "LDAC", timeout: 8))
         try await Task.sleep(for: .seconds(1))
         XCTAssertTrue(high.exists)
         XCTAssertTrue(high.isHittable)
         XCTAssertEqual(volume.value as? String, "Medium")
         high.click()
-        XCTAssertTrue(high.waitForNonExistence(timeout: 3))
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", "High"), object: volume
-        )], timeout: 5), .completed)
+        XCTAssertTrue(high.waitUntilGone(timeout: 3))
+        XCTAssertTrue(volume.waitUntil(\.stringValue, equals: "High", timeout: 5))
         XCTAssertEqual(settings.frame, frame)
         let after = try await snapshot()
         XCTAssertEqual(after[1], "true")
@@ -4029,13 +4007,13 @@ final class AppUITests: XCTestCase {
         app.launchArguments = ["-ui-testing", "--ui-test-host", "--light-appearance", "-AppleLanguages", "(en)"]
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.windows["Headphone Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows["Headphone Controls"].waitUntilExists(timeout: 5))
         app.windows["Headphone Controls"].buttons["menu.settings"].click()
         let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
         selectSettingsPane("headphones", in: settingsWindow)
         let enabled = settingsWindow.descendants(matching: .any)["guidance.enabled"]
         let volume = settingsWindow.popUpButtons["guidance.volume"]
-        XCTAssertTrue(enabled.waitForExistence(timeout: 3))
+        XCTAssertTrue(enabled.waitUntilExists(timeout: 3))
         for _ in 0..<6 where !enabled.isHittable {
             settingsWindow.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -400)
         }
@@ -4044,12 +4022,12 @@ final class AppUITests: XCTestCase {
         XCTAssertEqual(volume.value as? String, "Medium")
         for value in [0, 1] {
             enabled.click()
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", NSNumber(value: value)), object: enabled)], timeout: 3), .completed)
+            XCTAssertTrue(enabled.waitUntil(NSPredicate(format: "value == %@", NSNumber(value: value)), timeout: 3))
         }
         for title in ["Very low", "Very high"] {
             volume.click()
             app.menuItems[title].click()
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", title), object: volume)], timeout: 3), .completed)
+            XCTAssertTrue(volume.waitUntil(\.stringValue, equals: title, timeout: 3))
         }
         selectSettingsPane("general", in: settingsWindow)
         selectSettingsPane("headphones", in: settingsWindow)

@@ -20,6 +20,12 @@ ldac_arch_flags=""
 for ldac_arch in ${ARCHS:-$(/usr/bin/uname -m)}; do ldac_arch_flags="$ldac_arch_flags -arch $ldac_arch"; done
 mkdir -p "$ldac_helpers" "$ldac_resources" "$ldac_build"
 
+cached_clang() {
+    /usr/bin/python3 "$SRCROOT/Packaging/build_cache.py" --cache "$ldac_build/CompileCache" \
+        --input "$ldac_source" --input "$ldac_encoder" --input "$SRCROOT/Helpers/SonyClassicConnection.h" \
+        --input "$SRCROOT/Packaging/build-ldac.sh" --compiler -- "$ldac_clang" "$@"
+}
+
 build_transport() {
     ldac_name="$1"
     ldac_input="$2"
@@ -29,7 +35,7 @@ build_transport() {
     /usr/bin/plutil -replace CFBundleIdentifier -string "dev.baglayan.Acouplet.$ldac_name" "$ldac_info"
     /usr/bin/plutil -replace CFBundleName -string "$ldac_name" "$ldac_info"
     /usr/bin/plutil -replace NSBluetoothAlwaysUsageDescription -string 'Acouplet uses Bluetooth to play Mac audio through your paired Sony headphones using LDAC.' "$ldac_info"
-    "$ldac_clang" $ldac_arch_flags -isysroot "$ldac_sdk" "-mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET:-15.4}" -O2 -fobjc-arc -fblocks -D_DARWIN_C_SOURCE \
+    cached_clang $ldac_arch_flags -isysroot "$ldac_sdk" "-mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET:-15.4}" -O2 -fobjc-arc -fblocks -D_DARWIN_C_SOURCE \
         -framework Foundation -framework CoreFoundation -framework CoreBluetooth -framework IOBluetooth \
         "-Wl,-sectcreate,__TEXT,__info_plist,$ldac_info" "$ldac_source/$ldac_input" "$@" -o "$ldac_helpers/$ldac_name"
     if [ "${CODE_SIGNING_ALLOWED:-NO}" != NO ]; then
@@ -37,7 +43,7 @@ build_transport() {
     fi
 }
 
-"$ldac_clang" $ldac_arch_flags -isysroot "$ldac_sdk" "-mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET:-15.4}" -O2 -Wall -Wextra -Werror \
+cached_clang $ldac_arch_flags -isysroot "$ldac_sdk" "-mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET:-15.4}" -O2 -Wall -Wextra -Werror \
     "$ldac_source/LDACLogObserver.c" -o "$ldac_helpers/LDACLogObserver"
 if [ "${CODE_SIGNING_ALLOWED:-NO}" != NO ]; then
     /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" --identifier "dev.baglayan.Acouplet.LDACLogObserver" --options runtime --timestamp=none "$ldac_helpers/LDACLogObserver"
@@ -55,7 +61,7 @@ for ldac_language in en tr; do
     ldac_audio_description="$(/usr/bin/plutil -extract NSAudioCaptureUsageDescription raw -o - "$ldac_audio/Contents/Resources/$ldac_language.lproj/InfoPlist.strings")"
     /usr/bin/plutil -insert NSAudioCaptureUsageDescription -string "$ldac_audio_description" "$ldac_resources/$ldac_language.lproj/InfoPlist.strings"
 done
-"$ldac_clang" $ldac_arch_flags -isysroot "$ldac_sdk" -mmacosx-version-min=15.4 -O2 -fobjc-arc -fblocks \
+cached_clang $ldac_arch_flags -isysroot "$ldac_sdk" -mmacosx-version-min=15.4 -O2 -fobjc-arc -fblocks \
     -DACOUPLET_AUDIO_HELPER_BUNDLE_ID='"dev.baglayan.Acouplet.ldac-audio"' -DACOUPLET_AUDIO_HELPER_STREAM_ONLY=1 \
     -framework Foundation -framework AppKit -framework CoreFoundation -framework CoreAudio -framework AudioToolbox \
     "$ldac_source/SystemAudioTapRunLoopProbe.m" -o "$ldac_audio/Contents/MacOS/AcoupletAudio"
@@ -78,7 +84,7 @@ mkdir -p "$ldac_driver/Contents/MacOS" "$ldac_driver/Contents/Resources"
 /bin/cp "$ldac_source/VirtualOutput/NullAudio.c" "$ldac_driver/Contents/Resources/NullAudio.c"
 /bin/cp "$ldac_source/VirtualOutput/LICENSE.txt" "$ldac_driver/Contents/Resources/LICENSE.txt"
 /bin/cp "$ldac_source/VirtualOutput/Resources/Headphones.png" "$ldac_source/VirtualOutput/Resources/Earbuds.png" "$ldac_source/VirtualOutput/Resources/Speaker.png" "$ldac_driver/Contents/Resources/"
-"$ldac_clang" $ldac_arch_flags -isysroot "$ldac_sdk" "-mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET:-15.4}" -std=gnu11 -O2 -fblocks -Werror -bundle \
+cached_clang $ldac_arch_flags -isysroot "$ldac_sdk" "-mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET:-15.4}" -std=gnu11 -O2 -fblocks -Werror -bundle \
     "-DACOUPLET_SIGNING_TEAM=\"$ldac_team\"" -framework CoreAudio -framework CoreFoundation -framework Security "$ldac_source/VirtualOutput/AcoupletVirtualOutput.c" \
     -o "$ldac_driver/Contents/MacOS/AcoupletVirtualOutput"
 if [ "${CODE_SIGNING_ALLOWED:-NO}" != NO ]; then

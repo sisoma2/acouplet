@@ -1240,6 +1240,7 @@ final class LDACRecoveryTests: XCTestCase {
         coordinator.reconcileConnectedDevices([try XCTUnwrap(SonyConnectedDevice(address: address, name: "WF-1000XM5", model: .wfXM5))])
         let headphones = try XCTUnwrap(coordinator.controller(for: address))
         let ldac = LDACController(devices: coordinator, inspectDriver: { _ in .current },
+                                  localBluetoothAddress: { "02:00:00:00:00:01" },
                                   isClassicConnected: isClassicConnected ?? { _ in headphones.isDeviceConnected })
         ldac.simulateHelpers()
         ldac.simulateRecoverySession(headphones)

@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import sys
 import xml.etree.ElementTree as ET
@@ -76,6 +77,16 @@ def prepare(source, destination, photographs=None):
             photo_files.extend([contents, *image_files])
         if not photo_files:
             raise ValueError('The external catalog contains no product photographs')
+    expected = {path.relative_to(source): path for path in files}
+    expected.update({path.relative_to(photographs): path for path in photo_files})
+    expected_directories = {parent for name in expected for parent in name.parents if parent != Path('.')}
+    if os.environ.get('ACOUPLET_BUILD_CACHE') != 'NO' and destination.is_dir() and not destination.is_symlink():
+        existing = {path.relative_to(destination) for path in destination.rglob('*') if path.is_file() or path.is_symlink()}
+        directories = {path.relative_to(destination) for path in destination.rglob('*') if path.is_dir()}
+        if (existing == set(expected) and directories == expected_directories
+                and all(not (destination / name).is_symlink() and (destination / name).read_bytes() == path.read_bytes()
+                        for name, path in expected.items())):
+            return len(mini_icons)
     if destination.exists():
         shutil.rmtree(destination)
     for path in files:

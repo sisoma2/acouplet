@@ -38,6 +38,7 @@ with tempfile.TemporaryDirectory(prefix='acouplet-ldac-build-check-') as directo
     script = root / 'build-ldac.sh'
     script.write_text((packaging / 'build-ldac.sh').read_text()
                       .replace('/usr/bin/xcrun', str(root / 'xcrun'))
+                      .replace('/usr/bin/python3', sys.executable)
                       .replace('/usr/bin/codesign', str(root / 'codesign')))
     log = root / 'commands.jsonl'
     environment = {**os.environ, 'SRCROOT': str(packaging.parent), 'TARGET_BUILD_DIR': str(root),
@@ -110,6 +111,12 @@ with tempfile.TemporaryDirectory(prefix='acouplet-ldac-build-check-') as directo
         assert command[command.index('--options') + 1] == 'runtime' and '--entitlements' not in command
     for notice in ('LICENSE', 'NOTICE'):
         assert (app / 'Resources' / ('LDAC-' + notice + '.txt')).read_bytes() == (packaging.parent / 'Vendor/libldac' / notice).read_bytes()
+    subprocess.run(['/bin/sh', str(script)], env={**environment, 'CURRENT_PROJECT_VERSION': '246', 'MARKETING_VERSION': '0.246'}, check=True)
+    reused = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len([command for command in reused if command[0] == 'clang']) == 6
+    assert len([command for command in reused if command[0] == 'codesign']) == 12
+    for bundle in ('Acouplet Audio.app', 'AcoupletLDACOutput.driver'):
+        assert plistlib.loads((app / 'Helpers' / bundle / 'Contents/Info.plist').read_bytes())['CFBundleVersion'] == '246'
     subprocess.run(['/bin/sh', str(script)], env={**environment, 'EXPANDED_CODE_SIGN_IDENTITY_NAME': 'Developer ID Application: Fixture (ABCDEFGHIJ)'}, check=True)
     commands = [json.loads(line) for line in log.read_text().splitlines()]
     signs = [command for command in commands if command[0] == 'codesign']
