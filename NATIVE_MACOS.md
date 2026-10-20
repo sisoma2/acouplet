@@ -345,6 +345,19 @@ scheduling.
 
 ## Sender timing and bounded packet submission
 
+Adaptive quality starts at the connection bitrate and requires 15 seconds of
+healthy transport before each quality increase. Repeated drain delays above the
+larger of 12 ms and a packet's audio duration lower quality after 60 ms of observed
+congestion. A 40 ms packet age or unsent audio queue lowers it immediately on the
+next packet drain. Source starvation and scheduler gaps above 20 ms suppress these
+decisions. Quality increases also require an empty unsent queue, low packet age
+and timely pacing; draining a backlog cannot count faster than elapsed time.
+After congestion, the healthy interval becomes 30 seconds and doubles after a
+failed quality probe, up to 120 seconds. These are local transport observations,
+not receiver delivery or signal strength measurements. Fixed quality modes retain
+their explicit bitrate. The adaptive replay and media queue fixtures cover these
+decisions and packet integrity; room-to-room range still needs hardware testing.
+
 The default sender submits one RTP/LDAC packet, then waits for the local stream
 socket to drain before submitting another. A `SOCK_STREAM` write does not provide
 a message boundary to a reader. The sender retains this restriction and does not

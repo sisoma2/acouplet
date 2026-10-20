@@ -1697,15 +1697,17 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                 if (profile.adaptive && !finishing && !probe.stopRequested) {
                     int priority = LDACAdaptivePolicyObserve(&adaptivePolicy, ldacBT_get_eqmid(probe.encoder),
                         (double)done->samples / profile.sampleRate, now - done->enqueuedAt, maximumSchedulerGap,
-                        done->lateness, adaptiveSourceReady && adaptiveSkippedBytes == probe.pcmSkippedBytes);
+                        done->lateness, adaptiveSourceReady && adaptiveSkippedBytes == probe.pcmSkippedBytes,
+                        (double)sendq->unsentSamples / profile.sampleRate, now);
                     if (priority) {
                         if (ldacBT_alter_eqmid_priority(probe.encoder, priority) != 0) {
                             printf("ENCODER_FAILED reason=adaptive-quality code=%d\n", ldacBT_get_error_code(probe.encoder));
                             probe.failed = YES;
                         } else {
-                            printf("ADAPTIVE_TARGET packet=%lu priority=%d eqmid=%d writeAndDrain=%.6f schedulerGap=%.6f late=%.6f\n",
+                            printf("ADAPTIVE_TARGET packet=%lu priority=%d eqmid=%d writeAndDrain=%.6f schedulerGap=%.6f late=%.6f queuedMs=%.3f promotionSeconds=%.0f\n",
                                    drainedPackets - 1, priority, ldacBT_get_eqmid(probe.encoder),
-                                   now - done->enqueuedAt, maximumSchedulerGap, done->lateness);
+                                   now - done->enqueuedAt, maximumSchedulerGap, done->lateness,
+                                   1000.0 * sendq->unsentSamples / profile.sampleRate, adaptivePolicy.promotionSeconds);
                         }
                     }
                 }

@@ -40,6 +40,7 @@ python_checks = (
     'Helpers/LDAC/LDACCaptureStartupCheck.py',
     'Helpers/LDAC/LDACSignalingStartupCheck.py',
     'Helpers/LDAC/LDACSenderTimingCheck.py',
+    'Helpers/LDAC/LDACAdaptivePolicyCheck.py',
     'Helpers/LDAC/LDACMediaQueueCheck.py',
     'Helpers/LDAC/LDACPacketTraceCheck.py',
     'Helpers/LDAC/LDACConnectionOwnershipCheck.py',

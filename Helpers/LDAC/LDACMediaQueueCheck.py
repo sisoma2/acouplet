@@ -121,7 +121,7 @@ static void Check(uint32_t rate, NSString *quality) {
 
 int main(void) {
     for (NSUInteger rate = 48000; rate <= 96000; rate += 48000)
-        for (NSString *quality in @[@"low", @"mid", @"high"]) Check((uint32_t)rate, quality);
+        for (NSString *quality in @[@"low", @"mid", @"high", @"auto"]) Check((uint32_t)rate, quality);
     return 0;
 }
 '''
