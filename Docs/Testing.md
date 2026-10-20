@@ -39,7 +39,12 @@ Xcode build products are reused between runs. Add `--clean` when a fresh build
 is needed. Independent scripts run concurrently in separate processes, with
 individual logs under `.build/check-all/Logs/`. Use `--jobs 1` for serial checks.
 Suites and their child cases share the worker budget to avoid nested pools
-overloading the machine. Swift fixture compilers reuse the module cache.
+overloading the machine. The default budget is up to eight workers, bounded by
+the logical CPU count. Each child suite uses up to four workers, allowing two
+large suites to overlap on an eight-worker run. Use `--jobs 4` for the previous
+budget, or `--jobs 8` to select eight explicitly. `ACOUPLET_CHECK_JOBS` sets the
+default for both the full runner and individual suites. Each completed check
+reports its elapsed time. Swift fixture compilers reuse the module cache.
 
 By default, the full unit suite uses up to four separate test processes,
 bounded by `--jobs`. Use `--test-workers 1` for a serial unit run, or choose another process limit
@@ -56,7 +61,18 @@ rebuilt or restored from verified compiler artifacts. LDAC bundles still receive
 the current version metadata and fresh signatures on every build. Artwork
 preparation preserves an unchanged catalog so Xcode can reuse asset compilation.
 Test executables still run every time; passing test results are never cached.
+The controller-volume baseline and mutation fixtures also reuse compiled
+executables when their generated Swift, production dependencies, compiler,
+SDK and build settings match. Each case runs a separate copy with a fresh
+temporary home. Concurrent runs lock compilation for the same fixture.
 Set `ACOUPLET_BUILD_CACHE=NO` to bypass this reuse for troubleshooting or timing.
+
+On the development Mac with 10 logical CPUs, the 42 offline suites took
+319.6 seconds with four workers and 213.6 seconds with eight workers while
+populating the controller fixture cache. A repeat of all 15 controller-volume
+cases reused their compiled binaries and took 52.4 seconds, compared with
+86.6 seconds when compiling them. These are local measurements; concurrent
+work can make individual suites slower even when total elapsed time improves.
 
 Run just the fixtures, select matching scripts, or focus XCTest on a class:
 
@@ -130,7 +146,9 @@ Native HUD presentation and the launch service check run separately.
 Bluetooth, audio and connection recovery still need testing with real hardware.
 
 Packaging, app installation, LDAC driver installation, and direct-release
-fixtures run up to four isolated cases concurrently. They support `--filter`,
+fixtures run up to eight isolated cases concurrently when invoked directly,
+bounded by the logical CPU count. Through `check-all.py`, each suite uses up to
+four of the shared workers. They support `--filter`,
 `--list`, and `--jobs` for focused reruns without rebuilding the app:
 
 ```sh

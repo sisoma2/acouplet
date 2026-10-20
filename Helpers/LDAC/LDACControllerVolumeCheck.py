@@ -1,5 +1,8 @@
+import fcntl
+import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1122,13 +1125,7 @@ def run_fixture(contents, failure=None, volume_source=None):
         prefix="acouplet-ldac-controller-volume-"
     ) as directory:
         directory = Path(directory)
-        swift = directory / "Check.swift"
         binary = directory / "check"
-        swift.write_text(contents)
-        volume_file = root / "Sources/LDACVolumeSession.swift"
-        if volume_source is not None:
-            volume_file = directory / "LDACVolumeSession.swift"
-            volume_file.write_text(volume_source)
         environment = os.environ.copy()
         environment["ACOUPLET_TESTING"] = "1"
         environment["CFFIXED_USER_HOME"] = str(directory / "home")
@@ -1140,23 +1137,44 @@ def run_fixture(contents, failure=None, volume_source=None):
             environment["SDKROOT"] = subprocess.check_output(
                 ["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True
             ).strip()
-        subprocess.run(
-            [
-                "xcrun",
-                "swiftc",
-                "-swift-version",
-                "6",
-                "-parse-as-library",
-                str(swift),
-                str(root / "Sources/LDACDriverService.swift"),
-                str(root / "Sources/LDACMusicBinding.swift"),
-                str(volume_file),
-                "-o",
-                str(binary),
-            ],
-            env=environment,
-            check=True,
-        )
+        key = hashlib.sha256(
+            (contents + "\0" + (volume_source or "")).encode()
+        ).hexdigest()
+        build = root / ".build/check-all/LDACControllerVolume" / key
+        build.mkdir(parents=True, exist_ok=True)
+        with (build / "build.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            swift = build / "Check.swift"
+            swift.write_text(contents)
+            volume_file = root / "Sources/LDACVolumeSession.swift"
+            if volume_source is not None:
+                volume_file = build / "LDACVolumeSession.swift"
+                volume_file.write_text(volume_source)
+            compiled = build / "check"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "Packaging/build_cache.py"),
+                    "--cache",
+                    str(build / "CompileCache"),
+                    "--compiler",
+                    "--",
+                    "xcrun",
+                    "swiftc",
+                    "-swift-version",
+                    "6",
+                    "-parse-as-library",
+                    str(swift),
+                    str(root / "Sources/LDACDriverService.swift"),
+                    str(root / "Sources/LDACMusicBinding.swift"),
+                    str(volume_file),
+                    "-o",
+                    str(compiled),
+                ],
+                env=environment,
+                check=True,
+            )
+            shutil.copy2(compiled, binary)
         result = subprocess.run(
             [str(binary)], check=False, env=environment, capture_output=True, text=True
         )

@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from check_runner import CheckCases
+from check_runner import CheckCases, default_jobs
 from ui_test_vm import require_guest, run_in_vm, validate_vm
 
 repo = Path(__file__).resolve().parent.parent
@@ -114,8 +114,8 @@ def main(arguments=None):
     parser.add_argument(
         "--jobs",
         type=int,
-        default=os.environ.get("ACOUPLET_CHECK_JOBS", min(4, os.cpu_count() or 1)),
-        help="Concurrent check suites and fixture cases (default: up to 4).",
+        default=os.environ.get("ACOUPLET_CHECK_JOBS", default_jobs()),
+        help="Concurrent check suites and fixture cases (default: up to 8; each child suite uses up to 4).",
     )
     parser.add_argument(
         "--test-workers",

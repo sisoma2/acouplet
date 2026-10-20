@@ -5,7 +5,7 @@ from io import StringIO
 from threading import Barrier, Lock
 from unittest.mock import patch
 
-from check_runner import CheckCases
+from check_runner import CheckCases, default_jobs
 
 barrier = Barrier(2, timeout=5)
 lock = Lock()
@@ -92,6 +92,33 @@ with redirect_stdout(StringIO()):
     weighted.main(["--jobs", "2"])
 assert peak == 2 and active == 0
 assert sorted(finished) == ["first-script", "second-script", "two-worker-suite"]
+
+for processors, expected in ((10, 8), (2, 2), (None, 1)):
+    with patch("check_runner.os.cpu_count", return_value=processors):
+        assert default_jobs() == expected
+
+parallel_suites = CheckCases("Concurrent suites within the default budget")
+suite_barrier = Barrier(2, timeout=5)
+suite_started = []
+
+
+def occupy_suite(name):
+    with lock:
+        suite_started.append(name)
+    suite_barrier.wait()
+
+
+for name in ("first-suite", "second-suite"):
+    parallel_suites.add_parallel(name, 4, occupy_suite, name)
+with (
+    patch.dict(os.environ),
+    patch("check_runner.os.cpu_count", return_value=10),
+    redirect_stdout(StringIO()),
+):
+    os.environ.pop("ACOUPLET_CHECK_JOBS", None)
+    parallel_suites.main([])
+assert sorted(suite_started) == ["first-suite", "second-suite"]
+
 for arguments in (["--jobs", "0"], ["--jobs", "-1"], ["--filter", "no-match"]):
     with redirect_stderr(StringIO()):
         try:

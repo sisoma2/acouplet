@@ -438,6 +438,20 @@ with tempfile.TemporaryDirectory(prefix="acouplet-check-all-check-") as director
         with patch("subprocess.run", side_effect=group_run):
             main(["--fixtures-only", "--filter", "*check-package.py", "--jobs", "2"])
     assert len(commands) == 1 and Path(commands[0][1]).name == "check-package.py"
+    commands.clear()
+    with (
+        patch.dict(main.__globals__, repo=repo / "eight-worker-group"),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
+
+        def capped_group_run(arguments, **options):
+            assert options["env"]["ACOUPLET_CHECK_JOBS"] == "4"
+            commands.append(arguments)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with patch("subprocess.run", side_effect=capped_group_run):
+            main(["--fixtures-only", "--filter", "*check-package.py", "--jobs", "8"])
+    assert len(commands) == 1 and Path(commands[0][1]).name == "check-package.py"
     output = StringIO()
     with (
         patch("subprocess.run", side_effect=AssertionError("Listing executed a check")),

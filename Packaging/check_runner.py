@@ -6,6 +6,10 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from functools import partial
 
 
+def default_jobs():
+    return min(8, os.cpu_count() or 1)
+
+
 class CheckCases:
     def __init__(self, description):
         self.description = description
@@ -28,8 +32,8 @@ class CheckCases:
         parser.add_argument(
             "--jobs",
             type=int,
-            default=os.environ.get("ACOUPLET_CHECK_JOBS", min(4, os.cpu_count() or 1)),
-            help="Concurrent cases (default: up to 4; use 1 for serial execution).",
+            default=os.environ.get("ACOUPLET_CHECK_JOBS", default_jobs()),
+            help="Concurrent cases (default: up to 8; use 1 for serial execution).",
         )
         parser.add_argument(
             "--filter",
@@ -71,18 +75,23 @@ class CheckCases:
                     for name, operation in list(pending.items()):
                         weight = min(jobs, self.workers.get(name, 1))
                         if weight <= available:
-                            running[executor.submit(operation)] = (name, weight)
+                            running[executor.submit(operation)] = (
+                                name,
+                                weight,
+                                time.perf_counter(),
+                            )
                             available -= weight
                             del pending[name]
                     completed, _ = wait(running, return_when=FIRST_COMPLETED)
                     for future in completed:
-                        name, weight = running.pop(future)
+                        name, weight, case_started = running.pop(future)
                         available += weight
                         try:
                             future.result()
                         except Exception as error:
                             raise RuntimeError(f"{name}: {error}") from error
-                        print(name + ": passed", flush=True)
+                        elapsed = time.perf_counter() - case_started
+                        print(f"{name}: passed ({elapsed:.1f}s)", flush=True)
             except BaseException:
                 for future in running:
                     future.cancel()
