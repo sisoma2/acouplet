@@ -623,7 +623,7 @@ struct MenuBarView: View {
                         Toggle("Focus on Voice", isOn: Binding(get: { headphones.focusOnVoice }, set: headphones.setFocusOnVoice))
                             .labelsHidden()
                             .toggleStyle(.switch)
-                            .tint(.accentColor)
+                            .tint(settings.tintColor)
                     }
                 }
             }

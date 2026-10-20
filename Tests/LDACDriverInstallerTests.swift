@@ -442,6 +442,20 @@ final class LDACDefaultCodecTests: XCTestCase {
         XCTAssertEqual(ldac.simulatedStarts, [address])
     }
 
+    func testDirectConnectWithoutAnAutomaticProfileDoesNotInspectBluetooth() async throws {
+        var bluetoothReads = 0
+        let (ldac, headphones, _) = try prepared(preferredConfiguration: { _ in nil }, isClassicConnected: { _ in
+            bluetoothReads += 1
+            return false
+        })
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        XCTAssertFalse(ldac.connectDirectly(forAddress: address))
+        headphones.connect()
+        XCTAssertEqual(bluetoothReads, 0)
+        XCTAssertEqual(ldac.simulatedStarts, [])
+    }
+
     func testDirectConnectRespectsOptOutDriverAvailabilityAndUnsupportedModels() async throws {
         let suite = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

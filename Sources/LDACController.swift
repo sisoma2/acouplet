@@ -490,9 +490,8 @@ final class LDACController: ObservableObject {
               !isSessionRunning, requestedAddress == nil, state != .stopping,
               cleanupTask == nil, recoveryTask == nil, preferenceRestoreTasks[address] == nil,
               multipointConflictAddress == nil, multipointShutdownAddress == nil,
-              !isClassicConnected(address), canStartDirectly(forAddress: address),
               let configuration = preferredConfiguration(address), configuration.isValid,
-              helpers.isAvailable else { return false }
+              helpers.isAvailable, !isClassicConnected(address), canStartDirectly(forAddress: address) else { return false }
         refreshDriverState()
         guard driverState == .current else { return false }
         setEnabled(true, forAddress: address, configuration: configuration, directly: true)

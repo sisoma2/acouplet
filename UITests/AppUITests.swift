@@ -568,7 +568,7 @@ final class AppUITests: XCTestCase {
         let panes = [
             ("Genel", ["Pil yüzdesini göster", "Otomatik yeniden bağlan", "Oturum açıldığında başlat"]),
             ("Kulaklıklar", ["Aygıt", "Kulaklık kodeği", "Bağlantı tercihi"]),
-            ("İleri Düzey", ["Bluetooth adresi", "Sony denetimi", "Protokol"]),
+            ("İleri Düzey", ["Bluetooth adresi", "Kulaklık denetimleri", "Protokol"]),
         ]
         var generalFrame = CGRect.zero
         for (title, labels) in panes {
@@ -899,6 +899,27 @@ final class AppUITests: XCTestCase {
     }
 
     @MainActor
+    private func renderedTextContrast(_ screenshot: NSImage) throws -> Double {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(screenshot.tiffRepresentation)))
+        var luminances: [Double] = []
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                let channels = [color.redComponent, color.greenComponent, color.blueComponent].map { component in
+                    let value = Double(component)
+                    return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+                }
+                luminances.append(channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722)
+            }
+        }
+        XCTAssertFalse(luminances.isEmpty)
+        luminances.sort()
+        let darkest = luminances[luminances.count / 100]
+        let lightest = luminances[min(luminances.count - 1, luminances.count * 99 / 100)]
+        return (lightest + 0.05) / (darkest + 0.05)
+    }
+
+    @MainActor
     private func auditContrast(_ surface: XCUIElement, in app: XCUIApplication, named name: String) throws -> [String] {
         func contains(_ node: any XCUIElementSnapshot, matching target: any XCUIElementSnapshot) -> Bool {
             if node.elementType == target.elementType && node.frame == target.frame
@@ -935,6 +956,15 @@ final class AppUITests: XCTestCase {
                         $0.elementType == element.elementType && $0.frame == element.frame
                             && $0.label == element.label && String(describing: $0.value) == String(describing: element.value)
                     }) { deferred.append(element) }
+                    return true
+                }
+                if surface.elementType == .sheet, let element = issue.element, element.elementType == .staticText,
+                   surface.frame.contains(element.frame), let image = try? self.captureImage(element),
+                   let ratio = try? self.renderedTextContrast(image), ratio >= 4.5 {
+                    let evidence = XCTAttachment(string: "\(issue.detailedDescription)\nRendered text contrast: \(ratio):1")
+                    evidence.name = "Rendered native sheet text contrast — \(name)"
+                    evidence.lifetime = .keepAlways
+                    self.add(evidence)
                     return true
                 }
                 let description = issue.element.map {
@@ -1026,6 +1056,27 @@ final class AppUITests: XCTestCase {
             app.terminate()
         }
         XCTAssertTrue(contrastFailures.isEmpty, contrastFailures.joined(separator: "\n"))
+    }
+
+    @MainActor
+    func testRenderedTextContrastRejectsFaintLabels() throws {
+        for background in [NSColor.white, .black] {
+            for readable in [true, false] {
+                let foreground: NSColor = readable ? (background == .white ? .black : .white)
+                    : (background == .white ? NSColor(white: 0.8, alpha: 1) : NSColor(white: 0.2, alpha: 1))
+                let image = NSImage(size: NSSize(width: 240, height: 30), flipped: false) { frame in
+                    background.setFill()
+                    frame.fill()
+                    ("Native sheet text" as NSString).draw(at: NSPoint(x: 4, y: 8), withAttributes: [
+                        .font: NSFont.systemFont(ofSize: 13), .foregroundColor: foreground
+                    ])
+                    return true
+                }
+                let ratio = try renderedTextContrast(image)
+                if readable { XCTAssertGreaterThanOrEqual(ratio, 4.5) }
+                else { XCTAssertLessThan(ratio, 4.5) }
+            }
+        }
     }
 
     @MainActor

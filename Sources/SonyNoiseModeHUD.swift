@@ -499,7 +499,20 @@ final class SonyNoiseModeHUD {
                 .frame(width: 26, height: 26)
                 .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).fontWeight(.medium)
+                    ZStack(alignment: .leading) {
+                        if image == nil {
+                            Group {
+                                Text("Noise Cancellation")
+                                Text("Ambient Sound")
+                                Text("Noise Control Off")
+                                Text("Wind")
+                            }
+                            .hidden()
+                            .accessibilityHidden(true)
+                        }
+                        Text(title)
+                    }
+                    .fontWeight(.medium)
                     if let detail { Text(detail).font(.caption) }
                 }
                 if let batteryLevel {
