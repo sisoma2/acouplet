@@ -36,6 +36,11 @@ previous Mac output. Turning LDAC off remembers that choice for
 that device, including after restarting Acouplet. Existing choices to hide LDAC
 controls are also preserved.
 
+You can keep multiple headsets connected and use the headphone picker to switch
+LDAC playback between them. Acouplet stops the previous session before starting
+the selected headset's automatic LDAC profile. Switching back respects that
+headset's saved LDAC Off choice.
+
 When reporting a problem, you may open an issue on this repository.
 Please include your device model, macOS version, app version
 and steps to reproduce it.

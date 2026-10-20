@@ -682,6 +682,71 @@ final class LDACRequestLifecycleTests: XCTestCase {
         XCTAssertEqual(ldac.simulatedStarts, [first, second])
     }
 
+    func testSwitchingPlaybackBackAndForthKeepsBothHeadphonesConnected() async throws {
+        let (ldac, devices, _) = try prepared()
+        defer { stop(ldac, devices) }
+        await drainTasks()
+        devices.reconcileConnectedDevices([device(first, model: .whXM5), device(second, model: .wfXM5)])
+        var expectedStarts = [first]
+
+        for address in [second, first, second, first] {
+            ldac.simulateActiveSession(devices.selectedController)
+            devices.select(address: address)
+            await drainTasks()
+            expectedStarts.append(address)
+
+            XCTAssertEqual(ldac.simulatedRequestedAddress, address)
+            XCTAssertEqual(ldac.simulatedStarts, expectedStarts)
+            XCTAssertEqual(Set(devices.connectedDevices.map(\.address)), Set([first, second]))
+            XCTAssertTrue(devices.controllers.allSatisfy(\.isDeviceConnected))
+        }
+    }
+
+    func testSwitchingBackToHeadphonesWithLDACDisabledKeepsItOff() async throws {
+        let (ldac, devices, _) = try prepared()
+        defer { stop(ldac, devices) }
+        await drainTasks()
+        devices.reconcileConnectedDevices([device(first, model: .whXM5), device(second, model: .wfXM5)])
+        ldac.simulateActiveSession(devices.selectedController)
+        ldac.setEnabled(false, forAddress: first)
+        await drainTasks()
+        devices.select(address: second)
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedRequestedAddress, second)
+        ldac.simulateActiveSession(devices.selectedController)
+
+        devices.select(address: first)
+        await drainTasks()
+
+        XCTAssertNil(ldac.simulatedRequestedAddress)
+        XCTAssertEqual(ldac.state, .off)
+        XCTAssertEqual(ldac.simulatedStarts, [first, second])
+        XCTAssertEqual(Set(devices.connectedDevices.map(\.address)), Set([first, second]))
+    }
+
+    func testSwitchingBackDuringCleanupResumesOnlyTheLatestSelection() async throws {
+        let (ldac, devices, _) = try prepared()
+        defer { stop(ldac, devices) }
+        await drainTasks()
+        devices.reconcileConnectedDevices([device(first, model: .whXM5), device(second, model: .wfXM5)])
+        ldac.simulateActiveSession(devices.selectedController)
+        var switchedBack = false
+        let observation = ldac.$state.sink { state in
+            guard state == .stopping, !switchedBack else { return }
+            switchedBack = true
+            devices.select(address: self.first)
+        }
+        defer { observation.cancel() }
+
+        devices.select(address: second)
+        await drainTasks()
+
+        XCTAssertTrue(switchedBack)
+        XCTAssertEqual(devices.selectedAddress, first)
+        XCTAssertEqual(ldac.simulatedRequestedAddress, first)
+        XCTAssertEqual(ldac.simulatedStarts, [first, first])
+    }
+
     func testDisconnectedRequestExpiresAtSixtySecondsAndReconnectionStartsFresh() async throws {
         var date = Date(timeIntervalSince1970: 1_000)
         let (ldac, devices, route) = try prepared(now: { date })
