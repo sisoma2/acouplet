@@ -14,13 +14,28 @@ output_source = (root / "Sources/LDACNativeOutput.swift").read_text()
 
 
 def member(name):
-    match = re.search(r"^    (?:private )?(?:func|var) " + name + r"\b", source, re.MULTILINE)
-    end = re.search(r"^    (?:(?:private )?(?:func|var|struct) |#(?:if|endif)\b)", source[match.end():], re.MULTILINE)
-    return re.sub(r"^    private ", "    ", source[match.start():match.end() + end.start()], flags=re.MULTILINE)
+    match = re.search(
+        r"^    (?:private )?(?:func|var) " + name + r"\b", source, re.MULTILINE
+    )
+    end = re.search(
+        r"^    (?:(?:private )?(?:func|var|struct) |#(?:if|endif)\b)",
+        source[match.end() :],
+        re.MULTILINE,
+    )
+    return re.sub(
+        r"^    private ",
+        "    ",
+        source[match.start() : match.end() + end.start()],
+        flags=re.MULTILINE,
+    )
 
 
-volume = output_source[output_source.index("struct LDACNativeVolume:"):output_source.index("\nstruct LDACRouteRecovery")]
-fixture = r'''
+volume = output_source[
+    output_source.index("struct LDACNativeVolume:") : output_source.index(
+        "\nstruct LDACRouteRecovery"
+    )
+]
+fixture = r"""
 struct LDACUpdateHandoff {
     func cancel(address: String) {}
 }
@@ -1027,26 +1042,85 @@ enum Check {
         print("PASS scope: production controller methods and volume mapping; fake transport, confirmations, observations and native output; no hardware or installation")
     }
 }
-'''
-names = ["canStartDirectly", "needsStopBeforeTermination", "deviceUnavailableReason", "refreshDriverState", "start", "launch", "sessionFinished",
-         "fallBackToOrdinaryAudio", "hasMusicVolumeForHandoff", "hasOwnedMusicContext",
-         "hasOtherMusicSource", "bindingIsCurrent", "bindingCheck", "musicControlStatus", "prepareControlsForMedia", "waitForControls", "controlsChanged",
-         "holdBinding", "recoverBinding", "stopForChange", "sendPendingVolume", "setOutputGain", "fail", "beginRecovery",
-         "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry", "stop", "stopSession",
-         "suspend", "resumeIfReady", "clearWaitingDeadline", "updateWaitingDeadline", "reconcileRequestedDevice", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode",
-         "restoreConnectionPreference", "finish", "completeStop"]
+"""
+names = [
+    "canStartDirectly",
+    "needsStopBeforeTermination",
+    "deviceUnavailableReason",
+    "refreshDriverState",
+    "start",
+    "launch",
+    "sessionFinished",
+    "fallBackToOrdinaryAudio",
+    "hasMusicVolumeForHandoff",
+    "hasOwnedMusicContext",
+    "hasOtherMusicSource",
+    "bindingIsCurrent",
+    "bindingCheck",
+    "musicControlStatus",
+    "prepareControlsForMedia",
+    "waitForControls",
+    "controlsChanged",
+    "holdBinding",
+    "recoverBinding",
+    "stopForChange",
+    "sendPendingVolume",
+    "setOutputGain",
+    "fail",
+    "beginRecovery",
+    "scheduleRecovery",
+    "endRetryWait",
+    "cancelAutomaticRetry",
+    "stop",
+    "stopSession",
+    "suspend",
+    "resumeIfReady",
+    "clearWaitingDeadline",
+    "updateWaitingDeadline",
+    "reconcileRequestedDevice",
+    "startWhenMicrophoneIsIdle",
+    "canResumeOnCurrentOutput",
+    "recordRetryBlocked",
+    "reconcileConnectionPreferences",
+    "forgetConnectionPreference",
+    "scheduleConnectionPreferenceRestoration",
+    "prepareConnectionMode",
+    "waitForConnectionChange",
+    "restoreConnectionMode",
+    "restoreConnectionPreference",
+    "finish",
+    "completeStop",
+]
 fixture = fixture.replace("precondition(", "check(")
 transfer_start = output_source.index("    nonisolated static func canTransferControls(")
 transfer_end = output_source.index("\n    func claim(", transfer_start)
-fixture = fixture.replace("__TRANSFER_CONTROLS__", output_source[transfer_start:transfer_end])
+fixture = fixture.replace(
+    "__TRANSFER_CONTROLS__", output_source[transfer_start:transfer_end]
+)
 native_types = (root / "Sources/LDACNativeSession.swift").read_text()
-fixture = fixture.replace("__FEATURES__", native_types[native_types.index("enum LDACMicrophonePolicy:"):native_types.index("struct LDACConfiguration:")])
-fixture = fixture.replace("__SUPPORT__", (root / "Sources/LDACSupport.swift").read_text())
-fixture = fixture.replace("__VOLUME__", volume).replace("__METHODS__", "\n".join(member(name) for name in names))
-fixture = fixture.replace(".advanced(by: .seconds(45))", ".advanced(by: .milliseconds(2500))")
+fixture = fixture.replace(
+    "__FEATURES__",
+    native_types[
+        native_types.index("enum LDACMicrophonePolicy:") : native_types.index(
+            "struct LDACConfiguration:"
+        )
+    ],
+)
+fixture = fixture.replace(
+    "__SUPPORT__", (root / "Sources/LDACSupport.swift").read_text()
+)
+fixture = fixture.replace("__VOLUME__", volume).replace(
+    "__METHODS__", "\n".join(member(name) for name in names)
+)
+fixture = fixture.replace(
+    ".advanced(by: .seconds(45))", ".advanced(by: .milliseconds(2500))"
+)
+
 
 def run_fixture(contents, failure=None, volume_source=None):
-    with tempfile.TemporaryDirectory(prefix="acouplet-ldac-controller-volume-") as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="acouplet-ldac-controller-volume-"
+    ) as directory:
         directory = Path(directory)
         swift = directory / "Check.swift"
         binary = directory / "check"
@@ -1059,62 +1133,159 @@ def run_fixture(contents, failure=None, volume_source=None):
         environment["ACOUPLET_TESTING"] = "1"
         environment["CFFIXED_USER_HOME"] = str(directory / "home")
         Path(environment["CFFIXED_USER_HOME"]).mkdir()
-        environment.setdefault("CLANG_MODULE_CACHE_PATH", str(root / ".build/check-all/ModuleCache"))
+        environment.setdefault(
+            "CLANG_MODULE_CACHE_PATH", str(root / ".build/check-all/ModuleCache")
+        )
         if not environment.get("SDKROOT"):
-            environment["SDKROOT"] = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
-        subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), str(root / "Sources/LDACDriverService.swift"), str(root / "Sources/LDACMusicBinding.swift"), str(volume_file), "-o", str(binary)],
-                       env=environment, check=True)
-        result = subprocess.run([str(binary)], check=False, env=environment, capture_output=True, text=True)
+            environment["SDKROOT"] = subprocess.check_output(
+                ["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True
+            ).strip()
+        subprocess.run(
+            [
+                "xcrun",
+                "swiftc",
+                "-swift-version",
+                "6",
+                "-parse-as-library",
+                str(swift),
+                str(root / "Sources/LDACDriverService.swift"),
+                str(root / "Sources/LDACMusicBinding.swift"),
+                str(volume_file),
+                "-o",
+                str(binary),
+            ],
+            env=environment,
+            check=True,
+        )
+        result = subprocess.run(
+            [str(binary)], check=False, env=environment, capture_output=True, text=True
+        )
         if failure is None:
-            assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+            assert result.returncode == 0, (
+                result.returncode,
+                result.stdout,
+                result.stderr,
+            )
             print(result.stdout, end="")
         else:
-            assert result.returncode == 1 and failure in result.stderr, (failure, result.returncode, result.stdout, result.stderr)
+            assert result.returncode == 1 and failure in result.stderr, (
+                failure,
+                result.returncode,
+                result.stdout,
+                result.stderr,
+            )
 
 
 mutations = [
-    ("prestream command drain", "if headphones.isControlChannelIdle {", "if true {",
-     "Fresh volume admitted media while startup commands were still pending"),
-    ("raw", "hasMusicVolumeForHandoff && (headphones?.playback.generation != .v1 || transportFormat != nil)",
-     "hasMusicVolumeForHandoff", "Legacy raw ownership admitted before active"),
-    ("status", "&& headphones.musicStatusReadbackID != nil && headphones.musicStatusReadbackID != initialStatusReadbackID",
-     "", "Volume without post-admission status admitted legacy LDAC"),
-    ("handoff control retry", "                    if self.controlSession == nil, !retriedControls,\n                       self.headphones?.retryControlsIfNeeded(allowingSuppressedReconnect: true) == true { retriedControls = true }\n",
-     "", "failed modern control channel is reopened"),
-    ("ordinary-audio restoration", "        if targetDisconnected {\n            sessionID = UUID()\n            launch(address, restoringOnly: true)\n        } else {\n            finish(nil)\n        }",
-     "        finish(nil, targetDisconnected: targetDisconnected)", "A recoverable abort left the headphones disconnected"),
-    ("single retry", "if recoveryAttempt >= 1 {", "if recoveryAttempt >= 2 {", "The aborted retry tried LDAC again"),
-    ("retry-wait cleanup", "        guard recoveryTaskID == taskID else { return }\n        recoveryTask = nil",
-     "        guard recoveryTaskID == taskID else { return }\n        return;", "An early exit left the retry wait set"),
-    ("unchanged-volume filter", "let output = nativeOutput, output.controls.volume(in: range) != volume {",
-     "let output = nativeOutput {", "Unchanged headphone volume re-sent the native volume"),
-    ("configure echo filter", "nativeVolume != volume {",
-     "true {", "A Mac-side volume change configured the Mac output it came from"),
-    ("late configure tolerance", "                catch is LDACOwnerTimeoutError {",
-     "                catch let error as LDACOwnerTimeoutError where false {", "A late owner reply to configure stopped LDAC"),
-    ("multipoint automatic suppression", "           headphones?.requestedSourceSwitchAddress != selected {",
-     "           headphones?.requestedSourceSwitchAddress != selected, false {",
-     "Another multipoint source did not suppress automatic LDAC activation"),
-    ("requested-switch stop", "           headphones?.requestedSourceSwitchAddress != selected {",
-     "           true {", "A real source change did not stop LDAC and restore ordinary audio"),
-    ("binding hold", "            holdBinding(reason, transition: transition)\n            return",
-     "            recoverBinding(reason)\n            return", "A transient loss of volume freshness tore LDAC down"),
-    ("source-change stop", "        case let .sourceChanged(reason):\n            stopForChange(reason)\n            return",
-     "        case let .sourceChanged(reason):\n            recoverBinding(reason)\n            return",
-     "change did not stop LDAC and restore ordinary audio"),
+    (
+        "prestream command drain",
+        "if headphones.isControlChannelIdle {",
+        "if true {",
+        "Fresh volume admitted media while startup commands were still pending",
+    ),
+    (
+        "raw",
+        "hasMusicVolumeForHandoff && (headphones?.playback.generation != .v1 || transportFormat != nil)",
+        "hasMusicVolumeForHandoff",
+        "Legacy raw ownership admitted before active",
+    ),
+    (
+        "status",
+        "&& headphones.musicStatusReadbackID != nil && headphones.musicStatusReadbackID != initialStatusReadbackID",
+        "",
+        "Volume without post-admission status admitted legacy LDAC",
+    ),
+    (
+        "handoff control retry",
+        "                    if self.controlSession == nil, !retriedControls,\n                       self.headphones?.retryControlsIfNeeded(allowingSuppressedReconnect: true) == true { retriedControls = true }\n",
+        "",
+        "failed modern control channel is reopened",
+    ),
+    (
+        "ordinary-audio restoration",
+        "        if targetDisconnected {\n            sessionID = UUID()\n            launch(address, restoringOnly: true)\n        } else {\n            finish(nil)\n        }",
+        "        finish(nil, targetDisconnected: targetDisconnected)",
+        "A recoverable abort left the headphones disconnected",
+    ),
+    (
+        "single retry",
+        "if recoveryAttempt >= 1 {",
+        "if recoveryAttempt >= 2 {",
+        "The aborted retry tried LDAC again",
+    ),
+    (
+        "retry-wait cleanup",
+        "        guard recoveryTaskID == taskID else { return }\n        recoveryTask = nil",
+        "        guard recoveryTaskID == taskID else { return }\n        return;",
+        "An early exit left the retry wait set",
+    ),
+    (
+        "unchanged-volume filter",
+        "let output = nativeOutput, output.controls.volume(in: range) != volume {",
+        "let output = nativeOutput {",
+        "Unchanged headphone volume re-sent the native volume",
+    ),
+    (
+        "configure echo filter",
+        "nativeVolume != volume {",
+        "true {",
+        "A Mac-side volume change configured the Mac output it came from",
+    ),
+    (
+        "late configure tolerance",
+        "                catch is LDACOwnerTimeoutError {",
+        "                catch let error as LDACOwnerTimeoutError where false {",
+        "A late owner reply to configure stopped LDAC",
+    ),
+    (
+        "multipoint automatic suppression",
+        "           headphones?.requestedSourceSwitchAddress != selected {",
+        "           headphones?.requestedSourceSwitchAddress != selected, false {",
+        "Another multipoint source did not suppress automatic LDAC activation",
+    ),
+    (
+        "requested-switch stop",
+        "           headphones?.requestedSourceSwitchAddress != selected {",
+        "           true {",
+        "A real source change did not stop LDAC and restore ordinary audio",
+    ),
+    (
+        "binding hold",
+        "            holdBinding(reason, transition: transition)\n            return",
+        "            recoverBinding(reason)\n            return",
+        "A transient loss of volume freshness tore LDAC down",
+    ),
+    (
+        "source-change stop",
+        "        case let .sourceChanged(reason):\n            stopForChange(reason)\n            return",
+        "        case let .sourceChanged(reason):\n            recoverBinding(reason)\n            return",
+        "change did not stop LDAC and restore ordinary audio",
+    ),
 ]
 
-checks = CheckCases("LDAC controller checks; add --check-mutations to include negative controls.")
+checks = CheckCases(
+    "LDAC controller checks; add --check-mutations to include negative controls."
+)
 checks.add("baseline", run_fixture, fixture)
 if "--check-mutations" in sys.argv:
     for name, before, after, failure in mutations:
         if fixture.count(before) == 1:
-            checks.add("mutation/" + name, run_fixture, fixture.replace(before, after), failure)
+            checks.add(
+                "mutation/" + name, run_fixture, fixture.replace(before, after), failure
+            )
         else:
             volume_source = (root / "Sources/LDACVolumeSession.swift").read_text()
             assert volume_source.count(before) == 1, name
-            checks.add("mutation/" + name, run_fixture, fixture, failure, volume_source.replace(before, after))
+            checks.add(
+                "mutation/" + name,
+                run_fixture,
+                fixture,
+                failure,
+                volume_source.replace(before, after),
+            )
 
 
 if __name__ == "__main__":
-    checks.main([argument for argument in sys.argv[1:] if argument != "--check-mutations"])
+    checks.main(
+        [argument for argument in sys.argv[1:] if argument != "--check-mutations"]
+    )

@@ -3,9 +3,14 @@ import tempfile
 from pathlib import Path
 
 source = Path(__file__).with_name("SystemAudioTapProbe.m").read_text()
-read_format = source[source.index("static BOOL ReadFormat("):source.index("static BOOL RingWrite(")]
-status = source[source.index("static BOOL Status("):source.index("static BOOL ReadFormat(")]
-fixture = r'''#import <Foundation/Foundation.h>
+read_format = source[
+    source.index("static BOOL ReadFormat(") : source.index("static BOOL RingWrite(")
+]
+status = source[
+    source.index("static BOOL Status(") : source.index("static BOOL ReadFormat(")
+]
+fixture = (
+    r"""#import <Foundation/Foundation.h>
 #import <CoreAudio/CoreAudio.h>
 #include <assert.h>
 #include <signal.h>
@@ -40,7 +45,10 @@ static OSStatus CaptureFormatProperty(AudioObjectID object, const AudioObjectPro
 @end
 #define NSThread CaptureClock
 #define AudioObjectGetPropertyData CaptureFormatProperty
-''' + status + read_format + r'''
+"""
+    + status
+    + read_format
+    + r"""
 static BOOL Read(double deadline) {
     AudioStreamBasicDescription format = {0};
     BOOL ok = ReadFormat(23, kAudioDevicePropertyStreamFormat, kAudioObjectPropertyScopeInput, deadline, &format);
@@ -67,11 +75,26 @@ int main(void) {
     Reset(); wrongSize = YES; assert(!Read(2) && calls == 1);
     puts("Capture startup: 9 checks passed; delayed stream, deadline, cancellation, permission and invalid format.");
 }
-'''
+"""
+)
 with tempfile.TemporaryDirectory(prefix="acouplet-capture-startup-") as directory:
     directory = Path(directory)
     path = directory / "Check.m"
     binary = directory / "check"
     path.write_text(fixture)
-    subprocess.run(["xcrun", "clang", "-fobjc-arc", "-framework", "Foundation", "-framework", "CoreAudio", str(path), "-o", str(binary)], check=True)
+    subprocess.run(
+        [
+            "xcrun",
+            "clang",
+            "-fobjc-arc",
+            "-framework",
+            "Foundation",
+            "-framework",
+            "CoreAudio",
+            str(path),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     subprocess.run([str(binary)], check=True)

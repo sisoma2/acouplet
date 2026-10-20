@@ -7,16 +7,32 @@ import time
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
-owner = (root / 'Sources/LDACOwner.swift').read_text()
-native = (root / 'Sources/LDACNativeSession.swift').read_text()
-output = (root / 'Sources/LDACNativeOutput.swift').read_text()
-types = native[native.index('struct LDACFormat:'):native.index('final class LDACNativeSession:')]
-child = native[native.index('final class LDACNativeChild {'):native.rindex('#endif')]
-events = native[native.index('    enum Event:'):native.index('    private static let daemonEventExpression')]
-volume = output[output.index('struct LDACNativeVolume:'):output.index('@MainActor\nfinal class LDACNativeOutput')]
-restoration = output[output.index('    @discardableResult\n    func silence('):output.index('    private func applyControls(')]
-selectors = output[output.index('    private var handoffSelectors:'):output.index('    init(id:')]
-fixture = r'''
+owner = (root / "Sources/LDACOwner.swift").read_text()
+native = (root / "Sources/LDACNativeSession.swift").read_text()
+output = (root / "Sources/LDACNativeOutput.swift").read_text()
+types = native[
+    native.index("struct LDACFormat:") : native.index("final class LDACNativeSession:")
+]
+child = native[native.index("final class LDACNativeChild {") : native.rindex("#endif")]
+events = native[
+    native.index("    enum Event:") : native.index(
+        "    private static let daemonEventExpression"
+    )
+]
+volume = output[
+    output.index("struct LDACNativeVolume:") : output.index(
+        "@MainActor\nfinal class LDACNativeOutput"
+    )
+]
+restoration = output[
+    output.index("    @discardableResult\n    func silence(") : output.index(
+        "    private func applyControls("
+    )
+]
+selectors = output[
+    output.index("    private var handoffSelectors:") : output.index("    init(id:")
+]
+fixture = r"""
 import Foundation
 import Darwin
 import CoreAudio
@@ -426,11 +442,27 @@ enum Check {
         SwiftRecord("app-complete")
     }
 }
-'''
-fixture = fixture.replace('__TYPES__', types).replace('__VOLUME__', volume).replace('__SELECTORS__', selectors)
-fixture = fixture.replace('__RESTORATION__', restoration).replace('__EVENTS__', events).replace('__CHILD__', child).replace('__OWNER__', owner)
-fixture = fixture.replace('timeout: TimeInterval = 10', 'timeout: TimeInterval = 0.2').replace('shutdownDeadline = .now() + 120', 'shutdownDeadline = .now() + 1').replace('asyncAfter(deadline: .now() + 120)', 'asyncAfter(deadline: .now() + 5)')
-fixture = fixture.replace('precondition(await output.restoreAndRelease() == nil)', 'let result = await output.restoreAndRelease()\n        precondition(result == nil)')
+"""
+fixture = (
+    fixture.replace("__TYPES__", types)
+    .replace("__VOLUME__", volume)
+    .replace("__SELECTORS__", selectors)
+)
+fixture = (
+    fixture.replace("__RESTORATION__", restoration)
+    .replace("__EVENTS__", events)
+    .replace("__CHILD__", child)
+    .replace("__OWNER__", owner)
+)
+fixture = (
+    fixture.replace("timeout: TimeInterval = 10", "timeout: TimeInterval = 0.2")
+    .replace("shutdownDeadline = .now() + 120", "shutdownDeadline = .now() + 1")
+    .replace("asyncAfter(deadline: .now() + 120)", "asyncAfter(deadline: .now() + 5)")
+)
+fixture = fixture.replace(
+    "precondition(await output.restoreAndRelease() == nil)",
+    "let result = await output.restoreAndRelease()\n        precondition(result == nil)",
+)
 
 
 def wait_for(predicate, timeout=8):
@@ -439,7 +471,7 @@ def wait_for(predicate, timeout=8):
         if predicate():
             return
         time.sleep(0.01)
-    raise AssertionError('Fixture deadline expired')
+    raise AssertionError("Fixture deadline expired")
 
 
 def alive(pid):
@@ -450,102 +482,259 @@ def alive(pid):
         return False
 
 
-with tempfile.TemporaryDirectory(prefix='acouplet-owner-check-') as temporary:
+with tempfile.TemporaryDirectory(prefix="acouplet-owner-check-") as temporary:
     directory = Path(temporary)
-    swift = directory / 'Check.swift'
-    binary = directory / 'check'
+    swift = directory / "Check.swift"
+    binary = directory / "check"
     swift.write_text(fixture)
-    subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(swift), '-o', str(binary)], check=True)
-    rejected = subprocess.run([str(binary), '--ldac-owner'], check=False, capture_output=True, timeout=5)
-    assert rejected.returncode != 0, 'A foreign parent invoked the signed owner entry point'
-    print('PASS actual owner parent-signature check rejects direct foreign invocation')
-    for mode in ['normal', 'crash', 'inherited', 'slow', 'early', 'cancel', 'dropped', 'claimed', 'missing', 'changed', 'gap', 'restart-gap', 'owner-crash', 'owner-term', 'malformed', 'oversized', 'eof', 'delayed', 'hung', 'parent-hung', 'ordering']:
-        run = directory / ('run-' + mode + '-' + str(time.monotonic_ns()))
+    subprocess.run(
+        [
+            "xcrun",
+            "swiftc",
+            "-swift-version",
+            "6",
+            "-parse-as-library",
+            str(swift),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
+    rejected = subprocess.run(
+        [str(binary), "--ldac-owner"], check=False, capture_output=True, timeout=5
+    )
+    assert rejected.returncode != 0, (
+        "A foreign parent invoked the signed owner entry point"
+    )
+    print("PASS actual owner parent-signature check rejects direct foreign invocation")
+    for mode in [
+        "normal",
+        "crash",
+        "inherited",
+        "slow",
+        "early",
+        "cancel",
+        "dropped",
+        "claimed",
+        "missing",
+        "changed",
+        "gap",
+        "restart-gap",
+        "owner-crash",
+        "owner-term",
+        "malformed",
+        "oversized",
+        "eof",
+        "delayed",
+        "hung",
+        "parent-hung",
+        "ordering",
+    ]:
+        run = directory / ("run-" + mode + "-" + str(time.monotonic_ns()))
         run.mkdir()
-        events = run / 'events'
-        events.write_text('')
+        events = run / "events"
+        events.write_text("")
         environment = dict(os.environ, OWNER_MODE=mode, OWNER_CHECK=str(run))
-        process = subprocess.Popen([str(binary)], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(
+            [str(binary)],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
         owner_pid = None
         helpers = []
         holder = None
         try:
-            marker = 'owner-configure-start' if mode == 'parent-hung' else 'claim ' if mode == 'slow' else ('app-complete' if mode in ['early', 'cancel', 'dropped', 'ordering'] else 'app-claimed' if mode == 'claimed' else 'app-gap' if mode in ['gap', 'restart-gap'] else 'app-active')
-            wait_for(lambda marker=marker, events=events, process=process: marker in events.read_text() or process.poll() is not None)
-            assert process.poll() is None or mode in ['normal', 'early', 'cancel', 'dropped', 'delayed', 'malformed', 'oversized', 'eof', 'hung', 'ordering'], process.communicate(timeout=1)
+            marker = (
+                "owner-configure-start"
+                if mode == "parent-hung"
+                else "claim "
+                if mode == "slow"
+                else (
+                    "app-complete"
+                    if mode in ["early", "cancel", "dropped", "ordering"]
+                    else "app-claimed"
+                    if mode == "claimed"
+                    else "app-gap"
+                    if mode in ["gap", "restart-gap"]
+                    else "app-active"
+                )
+            )
+            wait_for(
+                lambda marker=marker, events=events, process=process: (
+                    marker in events.read_text() or process.poll() is not None
+                )
+            )
+            assert process.poll() is None or mode in [
+                "normal",
+                "early",
+                "cancel",
+                "dropped",
+                "delayed",
+                "malformed",
+                "oversized",
+                "eof",
+                "hung",
+                "ordering",
+            ], process.communicate(timeout=1)
             lines = events.read_text().splitlines()
-            owner_pid = int(next(line.split()[1] for line in lines if line.startswith(('claim ', 'spawned '))))
-            helpers = [int(line.split()[1]) for line in lines if line.startswith('child ')]
-            if mode == 'inherited':
-                holder = int(next(line.split()[1] for line in lines if line.startswith('holder ')))
+            owner_pid = int(
+                next(
+                    line.split()[1]
+                    for line in lines
+                    if line.startswith(("claim ", "spawned "))
+                )
+            )
+            helpers = [
+                int(line.split()[1]) for line in lines if line.startswith("child ")
+            ]
+            if mode == "inherited":
+                holder = int(
+                    next(
+                        line.split()[1] for line in lines if line.startswith("holder ")
+                    )
+                )
             killed_at = time.monotonic()
-            if mode == 'owner-crash':
+            if mode == "owner-crash":
                 os.kill(owner_pid, signal.SIGKILL)
-            elif mode == 'parent-hung':
+            elif mode == "parent-hung":
                 process.kill()
-            elif mode == 'owner-term':
+            elif mode == "owner-term":
                 os.kill(owner_pid, signal.SIGTERM)
-            elif mode not in ['normal', 'early', 'cancel', 'dropped', 'malformed', 'oversized', 'eof', 'delayed', 'hung', 'parent-hung', 'ordering']:
+            elif mode not in [
+                "normal",
+                "early",
+                "cancel",
+                "dropped",
+                "malformed",
+                "oversized",
+                "eof",
+                "delayed",
+                "hung",
+                "parent-hung",
+                "ordering",
+            ]:
                 process.kill()
             transcript, diagnostics = process.communicate(timeout=8)
-            if mode not in ['early', 'parent-hung']:
+            if mode not in ["early", "parent-hung"]:
                 try:
-                    wait_for(lambda run=run: (run / 'state').exists())
+                    wait_for(lambda run=run: (run / "state").exists())
                 except AssertionError:
-                    raise AssertionError(mode + '\n' + events.read_text() + '\n' + diagnostics.decode() + '\n' + repr({'caller_exit': process.returncode, 'owner_alive': alive(owner_pid), 'helpers_alive': [pid for pid in helpers if alive(pid)]}))
+                    raise AssertionError(
+                        mode
+                        + "\n"
+                        + events.read_text()
+                        + "\n"
+                        + diagnostics.decode()
+                        + "\n"
+                        + repr(
+                            {
+                                "caller_exit": process.returncode,
+                                "owner_alive": alive(owner_pid),
+                                "helpers_alive": [pid for pid in helpers if alive(pid)],
+                            }
+                        )
+                    )
             wait_for(lambda owner_pid=owner_pid: not alive(owner_pid))
-            if mode == 'inherited':
-                assert time.monotonic() - killed_at < 1.5 and alive(holder), 'Owner waited for inherited pipe EOF'
+            if mode == "inherited":
+                assert time.monotonic() - killed_at < 1.5 and alive(holder), (
+                    "Owner waited for inherited pipe EOF"
+                )
                 os.kill(holder, signal.SIGKILL)
                 wait_for(lambda holder=holder: not alive(holder))
-            helpers = [int(line.split()[1]) for line in events.read_text().splitlines() if line.startswith('child ')]
+            helpers = [
+                int(line.split()[1])
+                for line in events.read_text().splitlines()
+                if line.startswith("child ")
+            ]
             for helper in helpers:
                 wait_for(lambda helper=helper: not alive(helper))
-            if mode == 'parent-hung':
-                assert not (run / 'state').exists(), 'Forced owner termination claimed cooperative route restoration'
-                print('PASS actual parent death with a blocked owner: independent watchdog ends worker and children; restoration remains unverified')
+            if mode == "parent-hung":
+                assert not (run / "state").exists(), (
+                    "Forced owner termination claimed cooperative route restoration"
+                )
+                print(
+                    "PASS actual parent death with a blocked owner: independent watchdog ends worker and children; restoration remains unverified"
+                )
                 continue
-            if mode == 'early':
-                assert 'claim ' not in events.read_text()
-                print('PASS actual owner cancels startup before native claim and exits')
+            if mode == "early":
+                assert "claim " not in events.read_text()
+                print("PASS actual owner cancels startup before native claim and exits")
                 continue
-            state = json.loads((run / 'state').read_text())
+            state = json.loads((run / "state").read_text())
             lines = events.read_text().splitlines()
-            assert state['lease'] is False
-            if mode == 'normal':
-                restart_index = lines.index('restart-active')
-                assert len([line for line in lines[:restart_index] if line.startswith('claim ')]) == 1
-                assert 'reconfigure 44100' in lines[:restart_index]
-                assert 'native-restored' not in lines[:restart_index]
-                assert 'stop-intent false' in lines[:restart_index]
-                assert 'native-restored' in lines[restart_index:]
-            routes = list(state['routes'].values())
-            assert 8 in routes, 'Independent system-sound choice was replaced'
-            assert state['mutes'] == ([] if mode in ['slow', 'cancel', 'claimed', 'missing', 'changed', 'owner-crash', 'ordering'] else [6]), (mode, state, lines)
-            assert (9 if mode == 'changed' else 5 if mode == 'missing' else 6) in routes
-            if mode == 'hung':
-                assert 'configure-timed-out' in lines and 'owner-recovery' not in lines, 'A late configure shut the owner down'
-            if mode == 'owner-crash':
-                assert 'owner-recovery' in lines
+            assert state["lease"] is False
+            if mode == "normal":
+                restart_index = lines.index("restart-active")
+                assert (
+                    len(
+                        [
+                            line
+                            for line in lines[:restart_index]
+                            if line.startswith("claim ")
+                        ]
+                    )
+                    == 1
+                )
+                assert "reconfigure 44100" in lines[:restart_index]
+                assert "native-restored" not in lines[:restart_index]
+                assert "stop-intent false" in lines[:restart_index]
+                assert "native-restored" in lines[restart_index:]
+            routes = list(state["routes"].values())
+            assert 8 in routes, "Independent system-sound choice was replaced"
+            assert state["mutes"] == (
+                []
+                if mode
+                in [
+                    "slow",
+                    "cancel",
+                    "claimed",
+                    "missing",
+                    "changed",
+                    "owner-crash",
+                    "ordering",
+                ]
+                else [6]
+            ), (mode, state, lines)
+            assert (9 if mode == "changed" else 5 if mode == "missing" else 6) in routes
+            if mode == "hung":
+                assert (
+                    "configure-timed-out" in lines and "owner-recovery" not in lines
+                ), "A late configure shut the owner down"
+            if mode == "owner-crash":
+                assert "owner-recovery" in lines
             elif helpers:
-                assert lines.index('children-reaped') < lines.index('output restoring')
-            if mode == 'normal':
-                assert 'latency 25792' in lines and 'latency 25892' in lines
-                assert 'second-complete' in lines
+                assert lines.index("children-reaped") < lines.index("output restoring")
+            if mode == "normal":
+                assert "latency 25792" in lines and "latency 25892" in lines
+                assert "second-complete" in lines
                 for line in lines:
-                    if line.startswith('claim '):
+                    if line.startswith("claim "):
                         assert not alive(int(line.split()[1]))
-            if mode in ['delayed', 'hung']:
-                assert lines.index('main-responsive') < lines.index('stop-admitted')
-                assert lines.index('owner-configure-start') < lines.index('main-responsive')
-                assert mode == 'hung' or lines.index('stop-admitted') < lines.index('owner-configure-end')
-            if mode == 'ordering':
-                start = next(i for i, line in enumerate(lines) if line.startswith('start '))
-                assert lines.index('owner-configure-end') < start < lines.index('stop-intent false') < lines.index('children-reaped')
-                assert 'native-restored' not in lines and 'owner-recovery' not in lines
-            if mode == 'gap':
-                assert 'native-restored-after-gap' in lines
-            print('PASS actual owner process, channel and route restoration mode=' + mode)
+            if mode in ["delayed", "hung"]:
+                assert lines.index("main-responsive") < lines.index("stop-admitted")
+                assert lines.index("owner-configure-start") < lines.index(
+                    "main-responsive"
+                )
+                assert mode == "hung" or lines.index("stop-admitted") < lines.index(
+                    "owner-configure-end"
+                )
+            if mode == "ordering":
+                start = next(
+                    i for i, line in enumerate(lines) if line.startswith("start ")
+                )
+                assert (
+                    lines.index("owner-configure-end")
+                    < start
+                    < lines.index("stop-intent false")
+                    < lines.index("children-reaped")
+                )
+                assert "native-restored" not in lines and "owner-recovery" not in lines
+            if mode == "gap":
+                assert "native-restored-after-gap" in lines
+            print(
+                "PASS actual owner process, channel and route restoration mode=" + mode
+            )
         finally:
             if process.poll() is None:
                 process.kill()

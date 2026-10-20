@@ -3,16 +3,24 @@ import re
 import subprocess
 import tempfile
 
-source = (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACController.swift").read_text()
+source = (
+    pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACController.swift"
+).read_text()
 
 
 def method(name):
-    match = re.search(r"^    (?:private )?(?:func|var) " + name + r"\b", source, re.MULTILINE)
-    end = re.search(r"^    (?:(?:private )?(?:func|var|struct) |#(?:if|endif)\b)", source[match.end():], re.MULTILINE)
-    return source[match.start():match.end() + end.start()]
+    match = re.search(
+        r"^    (?:private )?(?:func|var) " + name + r"\b", source, re.MULTILINE
+    )
+    end = re.search(
+        r"^    (?:(?:private )?(?:func|var|struct) |#(?:if|endif)\b)",
+        source[match.end() :],
+        re.MULTILINE,
+    )
+    return source[match.start() : match.end() + end.start()]
 
 
-fixture = r'''
+fixture = r"""
 struct LDACUpdateHandoff {
     func cancel(address: String) {}
 }
@@ -900,22 +908,107 @@ enum LDACControllerCleanupCheck {
         print("PASS actual finder admission: active finding and unconfirmed Stop block LDAC; manual driver installation is independent of headphones and preserves busy/driver-state checks")
     }
 }
-'''.replace("__METHODS__", "\n".join(method(name) for name in ["canStartDirectly", "synchronizeMicrophoneHandoff", "sampleRateUnavailableReason", "support", "capabilityContext", "recordDiscoveredSupport", "checkSupportAgain", "needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "setEnabled", "stop", "suspend", "resumeIfReady", "clearWaitingDeadline", "updateWaitingDeadline", "reconcileRequestedDevice", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
+""".replace(
+    "__METHODS__",
+    "\n".join(
+        method(name)
+        for name in [
+            "canStartDirectly",
+            "synchronizeMicrophoneHandoff",
+            "sampleRateUnavailableReason",
+            "support",
+            "capabilityContext",
+            "recordDiscoveredSupport",
+            "checkSupportAgain",
+            "needsStopBeforeTermination",
+            "deviceUnavailableReason",
+            "canEnable",
+            "refreshDriverState",
+            "updateDriver",
+            "installDriver",
+            "setEnabled",
+            "stop",
+            "suspend",
+            "resumeIfReady",
+            "clearWaitingDeadline",
+            "updateWaitingDeadline",
+            "reconcileRequestedDevice",
+            "startWhenMicrophoneIsIdle",
+            "canResumeOnCurrentOutput",
+            "recordRetryBlocked",
+            "reconcileConnectionPreferences",
+            "forgetConnectionPreference",
+            "scheduleConnectionPreferenceRestoration",
+            "stopSession",
+            "prepareConnectionMode",
+            "waitForConnectionChange",
+            "restoreConnectionMode",
+            "restoreConnectionPreference",
+            "finish",
+            "completeStop",
+            "scheduleRecovery",
+            "endRetryWait",
+            "cancelAutomaticRetry",
+        ]
+    ),
+)
 
-native_types = (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift").read_text()
-fixture = fixture.replace("__TYPES__", native_types[native_types.index("struct LDACFormat:"):native_types.index("enum LDACState:")])
+native_types = (
+    pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift"
+).read_text()
+fixture = fixture.replace(
+    "__TYPES__",
+    native_types[
+        native_types.index("struct LDACFormat:") : native_types.index("enum LDACState:")
+    ],
+)
 
-fixture = fixture.replace("__SUPPORT__", (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACSupport.swift").read_text())
+fixture = fixture.replace(
+    "__SUPPORT__",
+    (
+        pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACSupport.swift"
+    ).read_text(),
+)
 
-output_source = (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeOutput.swift").read_text()
+output_source = (
+    pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeOutput.swift"
+).read_text()
 transfer_start = output_source.index("    nonisolated static func canTransferControls(")
 transfer_end = output_source.index("\n    func claim(", transfer_start)
-fixture = fixture.replace("__TRANSFER_CONTROLS__", output_source[transfer_start:transfer_end])
+fixture = fixture.replace(
+    "__TRANSFER_CONTROLS__", output_source[transfer_start:transfer_end]
+)
 
-with tempfile.TemporaryDirectory(prefix="acouplet-ldac-controller-cleanup-") as directory:
+with tempfile.TemporaryDirectory(
+    prefix="acouplet-ldac-controller-cleanup-"
+) as directory:
     directory = pathlib.Path(directory)
     swift = directory / "Check.swift"
     binary = directory / "check"
     swift.write_text(fixture)
-    subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), str(pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACDriverService.swift"), str(pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACMusicBinding.swift"), str(pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACVolumeSession.swift"), "-o", str(binary)], check=True)
+    subprocess.run(
+        [
+            "xcrun",
+            "swiftc",
+            "-swift-version",
+            "6",
+            "-parse-as-library",
+            str(swift),
+            str(
+                pathlib.Path(__file__).resolve().parents[2]
+                / "Sources/LDACDriverService.swift"
+            ),
+            str(
+                pathlib.Path(__file__).resolve().parents[2]
+                / "Sources/LDACMusicBinding.swift"
+            ),
+            str(
+                pathlib.Path(__file__).resolve().parents[2]
+                / "Sources/LDACVolumeSession.swift"
+            ),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     subprocess.run([str(binary)], check=True)

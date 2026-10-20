@@ -13,19 +13,40 @@ from check_runner import CheckCases
 from check_stubs import StubExecutable
 
 packaging = Path(__file__).parent
-project = json.loads(subprocess.check_output(['/usr/bin/plutil', '-convert', 'json', '-o', '-', str(packaging.parent / 'Acouplet.xcodeproj/project.pbxproj')]))
-app_target = project['objects']['500000000000000000000001']
-assert '400000000000000000000009' not in app_target['buildPhases']
-assert 'A00000000000000000000003' not in app_target['dependencies']
-assert '40000000000000000000000B' in app_target['buildPhases']
-assert 'A00000000000000000000004' in app_target['dependencies']
-resources = project['objects']['400000000000000000000005']['files']
-resource_paths = [project['objects'][project['objects'][key]['fileRef']]['path'] for key in resources]
-assert 'LICENSE' in resource_paths and 'THIRD-PARTY-NOTICES.md' in resource_paths
-assert project['objects']['700000000000000000000003']['buildSettings']['ACOUPLET_DISTRIBUTION'] == 'development'
-assert all(not entry.get('buildSettings', {}).get('DEVELOPMENT_TEAM') for entry in project['objects'].values())
+project = json.loads(
+    subprocess.check_output(
+        [
+            "/usr/bin/plutil",
+            "-convert",
+            "json",
+            "-o",
+            "-",
+            str(packaging.parent / "Acouplet.xcodeproj/project.pbxproj"),
+        ]
+    )
+)
+app_target = project["objects"]["500000000000000000000001"]
+assert "400000000000000000000009" not in app_target["buildPhases"]
+assert "A00000000000000000000003" not in app_target["dependencies"]
+assert "40000000000000000000000B" in app_target["buildPhases"]
+assert "A00000000000000000000004" in app_target["dependencies"]
+resources = project["objects"]["400000000000000000000005"]["files"]
+resource_paths = [
+    project["objects"][project["objects"][key]["fileRef"]]["path"] for key in resources
+]
+assert "LICENSE" in resource_paths and "THIRD-PARTY-NOTICES.md" in resource_paths
+assert (
+    project["objects"]["700000000000000000000003"]["buildSettings"][
+        "ACOUPLET_DISTRIBUTION"
+    ]
+    == "development"
+)
+assert all(
+    not entry.get("buildSettings", {}).get("DEVELOPMENT_TEAM")
+    for entry in project["objects"].values()
+)
 
-stub_source = r'''#!/usr/bin/python3
+stub_source = r"""#!/usr/bin/python3
 from pathlib import Path
 import json, os, plistlib, re, shutil, subprocess, sys
 root = Path(os.environ['ACOUPLET_PACKAGE_CHECK_ROOT'])
@@ -209,264 +230,622 @@ elif name == 'pkgutil':
     assert args[0] == '--check-signature' and Path(args[-1]).is_file()
 else:
     raise AssertionError('Unexpected stub: ' + name)
-'''
+"""
 stub_executable = StubExecutable(stub_source)
 
 
-def run_check(name, signing, mode='success', succeeds=True, local=False, panes=False, direct=False):
-    with tempfile.TemporaryDirectory(prefix='acouplet-package-check-') as directory:
+def run_check(
+    name, signing, mode="success", succeeds=True, local=False, panes=False, direct=False
+):
+    with tempfile.TemporaryDirectory(prefix="acouplet-package-check-") as directory:
         root = Path(directory).resolve()
-        scripts = root / 'Packaging'
+        scripts = root / "Packaging"
         scripts.mkdir()
-        stubs = root / 'stubs'
+        stubs = root / "stubs"
         stubs.mkdir()
-        source = (packaging / 'package.sh').read_text()
-        for tool in ('xcrun', 'codesign', 'ditto', 'otool', 'pkgbuild', 'pkgutil'):
+        source = (packaging / "package.sh").read_text()
+        for tool in ("xcrun", "codesign", "ditto", "otool", "pkgbuild", "pkgutil"):
             stub = stubs / tool
             stub_executable.link(stub)
-            source = source.replace(('/usr/sbin/' if tool == 'pkgutil' else '/usr/bin/') + tool, str(stub))
-        source = source.replace('/Applications/Acouplet.app/Contents/Info.plist', str(root / 'installed.plist'))
-        script = scripts / 'package.sh'
+            source = source.replace(
+                ("/usr/sbin/" if tool == "pkgutil" else "/usr/bin/") + tool, str(stub)
+            )
+        source = source.replace(
+            "/Applications/Acouplet.app/Contents/Info.plist",
+            str(root / "installed.plist"),
+        )
+        script = scripts / "package.sh"
         script.write_text(source)
-        (scripts / 'release-source.py').write_text(stub_source)
-        for filename in ('Install.command', 'Uninstall Service.command', 'Uninstall LDAC Output.command', 'README.txt'):
+        (scripts / "release-source.py").write_text(stub_source)
+        for filename in (
+            "Install.command",
+            "Uninstall Service.command",
+            "Uninstall LDAC Output.command",
+            "README.txt",
+        ):
             shutil.copy2(packaging / filename, scripts / filename)
-        builder = (packaging / 'build-ldac-output-installer.sh').read_text()
-        for tool in ('codesign', 'ditto', 'pkgbuild', 'pkgutil'):
-            builder = builder.replace(('/usr/sbin/' if tool == 'pkgutil' else '/usr/bin/') + tool, str(stubs / tool))
-        (scripts / 'build-ldac-output-installer.sh').write_text(builder)
-        shutil.copytree(packaging / 'LDACOutputInstaller', scripts / 'LDACOutputInstaller')
-        shutil.copytree(packaging / 'LDACOutputUninstaller', scripts / 'LDACOutputUninstaller')
-        (scripts / 'fetch-sparkle.sh').write_text('exit 0\n')
-        (scripts / 'check-sparkle-bundle.py').write_text((packaging / 'check-sparkle-bundle.py').read_text().replace('/usr/bin/otool', str(stubs / 'otool')))
-        for filename in ('LICENSE', 'THIRD-PARTY-NOTICES.md'):
+        builder = (packaging / "build-ldac-output-installer.sh").read_text()
+        for tool in ("codesign", "ditto", "pkgbuild", "pkgutil"):
+            builder = builder.replace(
+                ("/usr/sbin/" if tool == "pkgutil" else "/usr/bin/") + tool,
+                str(stubs / tool),
+            )
+        (scripts / "build-ldac-output-installer.sh").write_text(builder)
+        shutil.copytree(
+            packaging / "LDACOutputInstaller", scripts / "LDACOutputInstaller"
+        )
+        shutil.copytree(
+            packaging / "LDACOutputUninstaller", scripts / "LDACOutputUninstaller"
+        )
+        (scripts / "fetch-sparkle.sh").write_text("exit 0\n")
+        (scripts / "check-sparkle-bundle.py").write_text(
+            (packaging / "check-sparkle-bundle.py")
+            .read_text()
+            .replace("/usr/bin/otool", str(stubs / "otool"))
+        )
+        for filename in ("LICENSE", "THIRD-PARTY-NOTICES.md"):
             (root / filename).write_text(filename)
-        (root / 'Vendor/libldac').mkdir(parents=True)
-        for filename in ('LICENSE', 'NOTICE'): (root / 'Vendor/libldac' / filename).write_text(filename)
-        (root / 'Helpers/LDAC/VirtualOutput').mkdir(parents=True)
-        for filename in ('NullAudio.c', 'LICENSE.txt'): (root / 'Helpers/LDAC/VirtualOutput' / filename).write_text(filename)
-        package = root / '.build/package/Acouplet'
+        (root / "Vendor/libldac").mkdir(parents=True)
+        for filename in ("LICENSE", "NOTICE"):
+            (root / "Vendor/libldac" / filename).write_text(filename)
+        (root / "Helpers/LDAC/VirtualOutput").mkdir(parents=True)
+        for filename in ("NullAudio.c", "LICENSE.txt"):
+            (root / "Helpers/LDAC/VirtualOutput" / filename).write_text(filename)
+        package = root / ".build/package/Acouplet"
         package.mkdir(parents=True)
-        if mode == 'stale-controls':
-            (root / '.build/Build/Products/Release/Acouplet.app/Contents/PlugIns/Acouplet Controls.appex').mkdir(parents=True)
+        if mode == "stale-controls":
+            (
+                root
+                / ".build/Build/Products/Release/Acouplet.app/Contents/PlugIns/Acouplet Controls.appex"
+            ).mkdir(parents=True)
         expected_build = 2
-        if mode in ('counter-restore', 'counter-persisted'):
-            (root / 'installed.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'dev.baglayan.Acouplet', 'CFBundleVersion': '12'}))
+        if mode in ("counter-restore", "counter-persisted"):
+            (root / "installed.plist").write_bytes(
+                plistlib.dumps(
+                    {
+                        "CFBundleIdentifier": "dev.baglayan.Acouplet",
+                        "CFBundleVersion": "12",
+                    }
+                )
+            )
             expected_build = 13
-            if mode == 'counter-persisted':
-                (root / '.build/package-build-number').write_text('20\n')
+            if mode == "counter-persisted":
+                (root / ".build/package-build-number").write_text("20\n")
                 expected_build = 21
-        if 'ACOUPLET_BUILD_NUMBER' in signing:
-            expected_build = signing['ACOUPLET_BUILD_NUMBER']
-        previous = package / 'previous'
-        previous.write_text('previous package')
-        local_previous = root / '.build/local-update/Acouplet/previous'
+        if "ACOUPLET_BUILD_NUMBER" in signing:
+            expected_build = signing["ACOUPLET_BUILD_NUMBER"]
+        previous = package / "previous"
+        previous.write_text("previous package")
+        local_previous = root / ".build/local-update/Acouplet/previous"
         if direct:
             local_previous.parent.mkdir(parents=True)
-            local_previous.write_text('previous development package')
-        archive = root / 'dist/Acouplet.zip'
+            local_previous.write_text("previous development package")
+        archive = root / "dist/Acouplet.zip"
         archive.parent.mkdir()
-        archive.write_text('previous archive')
-        environment = {key: value for key, value in os.environ.items()
-                       if key not in ('CODE_SIGN_IDENTITY', 'ACOUPLET_INSTALLER_SIGNING_IDENTITY', 'DEVELOPMENT_TEAM', 'CODE_SIGN_STYLE', 'SONY_PANE_DEVICES', 'ACOUPLET_MARKETING_VERSION', 'ACOUPLET_BUILD_NUMBER', 'ACOUPLET_NO_SONY_ARTWORK', 'ACOUPLET_SONY_ARTWORK_DIR')}
-        environment.update(signing, ACOUPLET_PACKAGE_CHECK_ROOT=str(root), ACOUPLET_PACKAGE_CHECK_MODE=mode)
+        archive.write_text("previous archive")
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key
+            not in (
+                "CODE_SIGN_IDENTITY",
+                "ACOUPLET_INSTALLER_SIGNING_IDENTITY",
+                "DEVELOPMENT_TEAM",
+                "CODE_SIGN_STYLE",
+                "SONY_PANE_DEVICES",
+                "ACOUPLET_MARKETING_VERSION",
+                "ACOUPLET_BUILD_NUMBER",
+                "ACOUPLET_NO_SONY_ARTWORK",
+                "ACOUPLET_SONY_ARTWORK_DIR",
+            )
+        }
+        environment.update(
+            signing,
+            ACOUPLET_PACKAGE_CHECK_ROOT=str(root),
+            ACOUPLET_PACKAGE_CHECK_MODE=mode,
+        )
         if panes:
-            manifest = root / 'devices.json'
-            manifest.write_text('{"devices": [{"address":"00:11:22:33:44:55","modelName":"WF-1000XM5","systemSymbol":"earbuds.stemless"}]}')
-            environment['SONY_PANE_DEVICES'] = str(manifest)
-            (scripts / 'build-preference-panes.py').write_text("raise AssertionError('Deferred preference pane builder must not run')\n")
-            old_package = root / '.build/local-update/Acouplet' if local else package
-            (old_package / 'PreferencePanes/Sony-001122334455.prefPane').mkdir(parents=True)
+            manifest = root / "devices.json"
+            manifest.write_text(
+                '{"devices": [{"address":"00:11:22:33:44:55","modelName":"WF-1000XM5","systemSymbol":"earbuds.stemless"}]}'
+            )
+            environment["SONY_PANE_DEVICES"] = str(manifest)
+            (scripts / "build-preference-panes.py").write_text(
+                "raise AssertionError('Deferred preference pane builder must not run')\n"
+            )
+            old_package = root / ".build/local-update/Acouplet" if local else package
+            (old_package / "PreferencePanes/Sony-001122334455.prefPane").mkdir(
+                parents=True
+            )
 
-        result = subprocess.run(['/bin/zsh', str(script), *(['--local'] if local else ['--direct'] if direct else [])], check=False, env=environment, text=True, capture_output=True)
-        assert (result.returncode == 0) == succeeds, (name, result.returncode, result.stdout, result.stderr)
-        log = root / 'commands.jsonl'
-        commands = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
-        builds = [command for command in commands if command[0] == 'xcrun']
-        if 'ACOUPLET_BUILD_NUMBER' in signing and not re.fullmatch(r'[1-9][0-9]*', signing['ACOUPLET_BUILD_NUMBER']):
+        result = subprocess.run(
+            [
+                "/bin/zsh",
+                str(script),
+                *(["--local"] if local else ["--direct"] if direct else []),
+            ],
+            check=False,
+            env=environment,
+            text=True,
+            capture_output=True,
+        )
+        assert (result.returncode == 0) == succeeds, (
+            name,
+            result.returncode,
+            result.stdout,
+            result.stderr,
+        )
+        log = root / "commands.jsonl"
+        commands = (
+            [json.loads(line) for line in log.read_text().splitlines()]
+            if log.exists()
+            else []
+        )
+        builds = [command for command in commands if command[0] == "xcrun"]
+        if "ACOUPLET_BUILD_NUMBER" in signing and not re.fullmatch(
+            r"[1-9][0-9]*", signing["ACOUPLET_BUILD_NUMBER"]
+        ):
             assert not commands, commands
-            assert 'ACOUPLET_BUILD_NUMBER must be a positive integer' in result.stderr, result.stderr
-        elif 'ACOUPLET_MARKETING_VERSION' in signing and not re.fullmatch(r'[0-9]+(\.[0-9]+){1,2}', signing['ACOUPLET_MARKETING_VERSION']):
+            assert (
+                "ACOUPLET_BUILD_NUMBER must be a positive integer" in result.stderr
+            ), result.stderr
+        elif "ACOUPLET_MARKETING_VERSION" in signing and not re.fullmatch(
+            r"[0-9]+(\.[0-9]+){1,2}", signing["ACOUPLET_MARKETING_VERSION"]
+        ):
             assert not commands, commands
-            assert 'ACOUPLET_MARKETING_VERSION must contain' in result.stderr, result.stderr
-        elif signing.get('CODE_SIGN_IDENTITY') == '':
+            assert "ACOUPLET_MARKETING_VERSION must contain" in result.stderr, (
+                result.stderr
+            )
+        elif signing.get("CODE_SIGN_IDENTITY") == "":
             assert not commands, commands
-            assert 'CODE_SIGN_IDENTITY is empty' in result.stderr, result.stderr
-        elif mode == 'source-dirty' and not local:
-            assert not builds and len(commands) == 1 and commands[0][1] == 'capture', commands
-            assert not (root / '.build/package-build-number').exists()
+            assert "CODE_SIGN_IDENTITY is empty" in result.stderr, result.stderr
+        elif mode == "source-dirty" and not local:
+            assert not builds and len(commands) == 1 and commands[0][1] == "capture", (
+                commands
+            )
+            assert not (root / ".build/package-build-number").exists()
         else:
             assert len(builds) == 1, builds
-            settings = dict(arg.split('=', 1) for arg in builds[0] if '=' in arg)
-            identity = signing.get('CODE_SIGN_IDENTITY', '-' if local else 'Developer ID Application')
-            assert settings['CURRENT_PROJECT_VERSION'] == str(expected_build), settings
-            assert settings['MARKETING_VERSION'] == signing.get('ACOUPLET_MARKETING_VERSION', '0.' + str(expected_build)), settings
-            assert settings['ACOUPLET_DISTRIBUTION'] == ('development' if local else 'production'), settings
-            counter = root / '.build/package-build-number'
-            if 'ACOUPLET_BUILD_NUMBER' in signing:
-                assert counter.read_text().strip() == '20' if mode == 'counter-persisted' else not counter.exists()
+            settings = dict(arg.split("=", 1) for arg in builds[0] if "=" in arg)
+            identity = signing.get(
+                "CODE_SIGN_IDENTITY", "-" if local else "Developer ID Application"
+            )
+            assert settings["CURRENT_PROJECT_VERSION"] == str(expected_build), settings
+            assert settings["MARKETING_VERSION"] == signing.get(
+                "ACOUPLET_MARKETING_VERSION", "0." + str(expected_build)
+            ), settings
+            assert settings["ACOUPLET_DISTRIBUTION"] == (
+                "development" if local else "production"
+            ), settings
+            counter = root / ".build/package-build-number"
+            if "ACOUPLET_BUILD_NUMBER" in signing:
+                assert (
+                    counter.read_text().strip() == "20"
+                    if mode == "counter-persisted"
+                    else not counter.exists()
+                )
             else:
                 assert counter.read_text().strip() == str(expected_build)
-            assert settings['ACOUPLET_PUBLIC_APIS_ONLY'] == 'NO', settings
-            assert settings['ACOUPLET_NO_SONY_ARTWORK'] == signing.get('ACOUPLET_NO_SONY_ARTWORK', 'NO' if signing.get('ACOUPLET_SONY_ARTWORK_DIR') else 'YES'), settings
-            assert settings['ACOUPLET_SONY_ARTWORK_DIR'] == signing.get('ACOUPLET_SONY_ARTWORK_DIR', ''), settings
-            assert settings['CODE_SIGN_IDENTITY'] == identity, settings
-            assert settings['CODE_SIGN_INJECT_BASE_ENTITLEMENTS'] == 'NO', settings
-            assert settings['ENABLE_HARDENED_RUNTIME'] == 'YES', settings
-            assert settings['DEVELOPMENT_TEAM'] == ('' if identity == '-' else signing.get('DEVELOPMENT_TEAM', '')), settings
-            assert settings['CODE_SIGN_STYLE'] == 'Manual', settings
-            assert '-allowProvisioningUpdates' not in builds[0], builds[0]
-            if succeeds and identity != '-':
-                checks = [command for command in commands if '--test-requirement==anchor apple generic' in command]
-                assert [Path(command[-1]).name for command in checks] == ['Acouplet.app', 'Acouplet Battery Publisher', 'SonyNativeHUD.dylib', 'SonyNativeHUDCheck', 'Installer.xpc', 'Autoupdate', 'Updater.app', 'Sparkle.framework', 'LDACSignaling', 'LDACMediaTransport', 'SonyAudioConnection', 'LDACLogObserver', 'Acouplet Audio.app', 'AcoupletLDACOutput.driver'], checks
-                developer_id_checks = [command for command in commands if any('field.1.2.840.113635.100.6.1.13' in arg for arg in command)]
-                assert [Path(command[-1]).name for command in developer_id_checks] == ([] if local else [Path(command[-1]).name for command in checks]), developer_id_checks
-                assert all('--all-architectures' in command for command in developer_id_checks), developer_id_checks
+            assert settings["ACOUPLET_PUBLIC_APIS_ONLY"] == "NO", settings
+            assert settings["ACOUPLET_NO_SONY_ARTWORK"] == signing.get(
+                "ACOUPLET_NO_SONY_ARTWORK",
+                "NO" if signing.get("ACOUPLET_SONY_ARTWORK_DIR") else "YES",
+            ), settings
+            assert settings["ACOUPLET_SONY_ARTWORK_DIR"] == signing.get(
+                "ACOUPLET_SONY_ARTWORK_DIR", ""
+            ), settings
+            assert settings["CODE_SIGN_IDENTITY"] == identity, settings
+            assert settings["CODE_SIGN_INJECT_BASE_ENTITLEMENTS"] == "NO", settings
+            assert settings["ENABLE_HARDENED_RUNTIME"] == "YES", settings
+            assert settings["DEVELOPMENT_TEAM"] == (
+                "" if identity == "-" else signing.get("DEVELOPMENT_TEAM", "")
+            ), settings
+            assert settings["CODE_SIGN_STYLE"] == "Manual", settings
+            assert "-allowProvisioningUpdates" not in builds[0], builds[0]
+            if succeeds and identity != "-":
+                checks = [
+                    command
+                    for command in commands
+                    if "--test-requirement==anchor apple generic" in command
+                ]
+                assert [Path(command[-1]).name for command in checks] == [
+                    "Acouplet.app",
+                    "Acouplet Battery Publisher",
+                    "SonyNativeHUD.dylib",
+                    "SonyNativeHUDCheck",
+                    "Installer.xpc",
+                    "Autoupdate",
+                    "Updater.app",
+                    "Sparkle.framework",
+                    "LDACSignaling",
+                    "LDACMediaTransport",
+                    "SonyAudioConnection",
+                    "LDACLogObserver",
+                    "Acouplet Audio.app",
+                    "AcoupletLDACOutput.driver",
+                ], checks
+                developer_id_checks = [
+                    command
+                    for command in commands
+                    if any("field.1.2.840.113635.100.6.1.13" in arg for arg in command)
+                ]
+                assert [Path(command[-1]).name for command in developer_id_checks] == (
+                    [] if local else [Path(command[-1]).name for command in checks]
+                ), developer_id_checks
+                assert all(
+                    "--all-architectures" in command for command in developer_id_checks
+                ), developer_id_checks
         if succeeds:
-            assert commands[0][:2] == ['release-source.py', 'capture'], commands[0]
-            assert any(command[:2] == ['release-source.py', 'verify'] for command in commands)
-            for notice in ('LICENSE', 'THIRD-PARTY-NOTICES.md'):
-                assert (root / '.build/Build/Products/Release/Acouplet.app/Contents/Resources' / notice).read_bytes() == (root / notice).read_bytes()
-            entitlements = [command for command in commands if '--entitlements' in command]
-            assert [Path(command[-1]).name for command in entitlements] == ['Acouplet.app', 'Acouplet Battery Publisher', 'SonyNativeHUD.dylib', 'SonyNativeHUDCheck', 'Installer.xpc', 'Autoupdate', 'Updater.app', 'Sparkle.framework', 'LDACSignaling', 'LDACMediaTransport', 'SonyAudioConnection', 'LDACLogObserver', 'Acouplet Audio.app', 'AcoupletLDACOutput.driver'], entitlements
+            assert commands[0][:2] == ["release-source.py", "capture"], commands[0]
+            assert any(
+                command[:2] == ["release-source.py", "verify"] for command in commands
+            )
+            for notice in ("LICENSE", "THIRD-PARTY-NOTICES.md"):
+                assert (
+                    root
+                    / ".build/Build/Products/Release/Acouplet.app/Contents/Resources"
+                    / notice
+                ).read_bytes() == (root / notice).read_bytes()
+            entitlements = [
+                command for command in commands if "--entitlements" in command
+            ]
+            assert [Path(command[-1]).name for command in entitlements] == [
+                "Acouplet.app",
+                "Acouplet Battery Publisher",
+                "SonyNativeHUD.dylib",
+                "SonyNativeHUDCheck",
+                "Installer.xpc",
+                "Autoupdate",
+                "Updater.app",
+                "Sparkle.framework",
+                "LDACSignaling",
+                "LDACMediaTransport",
+                "SonyAudioConnection",
+                "LDACLogObserver",
+                "Acouplet Audio.app",
+                "AcoupletLDACOutput.driver",
+            ], entitlements
             if local:
-                assert previous.read_text() == 'previous package'
-                assert archive.read_text() == 'previous archive'
-                assert not any(command[:2] == ['ditto', '-c'] for command in commands)
-                package = root / '.build/local-update/Acouplet'
-                receipt = (package / 'Local Build Receipt.txt').read_text()
-                assert 'Prepared UTC:' in receipt and 'Revision:' in receipt and 'Worktree:' in receipt
-                assert 'Signing identity: ' + identity in receipt
-                assert 'Release hardening: app and bundled helpers use hardened runtime without debugger access' in receipt
-                assert 'Build number: ' + str(expected_build) in receipt
-                assert 'Device preference panes:' not in receipt
-                assert ('Permission continuity: ad-hoc signature' in receipt) == (identity == '-')
+                assert previous.read_text() == "previous package"
+                assert archive.read_text() == "previous archive"
+                assert not any(command[:2] == ["ditto", "-c"] for command in commands)
+                package = root / ".build/local-update/Acouplet"
+                receipt = (package / "Local Build Receipt.txt").read_text()
+                assert (
+                    "Prepared UTC:" in receipt
+                    and "Revision:" in receipt
+                    and "Worktree:" in receipt
+                )
+                assert "Signing identity: " + identity in receipt
+                assert (
+                    "Release hardening: app and bundled helpers use hardened runtime without debugger access"
+                    in receipt
+                )
+                assert "Build number: " + str(expected_build) in receipt
+                assert "Device preference panes:" not in receipt
+                assert ("Permission continuity: ad-hoc signature" in receipt) == (
+                    identity == "-"
+                )
             else:
                 assert not previous.exists()
                 if direct:
-                    assert archive.read_text() == 'previous archive'
-                    assert local_previous.read_text() == 'previous development package'
-                    assert not any(command[:2] == ['ditto', '-c'] for command in commands)
-            receipt = (package / ('Local Build Receipt.txt' if local else 'Build Receipt.txt')).read_text()
-            assert 'Revision: ' + 'a' * 40 in receipt and 'Source input SHA256: ' + 'c' * 64 in receipt
-            assert ('Worktree: development (dirty)' if local else 'Worktree: production clean') in receipt
+                    assert archive.read_text() == "previous archive"
+                    assert local_previous.read_text() == "previous development package"
+                    assert not any(
+                        command[:2] == ["ditto", "-c"] for command in commands
+                    )
+            receipt = (
+                package / ("Local Build Receipt.txt" if local else "Build Receipt.txt")
+            ).read_text()
+            assert (
+                "Revision: " + "a" * 40 in receipt
+                and "Source input SHA256: " + "c" * 64 in receipt
+            )
+            assert (
+                "Worktree: development (dirty)"
+                if local
+                else "Worktree: production clean"
+            ) in receipt
             if local:
-                assert 'Release app: ' + str(root / '.build/Build/Products/Release/Acouplet.app') in receipt
+                assert (
+                    "Release app: "
+                    + str(root / ".build/Build/Products/Release/Acouplet.app")
+                    in receipt
+                )
             else:
                 if not direct:
                     with zipfile.ZipFile(archive) as contents:
-                        assert contents.read('Acouplet/Build Receipt.txt').decode() == receipt
+                        assert (
+                            contents.read("Acouplet/Build Receipt.txt").decode()
+                            == receipt
+                        )
                 assert str(root) not in receipt, receipt
-                assert 'Release app: Acouplet.app\n' in receipt
+                assert "Release app: Acouplet.app\n" in receipt
             for line in receipt.splitlines():
-                if not line.startswith('SHA256\t'): continue
-                _, digest, relative = line.split('\t')
-                assert hashlib.sha256((package / 'Acouplet.app' / relative).read_bytes()).hexdigest() == digest
-            assert receipt.count('SHA256\t') == 19
-            assert not (package / 'Acouplet LDAC Output.pkg').exists()
-            assert not (package / 'Acouplet LDAC Removal.pkg').exists()
-            assert (package / 'Acouplet.app/Contents/Resources/Acouplet LDAC Removal.pkg').read_text() == 'driver-only uninstaller'
-            assert (package / 'Acouplet.app/Contents/Resources/Acouplet LDAC Output.pkg').read_text() == 'driver-only installer'
-            assert (package / 'Acouplet.app/Contents/MacOS/Acouplet').read_text() == 'resigned app'
-            assert (package / 'Uninstall LDAC Output.command').is_file()
-            assert 'Driver installer SHA256: ' in receipt
-            distribution = 'development' if local else 'production'
-            assert 'Distribution: ' + distribution in receipt and 'Configuration: Release' in receipt
-            info = plistlib.loads((package / 'Acouplet.app/Contents/Info.plist').read_bytes())
-            assert info['AcoupletDistribution'] == distribution
-            assert not (package / 'Acouplet.app/Contents/PlugIns/Acouplet Controls.appex').exists()
-            assert not (package / 'PreferencePanes').exists()
-            assert not list(package.rglob('*.prefPane'))
+                if not line.startswith("SHA256\t"):
+                    continue
+                _, digest, relative = line.split("\t")
+                assert (
+                    hashlib.sha256(
+                        (package / "Acouplet.app" / relative).read_bytes()
+                    ).hexdigest()
+                    == digest
+                )
+            assert receipt.count("SHA256\t") == 19
+            assert not (package / "Acouplet LDAC Output.pkg").exists()
+            assert not (package / "Acouplet LDAC Removal.pkg").exists()
+            assert (
+                package / "Acouplet.app/Contents/Resources/Acouplet LDAC Removal.pkg"
+            ).read_text() == "driver-only uninstaller"
+            assert (
+                package / "Acouplet.app/Contents/Resources/Acouplet LDAC Output.pkg"
+            ).read_text() == "driver-only installer"
+            assert (
+                package / "Acouplet.app/Contents/MacOS/Acouplet"
+            ).read_text() == "resigned app"
+            assert (package / "Uninstall LDAC Output.command").is_file()
+            assert "Driver installer SHA256: " in receipt
+            distribution = "development" if local else "production"
+            assert (
+                "Distribution: " + distribution in receipt
+                and "Configuration: Release" in receipt
+            )
+            info = plistlib.loads(
+                (package / "Acouplet.app/Contents/Info.plist").read_bytes()
+            )
+            assert info["AcoupletDistribution"] == distribution
+            assert not (
+                package / "Acouplet.app/Contents/PlugIns/Acouplet Controls.appex"
+            ).exists()
+            assert not (package / "PreferencePanes").exists()
+            assert not list(package.rglob("*.prefPane"))
         else:
-            if mode != 'source-drift-archive': assert previous.read_text() == 'previous package'
-            assert archive.read_text() == 'previous archive'
-            if mode not in ('source-drift', 'source-drift-archive'): assert not any(command[0] == 'ditto' for command in commands), commands
-            if mode == 'source-drift': assert not (package / 'Acouplet.app').exists()
-            if mode.startswith('source-'):
-                assert commands[-1][0] == 'release-source.py'
-            if mode.startswith('missing-runtime-'): assert 'must enable hardened runtime' in result.stderr, result.stderr
-            if mode.startswith('debuggable-'): assert 'must omit debugger access in Release' in result.stderr, result.stderr
-            if mode == 'sandboxed-app': assert 'must omit the sandbox entitlement' in result.stderr, result.stderr
-            if mode == 'wrong-distribution': assert 'must declare the requested' in result.stderr, result.stderr
-            if mode == 'development-upstream-feed': assert 'Incorrect Sparkle policy: SUFeedURL' in result.stderr, result.stderr
+            if mode != "source-drift-archive":
+                assert previous.read_text() == "previous package"
+            assert archive.read_text() == "previous archive"
+            if mode not in ("source-drift", "source-drift-archive"):
+                assert not any(command[0] == "ditto" for command in commands), commands
+            if mode == "source-drift":
+                assert not (package / "Acouplet.app").exists()
+            if mode.startswith("source-"):
+                assert commands[-1][0] == "release-source.py"
+            if mode.startswith("missing-runtime-"):
+                assert "must enable hardened runtime" in result.stderr, result.stderr
+            if mode.startswith("debuggable-"):
+                assert "must omit debugger access in Release" in result.stderr, (
+                    result.stderr
+                )
+            if mode == "sandboxed-app":
+                assert "must omit the sandbox entitlement" in result.stderr, (
+                    result.stderr
+                )
+            if mode == "wrong-distribution":
+                assert "must declare the requested" in result.stderr, result.stderr
+            if mode == "development-upstream-feed":
+                assert "Incorrect Sparkle policy: SUFeedURL" in result.stderr, (
+                    result.stderr
+                )
 
 
-checks = CheckCases('Run isolated packaging fixtures without building or signing the app.')
+checks = CheckCases(
+    "Run isolated packaging fixtures without building or signing the app."
+)
 
 
 def check(*arguments, **options):
     checks.add(arguments[0], run_check, *arguments, **options)
 
 
-check('default-developer-id', {})
-check('production-rejects-dirty-source-before-build', {}, 'source-dirty', False)
-check('production-rejects-source-drift-before-staging', {}, 'source-drift', False)
-check('production-rejects-source-drift-before-archive-replacement', {}, 'source-drift-archive', False)
-check('local-allows-dirty-source', {}, 'source-dirty', local=True)
-check('default-missing-identity-no-fallback', {}, 'build-failure', False)
-check('default-rejects-ad-hoc-output', {}, 'adhoc-output', False)
-check('explicit-ad-hoc-with-team', {'CODE_SIGN_IDENTITY': '-', 'DEVELOPMENT_TEAM': 'ABCDE12345'}, local=True)
-check('automatic-team', {'DEVELOPMENT_TEAM': 'ABCDE12345'})
-check('local-apple-development', {'CODE_SIGN_IDENTITY': 'Apple Development', 'DEVELOPMENT_TEAM': 'ABCDE12345'}, local=True)
-check('developer-id', {'CODE_SIGN_IDENTITY': 'Developer ID Application: Example (ABCDE12345)', 'DEVELOPMENT_TEAM': 'ABCDE12345'})
-check('developer-id-fingerprint', {'CODE_SIGN_IDENTITY': 'A' * 40})
-check('production-rejects-apple-development', {'CODE_SIGN_IDENTITY': 'Apple Development'}, succeeds=False)
-check('production-rejects-ad-hoc', {'CODE_SIGN_IDENTITY': '-'}, succeeds=False)
-check('fingerprint-cannot-bypass-developer-id', {'CODE_SIGN_IDENTITY': 'A' * 40}, 'development-output', False)
-check('production-rejects-development-driver', {}, 'development-driver', False)
-check('production-rejects-development-helper', {}, 'development-helper', False)
-check('local-development-fingerprint', {'CODE_SIGN_IDENTITY': 'A' * 40}, 'development-output', local=True)
-check('certificate-without-explicit-team', {'CODE_SIGN_IDENTITY': 'Developer ID Application'})
-check('empty-identity', {'CODE_SIGN_IDENTITY': ''}, succeeds=False)
-check('missing-identity-no-fallback', {'CODE_SIGN_IDENTITY': 'Developer ID Application'}, 'build-failure', False)
-check('unexpected-ad-hoc-output', {'CODE_SIGN_IDENTITY': 'Developer ID Application'}, 'adhoc-output', False)
-check('requested-team-mismatch', {'DEVELOPMENT_TEAM': 'ABCDE12345'}, 'wrong-team', False)
-check('missing-team', {'CODE_SIGN_IDENTITY': 'Developer ID Application'}, 'missing-team', False)
-check('invalid-signature', {'CODE_SIGN_IDENTITY': 'Developer ID Application'}, 'invalid-signature', False)
-check('sandboxed-direct-app', {'CODE_SIGN_IDENTITY': 'Developer ID Application'}, 'sandboxed-app', False)
-check('production-rejects-development-metadata', {}, 'wrong-distribution', False)
-check('local-rejects-production-metadata', {}, 'wrong-distribution', False, local=True)
-check('production-ignores-development-environment', {'ACOUPLET_DISTRIBUTION': 'development'})
-check('local-ignores-production-environment', {'ACOUPLET_DISTRIBUTION': 'production'}, local=True)
-check('local-rejects-upstream-update-feed', {}, 'development-upstream-feed', False, local=True)
-check('website-stage-production-without-zip', {}, direct=True)
-check('missing-license', {}, 'missing-license', False)
-check('stale-notices', {}, 'stale-notices', False)
-check('missing-ldac-notice', {}, 'missing-ldac-notice', False)
-for failure in ('different-ldac-team', 'missing-runtime-ldac', 'debuggable-ldac', 'wrong-audio-build', 'wrong-driver-build', 'wrong-driver-identity', 'changed-apple-source'):
-    check(failure, {'CODE_SIGN_IDENTITY': 'Developer ID Application'}, failure, False)
-for failure in ('missing-runtime-app', 'debuggable-app'):
-    check(failure, {'CODE_SIGN_IDENTITY': 'Developer ID Application'}, failure, False)
+check("default-developer-id", {})
+check("production-rejects-dirty-source-before-build", {}, "source-dirty", False)
+check("production-rejects-source-drift-before-staging", {}, "source-drift", False)
+check(
+    "production-rejects-source-drift-before-archive-replacement",
+    {},
+    "source-drift-archive",
+    False,
+)
+check("local-allows-dirty-source", {}, "source-dirty", local=True)
+check("default-missing-identity-no-fallback", {}, "build-failure", False)
+check("default-rejects-ad-hoc-output", {}, "adhoc-output", False)
+check(
+    "explicit-ad-hoc-with-team",
+    {"CODE_SIGN_IDENTITY": "-", "DEVELOPMENT_TEAM": "ABCDE12345"},
+    local=True,
+)
+check("automatic-team", {"DEVELOPMENT_TEAM": "ABCDE12345"})
+check(
+    "local-apple-development",
+    {"CODE_SIGN_IDENTITY": "Apple Development", "DEVELOPMENT_TEAM": "ABCDE12345"},
+    local=True,
+)
+check(
+    "developer-id",
+    {
+        "CODE_SIGN_IDENTITY": "Developer ID Application: Example (ABCDE12345)",
+        "DEVELOPMENT_TEAM": "ABCDE12345",
+    },
+)
+check("developer-id-fingerprint", {"CODE_SIGN_IDENTITY": "A" * 40})
+check(
+    "production-rejects-apple-development",
+    {"CODE_SIGN_IDENTITY": "Apple Development"},
+    succeeds=False,
+)
+check("production-rejects-ad-hoc", {"CODE_SIGN_IDENTITY": "-"}, succeeds=False)
+check(
+    "fingerprint-cannot-bypass-developer-id",
+    {"CODE_SIGN_IDENTITY": "A" * 40},
+    "development-output",
+    False,
+)
+check("production-rejects-development-driver", {}, "development-driver", False)
+check("production-rejects-development-helper", {}, "development-helper", False)
+check(
+    "local-development-fingerprint",
+    {"CODE_SIGN_IDENTITY": "A" * 40},
+    "development-output",
+    local=True,
+)
+check(
+    "certificate-without-explicit-team",
+    {"CODE_SIGN_IDENTITY": "Developer ID Application"},
+)
+check("empty-identity", {"CODE_SIGN_IDENTITY": ""}, succeeds=False)
+check(
+    "missing-identity-no-fallback",
+    {"CODE_SIGN_IDENTITY": "Developer ID Application"},
+    "build-failure",
+    False,
+)
+check(
+    "unexpected-ad-hoc-output",
+    {"CODE_SIGN_IDENTITY": "Developer ID Application"},
+    "adhoc-output",
+    False,
+)
+check(
+    "requested-team-mismatch", {"DEVELOPMENT_TEAM": "ABCDE12345"}, "wrong-team", False
+)
+check(
+    "missing-team",
+    {"CODE_SIGN_IDENTITY": "Developer ID Application"},
+    "missing-team",
+    False,
+)
+check(
+    "invalid-signature",
+    {"CODE_SIGN_IDENTITY": "Developer ID Application"},
+    "invalid-signature",
+    False,
+)
+check(
+    "sandboxed-direct-app",
+    {"CODE_SIGN_IDENTITY": "Developer ID Application"},
+    "sandboxed-app",
+    False,
+)
+check("production-rejects-development-metadata", {}, "wrong-distribution", False)
+check("local-rejects-production-metadata", {}, "wrong-distribution", False, local=True)
+check(
+    "production-ignores-development-environment",
+    {"ACOUPLET_DISTRIBUTION": "development"},
+)
+check(
+    "local-ignores-production-environment",
+    {"ACOUPLET_DISTRIBUTION": "production"},
+    local=True,
+)
+check(
+    "local-rejects-upstream-update-feed",
+    {},
+    "development-upstream-feed",
+    False,
+    local=True,
+)
+check("website-stage-production-without-zip", {}, direct=True)
+check("missing-license", {}, "missing-license", False)
+check("stale-notices", {}, "stale-notices", False)
+check("missing-ldac-notice", {}, "missing-ldac-notice", False)
+for failure in (
+    "different-ldac-team",
+    "missing-runtime-ldac",
+    "debuggable-ldac",
+    "wrong-audio-build",
+    "wrong-driver-build",
+    "wrong-driver-identity",
+    "changed-apple-source",
+):
+    check(failure, {"CODE_SIGN_IDENTITY": "Developer ID Application"}, failure, False)
+for failure in ("missing-runtime-app", "debuggable-app"):
+    check(failure, {"CODE_SIGN_IDENTITY": "Developer ID Application"}, failure, False)
 
-check('local-stage-receipt-without-archive', {}, local=True)
-check('local-default-ignores-team', {'DEVELOPMENT_TEAM': '5743Y47SC7'}, local=True)
-check('local-certificate-without-explicit-team', {'CODE_SIGN_IDENTITY': 'Apple Development'}, local=True)
-check('local-ad-hoc-receipt-without-archive', {'CODE_SIGN_IDENTITY': '-'}, local=True)
+check("local-stage-receipt-without-archive", {}, local=True)
+check("local-default-ignores-team", {"DEVELOPMENT_TEAM": "5743Y47SC7"}, local=True)
+check(
+    "local-certificate-without-explicit-team",
+    {"CODE_SIGN_IDENTITY": "Apple Development"},
+    local=True,
+)
+check("local-ad-hoc-receipt-without-archive", {"CODE_SIGN_IDENTITY": "-"}, local=True)
 
-for failure in ('missing-helper', 'adhoc-helper', 'different-helper-team', 'missing-runtime-helper', 'debuggable-helper', 'sandboxed-helper', 'inherited-helper', 'extra-helper-entitlement', 'wrong-build', 'missing-hud', 'different-hud-team', 'missing-runtime-hud', 'missing-hud-check', 'different-hud-check-team', 'missing-runtime-hud-check', 'debuggable-hud-check', 'different-sparkle-team', 'missing-runtime-sparkle'):
-    check(failure, {'CODE_SIGN_IDENTITY': 'Developer ID Application'}, failure, False)
-check('counter-restored-from-installed', {}, 'counter-restore', local=True)
-check('counter-keeps-larger-persisted-build', {}, 'counter-persisted', local=True)
-check('patch-version-with-increasing-build', {'ACOUPLET_MARKETING_VERSION': '0.24.5'}, 'counter-restore', local=True)
-check('invalid-marketing-version', {'ACOUPLET_MARKETING_VERSION': '0.24.5-beta'}, succeeds=False)
-check('explicit-ci-build-ignores-installed-app', {'ACOUPLET_BUILD_NUMBER': '31', 'ACOUPLET_MARKETING_VERSION': '0.31'}, 'counter-restore', direct=True)
-check('explicit-ci-build-preserves-local-counter', {'ACOUPLET_BUILD_NUMBER': '31', 'ACOUPLET_NO_SONY_ARTWORK': 'YES'}, 'counter-persisted', direct=True)
-check('external-photographs', {'ACOUPLET_SONY_ARTWORK_DIR': '/private/Sony Photos.xcassets'}, local=True)
-check('explicit-photo-exclusion', {'ACOUPLET_SONY_ARTWORK_DIR': '/private/Sony Photos.xcassets', 'ACOUPLET_NO_SONY_ARTWORK': 'YES'}, local=True)
-for value in ('', '0', '-1', '1.2', '03', 'abc'):
-    check('invalid-explicit-ci-build-' + value, {'ACOUPLET_BUILD_NUMBER': value}, succeeds=False)
+for failure in (
+    "missing-helper",
+    "adhoc-helper",
+    "different-helper-team",
+    "missing-runtime-helper",
+    "debuggable-helper",
+    "sandboxed-helper",
+    "inherited-helper",
+    "extra-helper-entitlement",
+    "wrong-build",
+    "missing-hud",
+    "different-hud-team",
+    "missing-runtime-hud",
+    "missing-hud-check",
+    "different-hud-check-team",
+    "missing-runtime-hud-check",
+    "debuggable-hud-check",
+    "different-sparkle-team",
+    "missing-runtime-sparkle",
+):
+    check(failure, {"CODE_SIGN_IDENTITY": "Developer ID Application"}, failure, False)
+check("counter-restored-from-installed", {}, "counter-restore", local=True)
+check("counter-keeps-larger-persisted-build", {}, "counter-persisted", local=True)
+check(
+    "patch-version-with-increasing-build",
+    {"ACOUPLET_MARKETING_VERSION": "0.24.5"},
+    "counter-restore",
+    local=True,
+)
+check(
+    "invalid-marketing-version",
+    {"ACOUPLET_MARKETING_VERSION": "0.24.5-beta"},
+    succeeds=False,
+)
+check(
+    "explicit-ci-build-ignores-installed-app",
+    {"ACOUPLET_BUILD_NUMBER": "31", "ACOUPLET_MARKETING_VERSION": "0.31"},
+    "counter-restore",
+    direct=True,
+)
+check(
+    "explicit-ci-build-preserves-local-counter",
+    {"ACOUPLET_BUILD_NUMBER": "31", "ACOUPLET_NO_SONY_ARTWORK": "YES"},
+    "counter-persisted",
+    direct=True,
+)
+check(
+    "external-photographs",
+    {"ACOUPLET_SONY_ARTWORK_DIR": "/private/Sony Photos.xcassets"},
+    local=True,
+)
+check(
+    "explicit-photo-exclusion",
+    {
+        "ACOUPLET_SONY_ARTWORK_DIR": "/private/Sony Photos.xcassets",
+        "ACOUPLET_NO_SONY_ARTWORK": "YES",
+    },
+    local=True,
+)
+for value in ("", "0", "-1", "1.2", "03", "abc"):
+    check(
+        "invalid-explicit-ci-build-" + value,
+        {"ACOUPLET_BUILD_NUMBER": value},
+        succeeds=False,
+    )
 
-check('deferred-device-panes-local', {}, local=True, panes=True)
-check('deferred-device-panes-archive', {}, panes=True)
+check("deferred-device-panes-local", {}, local=True, panes=True)
+check("deferred-device-panes-archive", {}, panes=True)
 
-check('deferred-controls-local', {}, 'embedded-controls', False, local=True)
-check('deferred-controls-archive', {}, 'embedded-controls', False)
-check('deferred-controls-stale-build-output', {}, 'stale-controls', local=True)
+check("deferred-controls-local", {}, "embedded-controls", False, local=True)
+check("deferred-controls-archive", {}, "embedded-controls", False)
+check("deferred-controls-stale-build-output", {}, "stale-controls", local=True)
 
 
 def main():
     checks.main()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

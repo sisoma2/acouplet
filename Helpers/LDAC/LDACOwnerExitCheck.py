@@ -9,12 +9,18 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parent
 capture = (root / "SystemAudioTapProbe.m").read_text()
-watch = capture[capture.index("static dispatch_source_t WatchParent("):capture.index("\ntypedef struct", capture.index("static dispatch_source_t WatchParent("))]
+watch = capture[
+    capture.index("static dispatch_source_t WatchParent(") : capture.index(
+        "\ntypedef struct", capture.index("static dispatch_source_t WatchParent(")
+    )
+]
 observer = (root / "LDACLogObserver.c").read_text()
 lifetime = (root / "LDACParentLifetime.h").read_text()
 native = (root.parents[1] / "Sources/LDACNativeSession.swift").read_text()
-child_code = native[native.index("final class LDACNativeChild {"):native.rindex("#endif")]
-fixture = r'''
+child_code = native[
+    native.index("final class LDACNativeChild {") : native.rindex("#endif")
+]
+fixture = r"""
 #include <dispatch/dispatch.h>
 #include <signal.h>
 #include <stdio.h>
@@ -50,7 +56,9 @@ int main(int argc, char **argv) {
     fflush(stdout);
     while (1) pause();
 }
-'''.replace("__WATCH__", watch.replace('8 * NSEC_PER_SEC', 'NSEC_PER_SEC / 4')).replace("__LIFETIME__", lifetime)
+""".replace("__WATCH__", watch.replace("8 * NSEC_PER_SEC", "NSEC_PER_SEC / 4")).replace(
+    "__LIFETIME__", lifetime
+)
 
 
 def line(process):
@@ -78,12 +86,30 @@ with tempfile.TemporaryDirectory(prefix="acouplet-ldac-owner-exit-") as director
     child_source = directory / "Child.c"
     observer_source = directory / "Observer.c"
     child_source.write_text(fixture)
-    observer_source.write_text(observer.replace('"/usr/bin/log"', '"' + str(child) + '"'))
+    observer_source.write_text(
+        observer.replace('"/usr/bin/log"', '"' + str(child) + '"')
+    )
     for source, binary in [(child_source, child), (observer_source, wrapper)]:
-        subprocess.run(["xcrun", "clang", "-fblocks", "-Wall", "-Wextra", "-Werror", str(source), "-o", str(binary)], check=True)
+        subprocess.run(
+            [
+                "xcrun",
+                "clang",
+                "-fblocks",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                str(source),
+                "-o",
+                str(binary),
+            ],
+            check=True,
+        )
     launcher_source = directory / "Launcher.swift"
     launcher = directory / "Launcher"
-    launcher_source.write_text("import Foundation\nimport Darwin\n" + child_code + r'''
+    launcher_source.write_text(
+        "import Foundation\nimport Darwin\n"
+        + child_code
+        + r"""
 @main
 struct Check {
     static func main() throws {
@@ -109,15 +135,39 @@ struct Check {
         print("DESCENDANT \(descendant!)")
     }
 }
-''')
-    subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(launcher_source), "-o", str(launcher)], check=True)
-    result = subprocess.run([str(launcher), str(wrapper)], capture_output=True, text=True, check=True, timeout=5)
+"""
+    )
+    subprocess.run(
+        [
+            "xcrun",
+            "swiftc",
+            "-swift-version",
+            "6",
+            "-parse-as-library",
+            str(launcher_source),
+            "-o",
+            str(launcher),
+        ],
+        check=True,
+    )
+    result = subprocess.run(
+        [str(launcher), str(wrapper)],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    )
     descendant = int(result.stdout.split()[1])
     absent(descendant)
-    print("PASS actual child launch/reap kills its isolated process group after supervisor SIGKILL; descendant stdout cannot retain the session")
+    print(
+        "PASS actual child launch/reap kills its isolated process group after supervisor SIGKILL; descendant stdout cannot retain the session"
+    )
     sender_source = directory / "Sender.swift"
     sender = directory / "Sender"
-    sender_source.write_text("import Foundation\nimport Darwin\n" + child_code + r'''
+    sender_source.write_text(
+        "import Foundation\nimport Darwin\n"
+        + child_code
+        + r"""
 @main
 struct Check {
     static func main() throws {
@@ -160,18 +210,47 @@ struct Check {
         print("SENDER_CHECKS_PASSED")
     }
 }
-''')
-    subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(sender_source), "-o", str(sender)], check=True)
-    result = subprocess.run([str(sender), str(child)], check=False, capture_output=True, text=True, timeout=15)
-    assert result.returncode == 0 and "SENDER_CHECKS_PASSED" in result.stdout, (result.returncode, result.stdout, result.stderr)
-    print("PASS actual child send: a 256 KiB line reaches a reading helper whole, a helper that never reads gets an explicit partial-write error after the bounded wait, and an exited helper is still EPIPE")
-    result = subprocess.Popen([str(wrapper), "--exit-23"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+"""
+    )
+    subprocess.run(
+        [
+            "xcrun",
+            "swiftc",
+            "-swift-version",
+            "6",
+            "-parse-as-library",
+            str(sender_source),
+            "-o",
+            str(sender),
+        ],
+        check=True,
+    )
+    result = subprocess.run(
+        [str(sender), str(child)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0 and "SENDER_CHECKS_PASSED" in result.stdout, (
+        result.returncode,
+        result.stdout,
+        result.stderr,
+    )
+    print(
+        "PASS actual child send: a 256 KiB line reaches a reading helper whole, a helper that never reads gets an explicit partial-write error after the bounded wait, and an exited helper is still EPIPE"
+    )
+    result = subprocess.Popen(
+        [str(wrapper), "--exit-23"], stdin=subprocess.PIPE, stdout=subprocess.PIPE
+    )
     assert result.wait(timeout=5) == 23
     result.stdin.close()
     result.stdout.close()
     for mode in ["--normal", "--ignore-term"]:
         for stop in ["eof", "term", "int"]:
-            process = subprocess.Popen([str(wrapper), mode], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            process = subprocess.Popen(
+                [str(wrapper), mode], stdin=subprocess.PIPE, stdout=subprocess.PIPE
+            )
             child_pid = int(line(process).split()[1])
             if stop == "eof":
                 process.stdin.close()
@@ -183,18 +262,33 @@ struct Check {
             process.stdout.close()
             if stop != "eof":
                 process.stdin.close()
-            print(f"PASS actual log observer {stop}, child={mode}: child reaped and wrapper exited")
-    owner = r'''
+            print(
+                f"PASS actual log observer {stop}, child={mode}: child reaped and wrapper exited"
+            )
+    owner = r"""
 import os, subprocess, sys, time
 process = subprocess.Popen(sys.argv[1:], stdin=subprocess.PIPE)
 print("OWNER", process.pid, flush=True)
 time.sleep(60)
-'''
-    for binary, mode in [(wrapper, "--normal"), (wrapper, "--ignore-term"), (child, "--capture-watch"), (child, "--capture-hung"), (child, "--lifetime-bound")]:
-        process = subprocess.Popen([sys.executable, "-u", "-c", owner, str(binary), mode], stdout=subprocess.PIPE)
+"""
+    for binary, mode in [
+        (wrapper, "--normal"),
+        (wrapper, "--ignore-term"),
+        (child, "--capture-watch"),
+        (child, "--capture-hung"),
+        (child, "--lifetime-bound"),
+    ]:
+        process = subprocess.Popen(
+            [sys.executable, "-u", "-c", owner, str(binary), mode],
+            stdout=subprocess.PIPE,
+        )
         values = [line(process), line(process)]
-        observer_pid = int(next(value for value in values if value.startswith("OWNER ")).split()[1])
-        child_pid = int(next(value for value in values if value.startswith("CHILD ")).split()[1])
+        observer_pid = int(
+            next(value for value in values if value.startswith("OWNER ")).split()[1]
+        )
+        child_pid = int(
+            next(value for value in values if value.startswith("CHILD ")).split()[1]
+        )
         process.kill()
         process.wait(timeout=5)
         rest = process.communicate(timeout=5)[0].decode()
@@ -203,4 +297,6 @@ time.sleep(60)
         if mode == "--capture-watch":
             assert "CAPTURE_CLEANUP_REACHED" in rest
         print(f"PASS actual source owner SIGKILL, mode={mode}: owned processes exited")
-    print("PASS process checks use local fixture children; no system log reader, audio, Bluetooth, driver or service accessed")
+    print(
+        "PASS process checks use local fixture children; no system log reader, audio, Bluetooth, driver or service accessed"
+    )

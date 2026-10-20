@@ -5,15 +5,22 @@ from pathlib import Path
 
 source_path = Path(__file__).resolve().parents[1] / "Sources/SonyBLETransport.swift"
 source = source_path.read_text()
-buffer = source[source.index("struct SonyBLEWriteBuffer {"):source.index("\n@MainActor\nfinal class SonyBLETransport")]
+buffer = source[
+    source.index("struct SonyBLEWriteBuffer {") : source.index(
+        "\n@MainActor\nfinal class SonyBLETransport"
+    )
+]
 write_start = source.index("    @discardableResult\n    func write(")
-write = source[write_start:source.index("\n    func centralManagerDidUpdateState", write_start)]
+write = source[
+    write_start : source.index("\n    func centralManagerDidUpdateState", write_start)
+]
 drain_start = source.index("    private func drain() {")
-drain = source[drain_start:source.index("\n    private func fail(", drain_start)]
+drain = source[drain_start : source.index("\n    private func fail(", drain_start)]
 fail_start = source.index("    private func fail(", drain_start)
-fail = source[fail_start:source.rindex("\n}")]
+fail = source[fail_start : source.rindex("\n}")]
 assert "Task.sleep(for: .seconds(5))" in drain
-fixture = '''import Foundation
+fixture = (
+    """import Foundation
 
 BUFFER
 
@@ -174,7 +181,11 @@ struct Check {
         print("PASS no CoreBluetooth import, manager, service calls, or hardware access")
     }
 }
-'''.replace("BUFFER", buffer).replace("WRITE\n", write).replace("DRAIN\n", drain).replace("FAIL\n", fail)
+""".replace("BUFFER", buffer)
+    .replace("WRITE\n", write)
+    .replace("DRAIN\n", drain)
+    .replace("FAIL\n", fail)
+)
 with tempfile.TemporaryDirectory(prefix="acouplet-sony-ble-write-") as directory:
     root = Path(directory)
     output = root / "Check.swift"
@@ -183,10 +194,27 @@ with tempfile.TemporaryDirectory(prefix="acouplet-sony-ble-write-") as directory
     environment["ACOUPLET_TESTING"] = "1"
     environment["CFFIXED_USER_HOME"] = str(root / "home")
     Path(environment["CFFIXED_USER_HOME"]).mkdir()
-    environment.setdefault("CLANG_MODULE_CACHE_PATH", str(source_path.parents[1] / ".build/check-all/ModuleCache"))
+    environment.setdefault(
+        "CLANG_MODULE_CACHE_PATH",
+        str(source_path.parents[1] / ".build/check-all/ModuleCache"),
+    )
     if not environment.get("SDKROOT"):
-        environment["SDKROOT"] = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
+        environment["SDKROOT"] = subprocess.check_output(
+            ["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True
+        ).strip()
     binary = root / "check"
-    subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "6", str(output), "-o", str(binary)],
-                   env=environment, check=True)
+    subprocess.run(
+        [
+            "xcrun",
+            "swiftc",
+            "-parse-as-library",
+            "-swift-version",
+            "6",
+            str(output),
+            "-o",
+            str(binary),
+        ],
+        env=environment,
+        check=True,
+    )
     subprocess.run([str(binary)], env=environment, check=True)

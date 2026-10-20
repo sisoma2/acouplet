@@ -4,12 +4,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-vendor = Path(__file__).resolve().parent.parent / 'Vendor/libldac'
-notice = '/* Modified by Acouplet on 2026-10-03: defined unsigned packing shift. */\n\n'
-fixed = '((unsigned int)idata << (24-nbits))'
-original = '(idata << (24-nbits))'
-upstream_sha = '61efb10d366a0d72c6a933abc22a87e2c891a8b2ab63f391655a79b7cc2f9952'
-source = r'''
+vendor = Path(__file__).resolve().parent.parent / "Vendor/libldac"
+notice = "/* Modified by Acouplet on 2026-10-03: defined unsigned packing shift. */\n\n"
+fixed = "((unsigned int)idata << (24-nbits))"
+original = "(idata << (24-nbits))"
+upstream_sha = "61efb10d366a0d72c6a933abc22a87e2c891a8b2ab63f391655a79b7cc2f9952"
+source = r"""
 #include <assert.h>
 #include <limits.h>
 #include <stdint.h>
@@ -99,37 +99,71 @@ int main(int argc, char **argv) {
     }
     return 0;
 }
-'''
+"""
 
-with tempfile.TemporaryDirectory(prefix='acouplet-ldac-packing-') as directory:
+with tempfile.TemporaryDirectory(prefix="acouplet-ldac-packing-") as directory:
     root = Path(directory)
-    prior = root / 'prior'
+    prior = root / "prior"
     shutil.copytree(vendor, prior)
-    packer = prior / 'src/pack_ldac.c'
-    text = packer.read_text().replace(notice, '').replace(fixed, original)
+    packer = prior / "src/pack_ldac.c"
+    text = packer.read_text().replace(notice, "").replace(fixed, original)
     assert hashlib.sha256(text.encode()).hexdigest() == upstream_sha
     packer.write_text(text)
-    check = root / 'check.c'
+    check = root / "check.c"
     check.write_text(source)
     executables = {}
-    for name, tree, sanitized in [('original', prior, False), ('original-ubsan', prior, True), ('fixed', vendor, True)]:
+    for name, tree, sanitized in [
+        ("original", prior, False),
+        ("original-ubsan", prior, True),
+        ("fixed", vendor, True),
+    ]:
         executable = root / name
-        subprocess.run(['xcrun', '--sdk', 'macosx', 'clang', '-O2', '-std=c11',
-                        *(['-fsanitize=undefined', '-fno-sanitize-recover=undefined'] if sanitized else []),
-                        '-I', str(tree / 'inc'), '-I', str(tree / 'src'), str(check),
-                        str(tree / 'src/ldacBT.c'), '-o', str(executable)], check=True)
+        subprocess.run(
+            [
+                "xcrun",
+                "--sdk",
+                "macosx",
+                "clang",
+                "-O2",
+                "-std=c11",
+                *(
+                    ["-fsanitize=undefined", "-fno-sanitize-recover=undefined"]
+                    if sanitized
+                    else []
+                ),
+                "-I",
+                str(tree / "inc"),
+                "-I",
+                str(tree / "src"),
+                str(check),
+                str(tree / "src/ldacBT.c"),
+                "-o",
+                str(executable),
+            ],
+            check=True,
+        )
         executables[name] = executable
-    reproduced = subprocess.run([str(executables['original-ubsan'])], check=False, capture_output=True, text=True)
-    assert reproduced.returncode != 0 and 'left shift of negative value' in reproduced.stderr, reproduced
-    print('Original pinned packer: UBSan negative-left-shift reproduced', flush=True)
-    subprocess.run([str(executables['fixed'])], check=True)
+    reproduced = subprocess.run(
+        [str(executables["original-ubsan"])],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert (
+        reproduced.returncode != 0
+        and "left shift of negative value" in reproduced.stderr
+    ), reproduced
+    print("Original pinned packer: UBSan negative-left-shift reproduced", flush=True)
+    subprocess.run([str(executables["fixed"])], check=True)
     for rate in (44100, 48000, 88200, 96000):
         for quality in (0, 1, 2):
             for floating in (0, 1):
                 args = [str(rate), str(quality), str(floating)]
-                golden = subprocess.check_output([str(executables['original']), *args])
-                result = subprocess.check_output([str(executables['fixed']), *args])
+                golden = subprocess.check_output([str(executables["original"]), *args])
+                result = subprocess.check_output([str(executables["fixed"]), *args])
                 assert result == golden, args
-                print(f'{rate} Hz quality={quality} {"F32" if floating else "S16"}: '
-                      f'{len(result)} bytes identical, sha256={hashlib.sha256(result).hexdigest()}')
-print('LDAC defined packing and 24 complete-frame golden comparisons: passed')
+                print(
+                    f"{rate} Hz quality={quality} {'F32' if floating else 'S16'}: "
+                    f"{len(result)} bytes identical, sha256={hashlib.sha256(result).hexdigest()}"
+                )
+print("LDAC defined packing and 24 complete-frame golden comparisons: passed")

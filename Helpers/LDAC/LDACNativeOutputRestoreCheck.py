@@ -5,27 +5,95 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-source = (Path(__file__).resolve().parents[2] / "Sources/LDACNativeOutput.swift").read_text()
-driver = (Path(__file__).resolve().parent / "VirtualOutput/AcoupletVirtualOutput.c").read_text()
-assert re.search(r'kAcoupletLease,\s*kAudioServerPlugInCustomPropertyDataTypeCFPropertyList,\s*kAudioServerPlugInCustomPropertyDataTypeNone', driver)
-latency = source[source.index("    func updateLatency("):source.index("    private var handoffSelectors:")]
-claim = source[source.index("    nonisolated static func canTransferControls("):source.index("    func priorityControl(")]
-priority = source[source.index("    func priorityControl("):source.index("    func selectForHandoff(")]
-priority_state = source[source.index("    private nonisolated static func priorityState("):source.index("    private nonisolated static func read<T>(")]
-lease_state = source[source.index("    private nonisolated static func leaseIsOwned("):source.index("    private func listen(")]
-apply = source[source.index("    private func applyControls("):source.index("    private func verifyRoute(")]
-method = source[source.index("    @discardableResult\n    func silence("):source.index("    private func applyControls(")]
-route_owner = source[source.index("    private static func acquireRouteOwner("):source.index("    private func setLease(")].replace('"/Library/Application Support/Acouplet"', 'routeDirectory')
-set_lease = source[source.index("    private func setLease("):source.index("    private func leaseIsOwned(")].replace("private func setLease", "private func setDriverLease")
-hal_write = source[source.index("    private nonisolated static func write<T>("):source.index("    private nonisolated static func property(")].replace("private nonisolated static func write<T>", "nonisolated static func writeHAL<T>")
-handoff = source[source.index("    func selectForHandoff()"):source.index("    @discardableResult\n    func silence(")]
-verify = source[source.index("    private func verifyRoute()"):source.index("    private func hasSelectedFormat()")]
-selectors = source[source.index("    private var handoffSelectors:"):source.index("    init(id:")]
-volume = source[source.index("struct LDACNativeVolume:"):source.index("\n@MainActor\nfinal class LDACNativeOutput")]
-native = (Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift").read_text()
-latency_types = native[native.index('struct LDACFormat:'):native.index('enum LDACState:')]
-latency_types = re.sub(r'(?<![\w.])Date\b', 'Foundation.Date', latency_types)
-fixture = r'''
+source = (
+    Path(__file__).resolve().parents[2] / "Sources/LDACNativeOutput.swift"
+).read_text()
+driver = (
+    Path(__file__).resolve().parent / "VirtualOutput/AcoupletVirtualOutput.c"
+).read_text()
+assert re.search(
+    r"kAcoupletLease,\s*kAudioServerPlugInCustomPropertyDataTypeCFPropertyList,\s*kAudioServerPlugInCustomPropertyDataTypeNone",
+    driver,
+)
+latency = source[
+    source.index("    func updateLatency(") : source.index(
+        "    private var handoffSelectors:"
+    )
+]
+claim = source[
+    source.index("    nonisolated static func canTransferControls(") : source.index(
+        "    func priorityControl("
+    )
+]
+priority = source[
+    source.index("    func priorityControl(") : source.index(
+        "    func selectForHandoff("
+    )
+]
+priority_state = source[
+    source.index("    private nonisolated static func priorityState(") : source.index(
+        "    private nonisolated static func read<T>("
+    )
+]
+lease_state = source[
+    source.index("    private nonisolated static func leaseIsOwned(") : source.index(
+        "    private func listen("
+    )
+]
+apply = source[
+    source.index("    private func applyControls(") : source.index(
+        "    private func verifyRoute("
+    )
+]
+method = source[
+    source.index("    @discardableResult\n    func silence(") : source.index(
+        "    private func applyControls("
+    )
+]
+route_owner = source[
+    source.index("    private static func acquireRouteOwner(") : source.index(
+        "    private func setLease("
+    )
+].replace('"/Library/Application Support/Acouplet"', "routeDirectory")
+set_lease = source[
+    source.index("    private func setLease(") : source.index(
+        "    private func leaseIsOwned("
+    )
+].replace("private func setLease", "private func setDriverLease")
+hal_write = source[
+    source.index("    private nonisolated static func write<T>(") : source.index(
+        "    private nonisolated static func property("
+    )
+].replace(
+    "private nonisolated static func write<T>", "nonisolated static func writeHAL<T>"
+)
+handoff = source[
+    source.index("    func selectForHandoff()") : source.index(
+        "    @discardableResult\n    func silence("
+    )
+]
+verify = source[
+    source.index("    private func verifyRoute()") : source.index(
+        "    private func hasSelectedFormat()"
+    )
+]
+selectors = source[
+    source.index("    private var handoffSelectors:") : source.index("    init(id:")
+]
+volume = source[
+    source.index("struct LDACNativeVolume:") : source.index(
+        "\n@MainActor\nfinal class LDACNativeOutput"
+    )
+]
+native = (
+    Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift"
+).read_text()
+latency_types = native[
+    native.index("struct LDACFormat:") : native.index("enum LDACState:")
+]
+latency_types = re.sub(r"(?<![\w.])Date\b", "Foundation.Date", latency_types)
+fixture = (
+    r"""
 import Foundation
 import CoreAudio
 import Darwin
@@ -1092,34 +1160,75 @@ enum Check {
         print("PASS actual native output claim/configure/silence/restoration and scoped HAL write, replacement-owner mute/route preservation, monotonic deadlines, bounded previous-priority cleanup, lease renewal during MainActor stall, in-flight renewal/release ordering, stale versus active failure reporting, and balanced playback activity lifetime; no audio devices accessed")
     }
 }
-'''.replace("__SELECTORS__", selectors).replace("__HANDOFF__", handoff).replace("__VERIFY__", verify).replace("__VOLUME__", volume).replace("__METHOD__", method).replace("__CLAIM__", claim).replace("__APPLY__", apply).replace("__PRIORITY__", priority).replace("__PRIORITY_STATE__", priority_state).replace("__LEASE_STATE__", lease_state).replace("__HAL_WRITE__", hal_write).replace("__ROUTE_OWNER__", route_owner).replace("__SET_LEASE__", set_lease)
+""".replace("__SELECTORS__", selectors)
+    .replace("__HANDOFF__", handoff)
+    .replace("__VERIFY__", verify)
+    .replace("__VOLUME__", volume)
+    .replace("__METHOD__", method)
+    .replace("__CLAIM__", claim)
+    .replace("__APPLY__", apply)
+    .replace("__PRIORITY__", priority)
+    .replace("__PRIORITY_STATE__", priority_state)
+    .replace("__LEASE_STATE__", lease_state)
+    .replace("__HAL_WRITE__", hal_write)
+    .replace("__ROUTE_OWNER__", route_owner)
+    .replace("__SET_LEASE__", set_lease)
+)
 
-fixture = fixture.replace('__LATENCY__', latency).replace('__LATENCY_TYPES__', latency_types)
+fixture = fixture.replace("__LATENCY__", latency).replace(
+    "__LATENCY_TYPES__", latency_types
+)
 
 with tempfile.TemporaryDirectory(prefix="acouplet-native-output-restore-") as directory:
     directory = Path(directory)
     swift = directory / "Check.swift"
     binary = directory / "check"
     swift.write_text(fixture)
-    subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), "-o", str(binary)], check=True)
+    subprocess.run(
+        [
+            "xcrun",
+            "swiftc",
+            "-swift-version",
+            "6",
+            "-parse-as-library",
+            str(swift),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     subprocess.run([str(binary)], check=True)
     support = directory / "support"
     support.mkdir(mode=0o755)
     lock = support / "ldac-route-owner.lock"
     lock.touch(mode=0o444)
-    with subprocess.Popen([str(binary), "--route-owner", str(support)], stdout=subprocess.PIPE, text=True) as owner:
+    with subprocess.Popen(
+        [str(binary), "--route-owner", str(support)], stdout=subprocess.PIPE, text=True
+    ) as owner:
         try:
             assert owner.stdout.readline().strip() == "LOCKED"
-            subprocess.run([str(binary), "--route-contender", str(support)], check=True, timeout=10)
+            subprocess.run(
+                [str(binary), "--route-contender", str(support)], check=True, timeout=10
+            )
         finally:
             os.kill(owner.pid, signal.SIGKILL)
             owner.wait(timeout=10)
-    subprocess.run([str(binary), "--route-success", str(support)], check=True, timeout=10)
-    with subprocess.Popen([str(binary), "--route-stopped-owner", str(support)], stdout=subprocess.PIPE, text=True) as stopped:
+    subprocess.run(
+        [str(binary), "--route-success", str(support)], check=True, timeout=10
+    )
+    with subprocess.Popen(
+        [str(binary), "--route-stopped-owner", str(support)],
+        stdout=subprocess.PIPE,
+        text=True,
+    ) as stopped:
         try:
             assert stopped.stdout.readline().strip() == "STOPPED"
-            subprocess.run([str(binary), "--route-success", str(support)], check=True, timeout=10)
+            subprocess.run(
+                [str(binary), "--route-success", str(support)], check=True, timeout=10
+            )
         finally:
             os.kill(stopped.pid, signal.SIGKILL)
             stopped.wait(timeout=10)
-    print("PASS extracted process route lock: malformed/missing/foreign/writable paths refused before default reads or lease writes; read-only descriptor released after failed claims and normal stops, then reacquired for retry; separate process denied during active owner SIGSTOP, admitted after death and after Stop while the prior app process remains alive; exact lease claim dictionaries use unqualified CFPropertyList-compatible HAL writes; root UID metadata mocked, no installed paths or audio devices accessed")
+    print(
+        "PASS extracted process route lock: malformed/missing/foreign/writable paths refused before default reads or lease writes; read-only descriptor released after failed claims and normal stops, then reacquired for retry; separate process denied during active owner SIGSTOP, admitted after death and after Stop while the prior app process remains alive; exact lease claim dictionaries use unqualified CFPropertyList-compatible HAL writes; root UID metadata mocked, no installed paths or audio devices accessed"
+    )

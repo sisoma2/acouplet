@@ -2,9 +2,11 @@ import pathlib
 import subprocess
 import tempfile
 
-source = (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift").read_text()
+source = (
+    pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift"
+).read_text()
 
-fixture = r'''
+fixture = r"""
 struct LDACUpdateHandoff {
     func claim(address: String) throws -> Bool { false }
 }
@@ -1309,47 +1311,85 @@ enum LDACSessionClosureCheck {
         if failures > 0 { exit(1) }
     }
 }
-'''
+"""
 
 with tempfile.TemporaryDirectory(prefix="acouplet-ldac-session-closure-") as directory:
     directory = pathlib.Path(directory)
     swift = directory / "Check.swift"
     binary = directory / "check"
-    timed_source = source.replace("DispatchTime.now()", "SessionClock.shared.monotonic").replace("Date()", "SessionClock.shared.wallTime").replace("Foundation.SessionClock", "SessionClock")
-    timed_source = timed_source.replace("        guard fcntl(incoming[1]", "        PipeSetupCheck.descriptors = incoming + outgoing\n        guard fcntl(incoming[1]")
+    timed_source = (
+        source.replace("DispatchTime.now()", "SessionClock.shared.monotonic")
+        .replace("Date()", "SessionClock.shared.wallTime")
+        .replace("Foundation.SessionClock", "SessionClock")
+    )
+    timed_source = timed_source.replace(
+        "        guard fcntl(incoming[1]",
+        "        PipeSetupCheck.descriptors = incoming + outgoing\n        guard fcntl(incoming[1]",
+    )
     timed_source = timed_source.replace("fcntl(", "PipeSetupCheck.configure(")
-    timed_source = timed_source.replace("        let result = posix_spawn(", "        PipeSetupCheck.spawnAttempts += 1\n        let result = posix_spawn(")
+    timed_source = timed_source.replace(
+        "        let result = posix_spawn(",
+        "        PipeSetupCheck.spawnAttempts += 1\n        let result = posix_spawn(",
+    )
     swift.write_text(timed_source + fixture)
-    capture_source = (pathlib.Path(__file__).parent / "SystemAudioTapProbe.m").read_text()
-    handler = capture_source[capture_source.index("static void Interrupt(int value)"):capture_source.index("static double MonotonicTime")]
-    unblock = capture_source[capture_source.index("            signal(SIGINT, Interrupt);"):capture_source.index("            if (streaming || checkingPermission) signal(SIGPIPE, SIG_IGN);")]
+    capture_source = (
+        pathlib.Path(__file__).parent / "SystemAudioTapProbe.m"
+    ).read_text()
+    handler = capture_source[
+        capture_source.index("static void Interrupt(int value)") : capture_source.index(
+            "static double MonotonicTime"
+        )
+    ]
+    unblock = capture_source[
+        capture_source.index(
+            "            signal(SIGINT, Interrupt);"
+        ) : capture_source.index(
+            "            if (streaming || checkingPermission) signal(SIGPIPE, SIG_IGN);"
+        )
+    ]
     signal_source = directory / "Signals.c"
     signal_binary = directory / "signals"
-    signal_source.write_text('''#include <signal.h>
+    signal_source.write_text(
+        """#include <signal.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 static volatile sig_atomic_t interrupted;
-''' + handler + '''int main(int argc, char **argv) {
+"""
+        + handler
+        + """int main(int argc, char **argv) {
     setbuf(stdout, NULL);
     sigset_t inherited;
     pthread_sigmask(SIG_BLOCK, NULL, &inherited);
     printf("FIXTURE_MASK INT=%d TERM=%d\\n", sigismember(&inherited, SIGINT), sigismember(&inherited, SIGTERM));
     char command[32];
     if (!fgets(command, sizeof(command), stdin)) return 1;
-''' + unblock + '''
+"""
+        + unblock
+        + """
     printf("FIXTURE_HANDLED signal=%d\\n", interrupted);
     return argc == 2 && interrupted == atoi(argv[1]) ? 0 : 2;
 }
-''')
-    subprocess.run(["xcrun", "clang", str(signal_source), "-o", str(signal_binary)], check=True)
-    signaling_source = (pathlib.Path(__file__).parent / "DirectAVDTPSustainedPlaybackProbe.m").read_text()
+"""
+    )
+    subprocess.run(
+        ["xcrun", "clang", str(signal_source), "-o", str(signal_binary)], check=True
+    )
+    signaling_source = (
+        pathlib.Path(__file__).parent / "DirectAVDTPSustainedPlaybackProbe.m"
+    ).read_text()
     poll_start = signaling_source.index("- (void)pollInput {")
-    poll = "@implementation DirectPlaybackProbe\n" + signaling_source[poll_start:signaling_source.index("\n@end", poll_start) + len("\n@end")]
+    poll = (
+        "@implementation DirectPlaybackProbe\n"
+        + signaling_source[
+            poll_start : signaling_source.index("\n@end", poll_start) + len("\n@end")
+        ]
+    )
     signaling_fixture = directory / "SignalingInput.m"
     signaling_binary = directory / "signaling-input"
-    signaling_fixture.write_text('''#import <Foundation/Foundation.h>
+    signaling_fixture.write_text(
+        """#import <Foundation/Foundation.h>
 @interface DirectPlaybackProbe : NSObject
 @property BOOL closed, failed, closing, inputEnded;
 @property(strong) NSInputStream *input;
@@ -1358,7 +1398,9 @@ static volatile sig_atomic_t interrupted;
 @property NSUInteger received;
 - (void)pollInput;
 @end
-''' + poll + '''
+"""
+        + poll
+        + """
 int main(void) {
     @autoreleasepool {
         NSMutableData *expected = [NSMutableData dataWithLength:4096];
@@ -1377,31 +1419,104 @@ int main(void) {
     }
     return 0;
 }
-''')
-    subprocess.run(["xcrun", "clang", "-fobjc-arc", "-framework", "Foundation", str(signaling_fixture), "-o", str(signaling_binary)], check=True)
-    subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), "-o", str(binary)], check=True)
+"""
+    )
+    subprocess.run(
+        [
+            "xcrun",
+            "clang",
+            "-fobjc-arc",
+            "-framework",
+            "Foundation",
+            str(signaling_fixture),
+            "-o",
+            str(signaling_binary),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "xcrun",
+            "swiftc",
+            "-swift-version",
+            "6",
+            "-parse-as-library",
+            str(swift),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     subprocess.run([str(binary), str(signal_binary), str(signaling_binary)], check=True)
-    connection_source = (pathlib.Path(__file__).parent / "PairedSonyConnectionProbe.m").read_text()
-    media_source = (pathlib.Path(__file__).parent / "DirectAVDTPLiveMediaProbe.m").read_text()
-    timing = signaling_source[signaling_source.index("static void RunLoopFor("):signaling_source.index("static NSString *NormalizeAddress(")]
+    connection_source = (
+        pathlib.Path(__file__).parent / "PairedSonyConnectionProbe.m"
+    ).read_text()
+    media_source = (
+        pathlib.Path(__file__).parent / "DirectAVDTPLiveMediaProbe.m"
+    ).read_text()
+    timing = signaling_source[
+        signaling_source.index("static void RunLoopFor(") : signaling_source.index(
+            "static NSString *NormalizeAddress("
+        )
+    ]
     for helper_source in [signaling_source, connection_source, media_source]:
-        assert "dateWithTimeIntervalSinceNow:" not in helper_source and ".timeIntervalSinceNow" not in helper_source
+        assert (
+            "dateWithTimeIntervalSinceNow:" not in helper_source
+            and ".timeIntervalSinceNow" not in helper_source
+        )
         start = helper_source.index("static void RunLoopFor(")
-        end = helper_source.index("\n}\n", helper_source.index("static double MonotonicTime(", start)) + len("\n}\n")
+        end = helper_source.index(
+            "\n}\n", helper_source.index("static double MonotonicTime(", start)
+        ) + len("\n}\n")
         assert helper_source[start:end].strip() == timing.strip()
-    probe = signaling_source[signaling_source.index("@interface DirectPlaybackProbe"):signaling_source.index("static NSString *ReadLine(")]
-    read = signaling_source[signaling_source.index("static NSString *ReadLine("):signaling_source.index("static NSArray<NSNumber *> *DecodeReply(")]
-    response = signaling_source[signaling_source.index("static NSData *AwaitResponse("):signaling_source.index("static NSData *Query(")]
-    control = signaling_source[signaling_source.index("static BOOL WaitControl("):signaling_source.index("static BOOL LDACSelection(")]
-    closed = signaling_source[signaling_source.index("static void WaitTransportClosed("):signaling_source.index("int main(")]
-    connection_lock = connection_source[connection_source.index("static int ConnectionLock("):connection_source.index("static BOOL ReadAudio(")]
-    observer = connection_source[connection_source.index("@interface ConnectionObserver"):connection_source.index("static int WatchConnection(")]
-    watch = connection_source[connection_source.index("static int WatchConnection("):connection_source.index("int main(")]
+    probe = signaling_source[
+        signaling_source.index(
+            "@interface DirectPlaybackProbe"
+        ) : signaling_source.index("static NSString *ReadLine(")
+    ]
+    read = signaling_source[
+        signaling_source.index("static NSString *ReadLine(") : signaling_source.index(
+            "static NSArray<NSNumber *> *DecodeReply("
+        )
+    ]
+    response = signaling_source[
+        signaling_source.index(
+            "static NSData *AwaitResponse("
+        ) : signaling_source.index("static NSData *Query(")
+    ]
+    control = signaling_source[
+        signaling_source.index("static BOOL WaitControl(") : signaling_source.index(
+            "static BOOL LDACSelection("
+        )
+    ]
+    closed = signaling_source[
+        signaling_source.index(
+            "static void WaitTransportClosed("
+        ) : signaling_source.index("int main(")
+    ]
+    connection_lock = connection_source[
+        connection_source.index("static int ConnectionLock(") : connection_source.index(
+            "static BOOL ReadAudio("
+        )
+    ]
+    observer = connection_source[
+        connection_source.index(
+            "@interface ConnectionObserver"
+        ) : connection_source.index("static int WatchConnection(")
+    ]
+    watch = connection_source[
+        connection_source.index(
+            "static int WatchConnection("
+        ) : connection_source.index("int main(")
+    ]
     start = media_source.index("        double openDeadline =")
-    opening = media_source[start:media_source.index("        if (openExpired)", start)]
+    opening = media_source[
+        start : media_source.index("        if (openExpired)", start)
+    ]
     clock_fixture = directory / "NativeClock.m"
     clock_binary = directory / "native-clock"
-    clock_fixture.write_text(r'''#import <Foundation/Foundation.h>
+    clock_fixture.write_text(
+        r"""#import <Foundation/Foundation.h>
 #import <CoreBluetooth/CoreBluetooth.h>
 #import <IOBluetooth/IOBluetooth.h>
 #include <assert.h>
@@ -1442,17 +1557,31 @@ static SInt32 ClockRunLoop(CFRunLoopMode mode, CFTimeInterval seconds, Boolean r
 #define NSDate ClockDate
 #define clock_gettime_nsec_np ClockNanoseconds
 #define CFRunLoopRunInMode ClockRunLoop
-''' + timing + r'''
+"""
+        + timing
+        + r"""
 #undef CFRunLoopRunInMode
 #undef clock_gettime_nsec_np
-''' + (pathlib.Path(__file__).parent.parent / "SonyClassicConnection.h").read_text() + probe + read + r'''
+"""
+        + (pathlib.Path(__file__).parent.parent / "SonyClassicConnection.h").read_text()
+        + probe
+        + read
+        + r"""
 static BOOL HandlePeerCommand(DirectPlaybackProbe *probe, NSData *packet) { abort(); }
-''' + response + control + closed + r'''
+"""
+        + response
+        + control
+        + closed
+        + r"""
 static BOOL ParentInputEnded(void) { return NO; }
 static BOOL ParentExited(int events) { return YES; }
 static int NativeOutputState(NSString *address) { return 0; }
 static int PriorityIdle(NSString *uid) { return 0; }
-''' + connection_lock + observer + watch + r'''
+"""
+        + connection_lock
+        + observer
+        + watch
+        + r"""
 @interface ClockDevice : NSObject
 @property BluetoothConnectionHandle connectionHandle;
 - (BOOL)isConnected;
@@ -1469,7 +1598,9 @@ static NSString *AvailableCommand(ClockMediaProbe *probe) { return nil; }
 static BOOL MediaOpenTimeout(void) {
     ClockMediaProbe *probe = [ClockMediaProbe new];
     BOOL openDone = NO;
-''' + opening + r'''
+"""
+        + opening
+        + r"""
     return openExpired;
 }
 static void ResetClock(void) { elapsed = 0; wallOffset = 0; ticks = 0; }
@@ -1478,7 +1609,11 @@ static void CheckElapsed(double expected) {
     assert(NSDate.date.timeIntervalSince1970 == 1700000000 + expected + jump);
 }
 #undef NSDate
-''' + timing.replace("RunLoopFor", "NativeRunLoopFor").replace("MonotonicTime", "NativeMonotonicTime") + r'''
+"""
+        + timing.replace("RunLoopFor", "NativeRunLoopFor").replace(
+            "MonotonicTime", "NativeMonotonicTime"
+        )
+        + r"""
 int main(void) {
     @autoreleasepool {
         __block BOOL handled = NO, dispatched = NO;
@@ -1558,9 +1693,29 @@ int main(void) {
     }
     return 0;
 }
-''')
-    subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-D_DARWIN_C_SOURCE", "-DACOUPLET_LDAC_PROBE_ONLY=0", "-framework", "Foundation", "-framework", "CoreFoundation", str(clock_fixture), "-o", str(clock_binary)], check=True)
-    result = subprocess.run([str(clock_binary)], check=True, capture_output=True, text=True, timeout=15)
+"""
+    )
+    subprocess.run(
+        [
+            "xcrun",
+            "clang",
+            "-fobjc-arc",
+            "-fblocks",
+            "-D_DARWIN_C_SOURCE",
+            "-DACOUPLET_LDAC_PROBE_ONLY=0",
+            "-framework",
+            "Foundation",
+            "-framework",
+            "CoreFoundation",
+            str(clock_fixture),
+            "-o",
+            str(clock_binary),
+        ],
+        check=True,
+    )
+    result = subprocess.run(
+        [str(clock_binary)], check=True, capture_output=True, text=True, timeout=15
+    )
     for timestamp in ["1700003603.000000", "1699996403.000000"]:
         assert "SDU_GATE time=" + timestamp in result.stdout, result.stdout
     print(result.stdout, end="")

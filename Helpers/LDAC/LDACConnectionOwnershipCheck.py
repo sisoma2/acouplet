@@ -3,15 +3,28 @@ import tempfile
 from pathlib import Path
 
 base = Path(__file__).resolve().parents[2]
-source = (base / 'Helpers/LDAC/PairedSonyConnectionProbe.m').read_text()
-timing = source[source.index('static void RunLoopFor('):source.index('static BOOL ParentInputEnded(')]
-normalize = timing[timing.index('static NSString *NormalizeAddress('):]
-observer = source[source.index('@interface ConnectionObserver'):source.index('static int WatchConnection(')]
-cancel = source[source.index('        if (cancelled) {'):source.index('        printf("AFTER callback=', source.index('        if (cancelled) {'))]
-watch = source[source.index('static int WatchConnection('):source.index('int main(')]
-main = source[source.index('int main('):].replace('int main(', 'static int ProbeMain(')
-lifetime = (base / 'Helpers/LDAC/LDACParentLifetime.h').read_text()
-fixture = r'''
+source = (base / "Helpers/LDAC/PairedSonyConnectionProbe.m").read_text()
+timing = source[
+    source.index("static void RunLoopFor(") : source.index(
+        "static BOOL ParentInputEnded("
+    )
+]
+normalize = timing[timing.index("static NSString *NormalizeAddress(") :]
+observer = source[
+    source.index("@interface ConnectionObserver") : source.index(
+        "static int WatchConnection("
+    )
+]
+cancel = source[
+    source.index("        if (cancelled) {") : source.index(
+        '        printf("AFTER callback=', source.index("        if (cancelled) {")
+    )
+]
+watch = source[source.index("static int WatchConnection(") : source.index("int main(")]
+main = source[source.index("int main(") :].replace("int main(", "static int ProbeMain(")
+lifetime = (base / "Helpers/LDAC/LDACParentLifetime.h").read_text()
+fixture = (
+    r"""
 __LIFETIME__
 #import <Foundation/Foundation.h>
 #import <IOBluetooth/IOBluetooth.h>
@@ -65,7 +78,10 @@ static int NativeOutputState(NSString *address) { return publishAt >= 0 && elaps
 static BOOL FixtureConnected(FixtureDevice *device) { return device.connected; }
 #define IOBluetoothDevice FixtureDevice
 #define SonyClassicIsConnected FixtureConnected
-''' + normalize + observer + r'''
+"""
+    + normalize
+    + observer
+    + r"""
 @implementation FixtureDevice
 + (FixtureDevice *)deviceWithAddressString:(NSString *)address { return fixtureDevice; }
 - (BOOL)isPaired { return self.paired; }
@@ -78,7 +94,13 @@ static void Complete(void) {
     if (activeObserver && !activeObserver.done && completeAt >= 0 && elapsed >= completeAt)
         [activeObserver connectionComplete:fixtureDevice status:callbackStatus];
 }
-''' + watch + 'static int Cancel(FixtureDevice *device, ConnectionObserver *observer) { BOOL cancelled = YES;\n' + cancel + '\nreturn 8; }\n' + main + r'''
+"""
+    + watch
+    + "static int Cancel(FixtureDevice *device, ConnectionObserver *observer) { BOOL cancelled = YES;\n"
+    + cancel
+    + "\nreturn 8; }\n"
+    + main
+    + r"""
 static int Invoke(NSArray<NSString *> *arguments, BOOL connected, UInt16 handle, int native) {
     fixtureDevice = [FixtureDevice new];
     fixtureDevice.paired = YES;
@@ -193,13 +215,42 @@ int main(int argc, const char **argv) {
     }
     return 0;
 }
-'''
-fixture = fixture.replace('__LIFETIME__', lifetime)
+"""
+)
+fixture = fixture.replace("__LIFETIME__", lifetime)
 with tempfile.TemporaryDirectory(prefix="acouplet-connection-ownership-") as directory:
-    path = Path(directory) / 'ConnectionBoundary.m'
+    path = Path(directory) / "ConnectionBoundary.m"
     path.write_text(fixture)
-    binary = path.with_suffix('')
-    subprocess.run(['xcrun', 'clang', '-fobjc-arc', '-fblocks', '-Werror', '-framework', 'Foundation', str(path), '-o', str(binary)], check=True)
+    binary = path.with_suffix("")
+    subprocess.run(
+        [
+            "xcrun",
+            "clang",
+            "-fobjc-arc",
+            "-fblocks",
+            "-Werror",
+            "-framework",
+            "Foundation",
+            str(path),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     subprocess.run([str(binary)], check=True)
-subprocess.run(['xcrun', 'clang', '-fobjc-arc', '-fblocks', '-Werror', '-fsyntax-only', '-mmacosx-version-min=15.4', str(base / 'Helpers/LDAC/PairedSonyConnectionProbe.m')], check=True)
-print('PASS complete connection helper compiles; executed connection/audio boundaries were fixtures')
+subprocess.run(
+    [
+        "xcrun",
+        "clang",
+        "-fobjc-arc",
+        "-fblocks",
+        "-Werror",
+        "-fsyntax-only",
+        "-mmacosx-version-min=15.4",
+        str(base / "Helpers/LDAC/PairedSonyConnectionProbe.m"),
+    ],
+    check=True,
+)
+print(
+    "PASS complete connection helper compiles; executed connection/audio boundaries were fixtures"
+)

@@ -2,10 +2,9 @@ import pathlib
 import subprocess
 import tempfile
 
-
 root = pathlib.Path(__file__).resolve().parents[2]
-helper = root / 'Helpers/LDAC/DirectAVDTPLiveMediaProbe.m'
-fixture = r'''
+helper = root / "Helpers/LDAC/DirectAVDTPLiveMediaProbe.m"
+fixture = r"""
 #define main ProductionMain
 #include "__HELPER__"
 #undef main
@@ -173,34 +172,96 @@ int main(void) {
     CheckWindow(96000, 4, YES);
     return 0;
 }
-'''
+"""
 
-with tempfile.TemporaryDirectory(prefix='acouplet-pipeline-check-') as directory:
+with tempfile.TemporaryDirectory(prefix="acouplet-pipeline-check-") as directory:
     path = pathlib.Path(directory)
-    check, binary = path / 'Pipeline.m', path / 'pipeline'
-    prototype = path / 'Prototype.m'
-    subprocess.run(['patch', '--silent', '--output', str(prototype), str(helper),
-                    str(pathlib.Path(__file__).with_name('packet-sender.patch'))], check=True)
-    check.write_text(fixture.replace('__HELPER__', str(prototype)))
-    command = ['xcrun', '--sdk', 'macosx', 'clang', '-O2', '-fobjc-arc', '-fblocks', '-D_DARWIN_C_SOURCE',
-               '-DACOUPLET_LDAC_PROBE_ONLY=0', '-framework', 'Foundation', '-framework', 'CoreBluetooth',
-               '-framework', 'IOBluetooth', '-I', str(helper.parent), '-I', str(pathlib.Path(__file__).parent), '-I', str(root / 'Vendor/libldac/inc'), '-I', str(root / 'Vendor/libldac/src'),
-               str(check), str(root / 'Vendor/libldac/src/ldacBT.c'), str(root / 'Vendor/libldac/src/ldaclib.c'), '-o', str(binary)]
+    check, binary = path / "Pipeline.m", path / "pipeline"
+    prototype = path / "Prototype.m"
+    subprocess.run(
+        [
+            "patch",
+            "--silent",
+            "--output",
+            str(prototype),
+            str(helper),
+            str(pathlib.Path(__file__).with_name("packet-sender.patch")),
+        ],
+        check=True,
+    )
+    check.write_text(fixture.replace("__HELPER__", str(prototype)))
+    command = [
+        "xcrun",
+        "--sdk",
+        "macosx",
+        "clang",
+        "-O2",
+        "-fobjc-arc",
+        "-fblocks",
+        "-D_DARWIN_C_SOURCE",
+        "-DACOUPLET_LDAC_PROBE_ONLY=0",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "CoreBluetooth",
+        "-framework",
+        "IOBluetooth",
+        "-I",
+        str(helper.parent),
+        "-I",
+        str(pathlib.Path(__file__).parent),
+        "-I",
+        str(root / "Vendor/libldac/inc"),
+        "-I",
+        str(root / "Vendor/libldac/src"),
+        str(check),
+        str(root / "Vendor/libldac/src/ldacBT.c"),
+        str(root / "Vendor/libldac/src/ldaclib.c"),
+        "-o",
+        str(binary),
+    ]
     subprocess.run(command, check=True)
-    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=35)
+    result = subprocess.run(
+        [str(binary)], check=False, capture_output=True, text=True, timeout=35
+    )
     assert result.returncode == 0, result.stdout[-6000:] + result.stderr
-    print('\n'.join(line for line in result.stdout.splitlines() if line.startswith('PASS ')))
-    production = path / 'media'
+    print(
+        "\n".join(
+            line for line in result.stdout.splitlines() if line.startswith("PASS ")
+        )
+    )
+    production = path / "media"
     command[command.index(str(check))] = str(prototype)
     command[-1] = str(production)
     subprocess.run(command, check=True)
     for arguments in [
-        ['--sender', 'socket', '--packet-window', '2'], ['--sender', 'unknown'],
-        ['--sender', 'packet', '--packet-window', '0'], ['--sender', 'packet', '--packet-window', '17'],
-        ['--trace-seconds', '61'], ['--trace-seconds', '-1'], ['--trace-seconds', '1', '--trace-seconds', '2'],
-        ['--trace-file', '/tmp/unused-trace-file'],
+        ["--sender", "socket", "--packet-window", "2"],
+        ["--sender", "unknown"],
+        ["--sender", "packet", "--packet-window", "0"],
+        ["--sender", "packet", "--packet-window", "17"],
+        ["--trace-seconds", "61"],
+        ["--trace-seconds", "-1"],
+        ["--trace-seconds", "1", "--trace-seconds", "2"],
+        ["--trace-file", "/tmp/unused-trace-file"],
     ]:
-        invalid = subprocess.run([str(production), '--media', '--pcm-fd', '3', '--address', '02-00-00-00-00-01', *arguments],
-                                 capture_output=True, text=True, timeout=5)
-        assert invalid.returncode == 2 and 'BEFORE' not in invalid.stdout, invalid.stdout + invalid.stderr
-    print('PASS experiment CLI rejects invalid modes, windows, trace duration and duplicate options before device access')
+        invalid = subprocess.run(
+            [
+                str(production),
+                "--media",
+                "--pcm-fd",
+                "3",
+                "--address",
+                "02-00-00-00-00-01",
+                *arguments,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert invalid.returncode == 2 and "BEFORE" not in invalid.stdout, (
+            invalid.stdout + invalid.stderr
+        )
+    print(
+        "PASS experiment CLI rejects invalid modes, windows, trace duration and duplicate options before device access"
+    )

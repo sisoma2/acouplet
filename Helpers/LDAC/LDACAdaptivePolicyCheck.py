@@ -2,9 +2,8 @@ import pathlib
 import subprocess
 import tempfile
 
-
 root = pathlib.Path(__file__).resolve().parents[2]
-fixture = r'''
+fixture = r"""
 #include <assert.h>
 #include <stdio.h>
 #include "AdaptiveLDAC/LDACAdaptivePolicy.h"
@@ -102,15 +101,34 @@ int main(void) {
     for (int index = 0; index < 4; index++) CheckEncoder(rates[index]);
     return 0;
 }
-'''
+"""
 
-with tempfile.TemporaryDirectory(prefix='acouplet-adaptive-policy-') as directory:
+with tempfile.TemporaryDirectory(prefix="acouplet-adaptive-policy-") as directory:
     path = pathlib.Path(directory)
-    check, binary = path / 'Adaptive.c', path / 'adaptive'
+    check, binary = path / "Adaptive.c", path / "adaptive"
     check.write_text(fixture)
-    subprocess.run(['xcrun', '--sdk', 'macosx', 'clang', '-O2', '-Wall', '-Wextra', '-Werror',
-                    '-I', str(root / 'Helpers/LDAC'), '-I', str(root / 'Vendor/libldac/inc'),
-                    '-I', str(root / 'Vendor/libldac/src'), str(check),
-                    str(root / 'Vendor/libldac/src/ldacBT.c'), str(root / 'Vendor/libldac/src/ldaclib.c'),
-                    '-o', str(binary)], check=True)
+    subprocess.run(
+        [
+            "xcrun",
+            "--sdk",
+            "macosx",
+            "clang",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-I",
+            str(root / "Helpers/LDAC"),
+            "-I",
+            str(root / "Vendor/libldac/inc"),
+            "-I",
+            str(root / "Vendor/libldac/src"),
+            str(check),
+            str(root / "Vendor/libldac/src/ldacBT.c"),
+            str(root / "Vendor/libldac/src/ldaclib.c"),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     subprocess.run([str(binary)], check=True, timeout=10)

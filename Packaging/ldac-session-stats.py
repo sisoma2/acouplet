@@ -32,19 +32,19 @@ import os
 import re
 import sys
 
-DEFAULT_ROOT = os.path.expanduser('~/Library/Caches/LDAC Sessions')
-MAC = re.compile(r'(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}')
-KV = re.compile(r'(\w+)=(\S+)')
-STREAM_START = re.compile(r'\bmedia READY\b|\bMEDIA_READY\b|\bLIVE_BEGIN\b')
+DEFAULT_ROOT = os.path.expanduser("~/Library/Caches/LDAC Sessions")
+MAC = re.compile(r"(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}")
+KV = re.compile(r"(\w+)=(\S+)")
+STREAM_START = re.compile(r"\bmedia READY\b|\bMEDIA_READY\b|\bLIVE_BEGIN\b")
 
 
 def mask(text):
     """Hide Bluetooth addresses in anything that reaches the output."""
-    return MAC.sub('xx:xx:xx:xx:xx:xx', text)
+    return MAC.sub("xx:xx:xx:xx:xx:xx", text)
 
 
 def norm_addr(text):
-    return text.lower().replace('-', ':')
+    return text.lower().replace("-", ":")
 
 
 def num(value, default=None):
@@ -61,12 +61,12 @@ def kv(line):
 def log_files(session_dir):
     """session.log.N (oldest first, highest N) followed by session.log."""
     rotated = []
-    for path in glob.glob(os.path.join(session_dir, 'session.log.*')):
-        suffix = path.rsplit('.', 1)[-1]
+    for path in glob.glob(os.path.join(session_dir, "session.log.*")):
+        suffix = path.rsplit(".", 1)[-1]
         if suffix.isdigit():
             rotated.append((int(suffix), path))
     files = [path for _, path in sorted(rotated, reverse=True)]
-    main = os.path.join(session_dir, 'session.log')
+    main = os.path.join(session_dir, "session.log")
     if os.path.isfile(main):
         files.append(main)
     return files
@@ -86,11 +86,11 @@ def find_sessions(paths):
     for path in paths:
         if os.path.isfile(path):
             name = os.path.basename(path)
-            if name.startswith('session.log'):
+            if name.startswith("session.log"):
                 add(os.path.dirname(os.path.abspath(path)))
             continue
         if not os.path.isdir(path):
-            print(f'warning: {path} does not exist', file=sys.stderr)
+            print(f"warning: {path} does not exist", file=sys.stderr)
             continue
         add(path)
         for child in sorted(os.listdir(path)):
@@ -103,10 +103,10 @@ def read_lines(files):
     """Yield (timestamp, text) for each parsable line; tolerate truncation."""
     for path in files:
         try:
-            with open(path, encoding='utf-8', errors='replace') as handle:
+            with open(path, encoding="utf-8", errors="replace") as handle:
                 for raw in handle:
-                    raw = raw.rstrip('\n')
-                    head, _, rest = raw.partition(' ')
+                    raw = raw.rstrip("\n")
+                    head, _, rest = raw.partition(" ")
                     try:
                         timestamp = float(head)
                         if math.isfinite(timestamp):
@@ -114,7 +114,7 @@ def read_lines(files):
                     except ValueError:
                         continue
         except OSError as error:
-            print(f'warning: {path}: {error}', file=sys.stderr)
+            print(f"warning: {path}: {error}", file=sys.stderr)
 
 
 def analyze(session_id, files):
@@ -125,108 +125,176 @@ def analyze(session_id, files):
     stream_start = stream_end = None
     target = None
     s = {
-        'id': session_id[:8], 'underruns': 0, 'quality': None, 'pcm_reserve_ms': None, 'rate': None, 'bitrate_kbps': None, 'drain_breaches': 0, 'cascades': 0,
-        'pacing_breaches': 0, 'pcm_skips': 0, 'skipped_frames': 0, 'pcm_failed': 0, 'lost_percent': [],
-        'successful': None, 'connection_lost': 0, 'queue_peak': None, 'queue_drops': None, 'max_drain': None,
-        'other_acl': [], 'other_a2dp': [], 'l2cap_in_stream': [], 'media': False}
+        "id": session_id[:8],
+        "underruns": 0,
+        "quality": None,
+        "pcm_reserve_ms": None,
+        "rate": None,
+        "bitrate_kbps": None,
+        "drain_breaches": 0,
+        "cascades": 0,
+        "pacing_breaches": 0,
+        "pcm_skips": 0,
+        "skipped_frames": 0,
+        "pcm_failed": 0,
+        "lost_percent": [],
+        "successful": None,
+        "connection_lost": 0,
+        "queue_peak": None,
+        "queue_drops": None,
+        "max_drain": None,
+        "other_acl": [],
+        "other_a2dp": [],
+        "l2cap_in_stream": [],
+        "media": False,
+    }
     bitrate_observations = []
     daemon = []  # (timestamp, kind, detail) for bluetoothd events
     for ts, text in events:
         if STREAM_START.search(text):
-            s['media'] = True
+            s["media"] = True
             if stream_start is None:
                 stream_start = ts
-        if stream_start is not None and stream_end is None and ' FEED_COMPLETE' in ' ' + text:
+        if (
+            stream_start is not None
+            and stream_end is None
+            and " FEED_COMPLETE" in " " + text
+        ):
             stream_end = ts
-        if text.startswith('LAUNCH '):
-            match = re.search(r'--address (\S+)', text)
+        if text.startswith("LAUNCH "):
+            match = re.search(r"--address (\S+)", text)
             if match and target is None:
                 target = norm_addr(match.group(1))
-            if text.startswith('LAUNCH media'):
-                s['media'] = True
-                match = re.search(r'--sample-rate (\d+)', text)
-                if match and s['rate'] is None:
-                    s['rate'] = int(match.group(1))
-                quality = re.search(r'--quality (low|mid|high|auto)\b', text)
+            if text.startswith("LAUNCH media"):
+                s["media"] = True
+                match = re.search(r"--sample-rate (\d+)", text)
+                if match and s["rate"] is None:
+                    s["rate"] = int(match.group(1))
+                quality = re.search(r"--quality (low|mid|high|auto)\b", text)
                 if quality:
-                    s['quality'] = quality.group(1)
-                reserve = re.search(r'--pcm-reserve-ms ([0-9]{2,3})\b', text)
+                    s["quality"] = quality.group(1)
+                reserve = re.search(r"--pcm-reserve-ms ([0-9]{2,3})\b", text)
                 if reserve and 50 <= int(reserve.group(1)) <= 500:
-                    s['pcm_reserve_ms'] = int(reserve.group(1))
+                    s["pcm_reserve_ms"] = int(reserve.group(1))
             continue
         fields = kv(text)
-        if text.split(' ', 2)[:2] in [['media', 'LIVE_SENT'], ['media', 'PCM_ENCODER_RESET'], ['media', 'LIVE_FORMAT']]:
-            rate_text, bitrate_text = fields.get('rate', ''), fields.get('bitrateKbps', '')
-            if not rate_text.isdigit() or not bitrate_text.isdigit() or len(rate_text) > 5 or len(bitrate_text) > 3:
+        if text.split(" ", 2)[:2] in [
+            ["media", "LIVE_SENT"],
+            ["media", "PCM_ENCODER_RESET"],
+            ["media", "LIVE_FORMAT"],
+        ]:
+            rate_text, bitrate_text = (
+                fields.get("rate", ""),
+                fields.get("bitrateKbps", ""),
+            )
+            if (
+                not rate_text.isdigit()
+                or not bitrate_text.isdigit()
+                or len(rate_text) > 5
+                or len(bitrate_text) > 3
+            ):
                 continue
             rate, bitrate = int(rate_text), int(bitrate_text)
-            if rate not in (44100, 48000, 88200, 96000) or not 1 <= bitrate <= 990 or fields.get('channels', '2' if text.startswith('media PCM_ENCODER_RESET ') else '') != '2':
+            if (
+                rate not in (44100, 48000, 88200, 96000)
+                or not 1 <= bitrate <= 990
+                or fields.get(
+                    "channels",
+                    "2" if text.startswith("media PCM_ENCODER_RESET ") else "",
+                )
+                != "2"
+            ):
                 continue
-            if text.startswith('media LIVE_FORMAT '):
-                frame_text = fields.get('frameBytes', '')
+            if text.startswith("media LIVE_FORMAT "):
+                frame_text = fields.get("frameBytes", "")
                 if not frame_text.isdigit() or len(frame_text) > 3:
                     continue
                 frame_bytes = int(frame_text)
-                if not 49 <= frame_bytes <= 330 or bitrate != frame_bytes * 8 * rate // (256 if rate > 48000 else 128) // 1000:
+                if (
+                    not 49 <= frame_bytes <= 330
+                    or bitrate
+                    != frame_bytes * 8 * rate // (256 if rate > 48000 else 128) // 1000
+                ):
                     continue
-            s['media'] = True
-            s['rate'], s['bitrate_kbps'] = rate, bitrate
-            if not bitrate_observations or (rate, bitrate) != bitrate_observations[-1][1:]:
+            s["media"] = True
+            s["rate"], s["bitrate_kbps"] = rate, bitrate
+            if (
+                not bitrate_observations
+                or (rate, bitrate) != bitrate_observations[-1][1:]
+            ):
                 bitrate_observations.append((ts, rate, bitrate))
-        elif text.startswith('media PCM_UNDERRUN'):
-            s['underruns'] += 1
-        elif text.startswith('media DRAIN_BREACH'):
-            s['media'] = True
-            s['drain_breaches'] += 1
-            if fields.get('first') == '1':
-                s['cascades'] += 1
-        elif text.startswith('media PACING_BREACH'):
-            s['pacing_breaches'] += 1
-        elif text.startswith('media PCM_SKIP'):
-            s['pcm_skips'] += 1
-            s['skipped_frames'] += int(num(fields.get('frames'), 0))
-        elif 'PCM_FAILED' in text.split(' ')[:2]:
-            s['pcm_failed'] += 1
-            if 'lostPercent' in fields:
-                s['lost_percent'].append(num(fields['lostPercent']))
-        elif text.startswith('COMPLETE '):
-            if 'successful' in fields:
-                s['successful'] = fields['successful'] == 'true'
-        elif text.startswith('CONNECTION_LOST'):
-            s['connection_lost'] += 1
-        elif text.startswith('media LIVE_PROGRESS'):
-            s['media'] = True
-            drain = num(fields.get('maxDrain'))
+        elif text.startswith("media PCM_UNDERRUN"):
+            s["underruns"] += 1
+        elif text.startswith("media DRAIN_BREACH"):
+            s["media"] = True
+            s["drain_breaches"] += 1
+            if fields.get("first") == "1":
+                s["cascades"] += 1
+        elif text.startswith("media PACING_BREACH"):
+            s["pacing_breaches"] += 1
+        elif text.startswith("media PCM_SKIP"):
+            s["pcm_skips"] += 1
+            s["skipped_frames"] += int(num(fields.get("frames"), 0))
+        elif "PCM_FAILED" in text.split(" ")[:2]:
+            s["pcm_failed"] += 1
+            if "lostPercent" in fields:
+                s["lost_percent"].append(num(fields["lostPercent"]))
+        elif text.startswith("COMPLETE "):
+            if "successful" in fields:
+                s["successful"] = fields["successful"] == "true"
+        elif text.startswith("CONNECTION_LOST"):
+            s["connection_lost"] += 1
+        elif text.startswith("media LIVE_PROGRESS"):
+            s["media"] = True
+            drain = num(fields.get("maxDrain"))
             if drain is not None:
-                s['max_drain'] = drain if s['max_drain'] is None else max(s['max_drain'], drain)
-        elif 'QUEUE_STATS' in text.split(' ')[:2]:
+                s["max_drain"] = (
+                    drain if s["max_drain"] is None else max(s["max_drain"], drain)
+                )
+        elif "QUEUE_STATS" in text.split(" ")[:2]:
             for key, value in fields.items():
                 number = num(value)
                 if number is None:
                     continue
                 low = key.lower()
-                if 'peak' in low or low.startswith('max'):
-                    s['queue_peak'] = number if s['queue_peak'] is None else max(s['queue_peak'], number)
-                elif 'drop' in low or 'discard' in low:
-                    s['queue_drops'] = (s['queue_drops'] or 0) + number
+                if "peak" in low or low.startswith("max"):
+                    s["queue_peak"] = (
+                        number
+                        if s["queue_peak"] is None
+                        else max(s["queue_peak"], number)
+                    )
+                elif "drop" in low or "discard" in low:
+                    s["queue_drops"] = (s["queue_drops"] or 0) + number
         # bluetoothd events recorded by the daemon watcher and ACL watcher
-        match = re.search(r'ACL (connected|disconnected): (\S+?),?\s', text + ' ')
+        match = re.search(r"ACL (connected|disconnected): (\S+?),?\s", text + " ")
         if match:
-            daemon.append((ts, 'acl-' + match.group(1), norm_addr(match.group(2))))
+            daemon.append((ts, "acl-" + match.group(1), norm_addr(match.group(2))))
             continue
-        match = re.search(r'Received connection result for "A2DP Source" profile on device (\S+)', text)
+        match = re.search(
+            r'Received connection result for "A2DP Source" profile on device (\S+)',
+            text,
+        )
         if match:
-            daemon.append((ts, 'a2dp-source', norm_addr(match.group(1))))
+            daemon.append((ts, "a2dp-source", norm_addr(match.group(1))))
             continue
-        match = re.search(r'connectedCB cid:(0x\w+)', text)
+        match = re.search(r"connectedCB cid:(0x\w+)", text)
         if match:
-            daemon.append((ts, 'l2cap-open', match.group(1)))
+            daemon.append((ts, "l2cap-open", match.group(1)))
             continue
-        match = re.search(r'l2capDisconnected for CID: (0x\w+)(?:, reson: (0x\w+))?', text)
+        match = re.search(
+            r"l2capDisconnected for CID: (0x\w+)(?:, reson: (0x\w+))?", text
+        )
         if match:
-            daemon.append((ts, 'l2cap-close', match.group(1) + (f' reason={match.group(2)}' if match.group(2) else '')))
+            daemon.append(
+                (
+                    ts,
+                    "l2cap-close",
+                    match.group(1)
+                    + (f" reason={match.group(2)}" if match.group(2) else ""),
+                )
+            )
 
-    if not s['media']:
+    if not s["media"]:
         return None  # restore-only (or otherwise silent) session
     startup_missing = stream_start is None
     ending_missing = stream_end is None
@@ -239,105 +307,194 @@ def analyze(session_id, files):
     timeline = []
     seconds_by_bitrate = {}
     for index, (ts, rate, bitrate) in enumerate(bitrate_observations):
-        until = bitrate_observations[index + 1][0] if index + 1 < len(bitrate_observations) else stream_end
+        until = (
+            bitrate_observations[index + 1][0]
+            if index + 1 < len(bitrate_observations)
+            else stream_end
+        )
         observed_start, observed_end = max(ts, stream_start), min(until, stream_end)
         if observed_start > stream_end or observed_end < stream_start:
             continue
         seconds = max(0, observed_end - observed_start)
-        timeline.append({'offset_seconds': observed_start - stream_start, 'rate': rate, 'bitrate_kbps': bitrate, 'seconds': seconds})
-        seconds_by_bitrate[str(bitrate)] = seconds_by_bitrate.get(str(bitrate), 0) + seconds
+        timeline.append(
+            {
+                "offset_seconds": observed_start - stream_start,
+                "rate": rate,
+                "bitrate_kbps": bitrate,
+                "seconds": seconds,
+            }
+        )
+        seconds_by_bitrate[str(bitrate)] = (
+            seconds_by_bitrate.get(str(bitrate), 0) + seconds
+        )
     known_seconds = sum(seconds_by_bitrate.values())
     unknown_seconds = max(0, stream_end - stream_start - known_seconds)
-    observed_rates = [entry['bitrate_kbps'] for entry in timeline]
-    s.update(bitrate_label='last observed', bitrate_timeline=timeline, bitrate_seconds=seconds_by_bitrate,
-             bitrate_min_kbps=min(observed_rates, default=None), bitrate_max_kbps=max(observed_rates, default=None),
-             bitrate_time_weighted_kbps=(sum(int(rate) * seconds for rate, seconds in seconds_by_bitrate.items()) / known_seconds
-                                         if known_seconds else None),
-             bitrate_unknown_seconds=unknown_seconds, partial=startup_missing or ending_missing or unknown_seconds > 0)
+    observed_rates = [entry["bitrate_kbps"] for entry in timeline]
+    s.update(
+        bitrate_label="last observed",
+        bitrate_timeline=timeline,
+        bitrate_seconds=seconds_by_bitrate,
+        bitrate_min_kbps=min(observed_rates, default=None),
+        bitrate_max_kbps=max(observed_rates, default=None),
+        bitrate_time_weighted_kbps=(
+            sum(int(rate) * seconds for rate, seconds in seconds_by_bitrate.items())
+            / known_seconds
+            if known_seconds
+            else None
+        ),
+        bitrate_unknown_seconds=unknown_seconds,
+        partial=startup_missing or ending_missing or unknown_seconds > 0,
+    )
 
     labels = {}
     for ts, kind, detail in daemon:
-        if kind.startswith('acl-') or kind == 'a2dp-source':
+        if kind.startswith("acl-") or kind == "a2dp-source":
             if target is not None and detail != target:
-                label = labels.setdefault(detail, f'peer{len(labels) + 1}')
-                bucket = s['other_acl'] if kind.startswith('acl-') else s['other_a2dp']
-                bucket.append(f'{ts - stream_start:+.1f}s {kind} {label}')
+                label = labels.setdefault(detail, f"peer{len(labels) + 1}")
+                bucket = s["other_acl"] if kind.startswith("acl-") else s["other_a2dp"]
+                bucket.append(f"{ts - stream_start:+.1f}s {kind} {label}")
         elif stream_start <= ts <= stream_end:
-            s['l2cap_in_stream'].append(f'{ts - stream_start:+.1f}s {kind} {detail}')
+            s["l2cap_in_stream"].append(f"{ts - stream_start:+.1f}s {kind} {detail}")
 
     s.update(
-        start=start, end=end, stream_start=stream_start, stream_end=stream_end,
+        start=start,
+        end=end,
+        stream_start=stream_start,
+        stream_end=stream_end,
         stream_seconds=stream_end - stream_start,
-        aborted=(s['successful'] is False or s['connection_lost'] > 0 or s['pcm_failed'] > 0),
-        complete_seen=s['successful'] is not None)
-    s['other_events'] = len(s['other_acl']) + len(s['other_a2dp']) + len(s['l2cap_in_stream'])
-    s['lost_percent'] = [value for value in s['lost_percent'] if value is not None]
+        aborted=(
+            s["successful"] is False or s["connection_lost"] > 0 or s["pcm_failed"] > 0
+        ),
+        complete_seen=s["successful"] is not None,
+    )
+    s["other_events"] = (
+        len(s["other_acl"]) + len(s["other_a2dp"]) + len(s["l2cap_in_stream"])
+    )
+    s["lost_percent"] = [value for value in s["lost_percent"] if value is not None]
     return s
 
 
 def clock(ts):
-    return datetime.datetime.fromtimestamp(ts).strftime('%m-%d %H:%M:%S')
+    return datetime.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M:%S")
 
 
 def hms(seconds):
     seconds = round(seconds)
-    return f'{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}'
+    return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
 
 
 def render(sessions, totals):
-    header = ['session', 'start', 'end', 'stream', 'rate/last kbps', 'partial', 'casc', 'pace', 'skip(n/frames)',
-              'PCM_FAILED lost%', 'ok', 'maxDrain', 'queue(peak/drops)', 'other']
+    header = [
+        "session",
+        "start",
+        "end",
+        "stream",
+        "rate/last kbps",
+        "partial",
+        "casc",
+        "pace",
+        "skip(n/frames)",
+        "PCM_FAILED lost%",
+        "ok",
+        "maxDrain",
+        "queue(peak/drops)",
+        "other",
+    ]
     rows = []
     for s in sessions:
-        rate = f"{s['rate'] // 1000}k" if s['rate'] else '-'
-        kbps = s['bitrate_kbps'] if s['bitrate_kbps'] else '-'
-        ok = {True: 'yes', False: 'NO', None: '?'}[s['successful']]
-        queue = '-' if s['queue_peak'] is None and s['queue_drops'] is None else \
-            f"{s['queue_peak'] if s['queue_peak'] is not None else '-'}/{s['queue_drops'] or 0:g}"
-        rows.append([
-            s['id'], clock(s['start']), clock(s['end']), hms(s['stream_seconds']), f'{rate}/{kbps}', 'yes' if s['partial'] else 'no',
-            s['cascades'], s['pacing_breaches'], f"{s['pcm_skips']}/{s['skipped_frames']}",
-            f"{s['pcm_failed']} ({','.join(f'{v:g}' for v in s['lost_percent']) or '-'})", ok,
-            '-' if s['max_drain'] is None else f"{s['max_drain']:g}", queue, s['other_events']])
-    widths = [max(len(str(row[i])) for row in [header] + rows) for i in range(len(header))]
-    lines = ['  '.join(str(cell).ljust(widths[i]) for i, cell in enumerate(row))
-             for row in [header] + rows]
-    lines.append('')
-    lines.append(f"Sessions with media: {totals['sessions']}  aborted: {totals['aborts']}  "
-                 f"streaming: {totals['stream_hours']:.2f} h")
-    lines.append(f"Aborts/hour: {totals['aborts_per_hour']:.2f}  cascades: {totals['cascades']}  "
-                 f"cascades/hour: {totals['cascades_per_hour']:.2f}")
-    lines.append('')
-    lines.append('Observed bitrate timeline (seconds from stream start; durations end at last available evidence):')
+        rate = f"{s['rate'] // 1000}k" if s["rate"] else "-"
+        kbps = s["bitrate_kbps"] if s["bitrate_kbps"] else "-"
+        ok = {True: "yes", False: "NO", None: "?"}[s["successful"]]
+        queue = (
+            "-"
+            if s["queue_peak"] is None and s["queue_drops"] is None
+            else f"{s['queue_peak'] if s['queue_peak'] is not None else '-'}/{s['queue_drops'] or 0:g}"
+        )
+        rows.append(
+            [
+                s["id"],
+                clock(s["start"]),
+                clock(s["end"]),
+                hms(s["stream_seconds"]),
+                f"{rate}/{kbps}",
+                "yes" if s["partial"] else "no",
+                s["cascades"],
+                s["pacing_breaches"],
+                f"{s['pcm_skips']}/{s['skipped_frames']}",
+                f"{s['pcm_failed']} ({','.join(f'{v:g}' for v in s['lost_percent']) or '-'})",
+                ok,
+                "-" if s["max_drain"] is None else f"{s['max_drain']:g}",
+                queue,
+                s["other_events"],
+            ]
+        )
+    widths = [
+        max(len(str(row[i])) for row in [header] + rows) for i in range(len(header))
+    ]
+    lines = [
+        "  ".join(str(cell).ljust(widths[i]) for i, cell in enumerate(row))
+        for row in [header] + rows
+    ]
+    lines.append("")
+    lines.append(
+        f"Sessions with media: {totals['sessions']}  aborted: {totals['aborts']}  "
+        f"streaming: {totals['stream_hours']:.2f} h"
+    )
+    lines.append(
+        f"Aborts/hour: {totals['aborts_per_hour']:.2f}  cascades: {totals['cascades']}  "
+        f"cascades/hour: {totals['cascades_per_hour']:.2f}"
+    )
+    lines.append("")
+    lines.append(
+        "Observed bitrate timeline (seconds from stream start; durations end at last available evidence):"
+    )
     for s in sessions:
-        timeline = ', '.join(f"+{entry['offset_seconds']:g}s: {entry['bitrate_kbps']} kb/s for {entry['seconds']:g}s"
-                             for entry in s['bitrate_timeline']) or 'no valid bitrate observations'
-        lines.append(f"  {s['id']}: {timeline}; unknown: {s['bitrate_unknown_seconds']:g}s")
+        timeline = (
+            ", ".join(
+                f"+{entry['offset_seconds']:g}s: {entry['bitrate_kbps']} kb/s for {entry['seconds']:g}s"
+                for entry in s["bitrate_timeline"]
+            )
+            or "no valid bitrate observations"
+        )
+        lines.append(
+            f"  {s['id']}: {timeline}; unknown: {s['bitrate_unknown_seconds']:g}s"
+        )
     notes = []
     for s in sessions:
-        if s['aborted'] or s['other_events']:
-            notes.append(f"  {s['id']}: {'ABORTED' if s['aborted'] else 'ok'}; "
-                         f"other ACL/A2DP peers: {len(s['other_acl']) + len(s['other_a2dp'])}; "
-                         f"L2CAP events while streaming: {len(s['l2cap_in_stream'])}")
-            for item in s['other_acl'] + s['other_a2dp'] + s['l2cap_in_stream']:
-                notes.append(f'      {mask(item)}')
+        if s["aborted"] or s["other_events"]:
+            notes.append(
+                f"  {s['id']}: {'ABORTED' if s['aborted'] else 'ok'}; "
+                f"other ACL/A2DP peers: {len(s['other_acl']) + len(s['other_a2dp'])}; "
+                f"L2CAP events while streaming: {len(s['l2cap_in_stream'])}"
+            )
+            for item in s["other_acl"] + s["other_a2dp"] + s["l2cap_in_stream"]:
+                notes.append(f"      {mask(item)}")
     if notes:
-        lines.append('')
-        lines.append('Other-source evidence (offsets from stream start):')
+        lines.append("")
+        lines.append("Other-source evidence (offsets from stream start):")
         lines.extend(notes)
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    parser.add_argument('paths', nargs='*', help='"LDAC Sessions" folder(s), session folder(s) or session.log file(s)')
-    parser.add_argument('--since', help='only sessions starting at or after "YYYY-MM-DD HH:MM" (local time)')
-    parser.add_argument('--json', action='store_true', help='print JSON instead of a table')
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        help='"LDAC Sessions" folder(s), session folder(s) or session.log file(s)',
+    )
+    parser.add_argument(
+        "--since",
+        help='only sessions starting at or after "YYYY-MM-DD HH:MM" (local time)',
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="print JSON instead of a table"
+    )
     args = parser.parse_args()
 
     since = None
     if args.since:
-        for pattern in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d'):
+        for pattern in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
             try:
                 since = datetime.datetime.strptime(args.since, pattern).timestamp()
                 break
@@ -349,31 +506,38 @@ def main():
     sessions = []
     for session_id, files in find_sessions(args.paths or [DEFAULT_ROOT]):
         result = analyze(session_id, files)
-        if result and (since is None or result['start'] >= since):
+        if result and (since is None or result["start"] >= since):
             sessions.append(result)
-    sessions.sort(key=lambda item: item['start'])
+    sessions.sort(key=lambda item: item["start"])
 
-    seconds = sum(s['stream_seconds'] for s in sessions)
+    seconds = sum(s["stream_seconds"] for s in sessions)
     hours = seconds / 3600
-    aborts = sum(1 for s in sessions if s['aborted'])
-    cascades = sum(s['cascades'] for s in sessions)
-    totals = {'sessions': len(sessions), 'aborts': aborts, 'stream_hours': hours, 'cascades': cascades,
-                  'aborts_per_hour': aborts / hours if hours else 0.0,
-                  'cascades_per_hour': cascades / hours if hours else 0.0}
+    aborts = sum(1 for s in sessions if s["aborted"])
+    cascades = sum(s["cascades"] for s in sessions)
+    totals = {
+        "sessions": len(sessions),
+        "aborts": aborts,
+        "stream_hours": hours,
+        "cascades": cascades,
+        "aborts_per_hour": aborts / hours if hours else 0.0,
+        "cascades_per_hour": cascades / hours if hours else 0.0,
+    }
 
     if args.json:
         out = []
         for s in sessions:
-            item = {k: v for k, v in s.items() if k != 'media'}
-            for key in ('start', 'end', 'stream_start', 'stream_end'):
-                item[key + '_local'] = datetime.datetime.fromtimestamp(s[key]).isoformat(timespec='seconds')
-            for key in ('other_acl', 'other_a2dp', 'l2cap_in_stream'):
+            item = {k: v for k, v in s.items() if k != "media"}
+            for key in ("start", "end", "stream_start", "stream_end"):
+                item[key + "_local"] = datetime.datetime.fromtimestamp(
+                    s[key]
+                ).isoformat(timespec="seconds")
+            for key in ("other_acl", "other_a2dp", "l2cap_in_stream"):
                 item[key] = [mask(entry) for entry in s[key]]
             out.append(item)
-        print(json.dumps({'sessions': out, 'totals': totals}, indent=2))
+        print(json.dumps({"sessions": out, "totals": totals}, indent=2))
     else:
         print(render(sessions, totals))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

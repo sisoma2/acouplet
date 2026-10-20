@@ -2,10 +2,9 @@ import pathlib
 import subprocess
 import tempfile
 
-
 root = pathlib.Path(__file__).resolve().parents[2]
-helper = root / 'Helpers/LDAC/DirectAVDTPLiveMediaProbe.m'
-fixture = r'''
+helper = root / "Helpers/LDAC/DirectAVDTPLiveMediaProbe.m"
+fixture = r"""
 #include "LDACPacketTrace.h"
 
 static void Require(BOOL value, const char *message) {
@@ -47,31 +46,77 @@ int main(void) {
     puts("PASS tracing defaults off; packet identity, time/memory bounds, clock anchor and output verified");
     return 0;
 }
-'''
+"""
 
-with tempfile.TemporaryDirectory(prefix='acouplet-packet-trace-') as directory:
+with tempfile.TemporaryDirectory(prefix="acouplet-packet-trace-") as directory:
     path = pathlib.Path(directory)
-    check, binary = path / 'Trace.m', path / 'trace'
+    check, binary = path / "Trace.m", path / "trace"
     check.write_text(fixture)
-    command = ['xcrun', '--sdk', 'macosx', 'clang', '-O2', '-fobjc-arc', '-fblocks', '-D_DARWIN_C_SOURCE',
-               '-DACOUPLET_LDAC_PROBE_ONLY=0', '-framework', 'Foundation', '-framework', 'CoreBluetooth',
-               '-framework', 'IOBluetooth', '-I', str(helper.parent), '-I', str(root / 'Vendor/libldac/inc'),
-               '-I', str(root / 'Vendor/libldac/src'), str(check), str(root / 'Vendor/libldac/src/ldacBT.c'),
-               str(root / 'Vendor/libldac/src/ldaclib.c'), '-o', str(binary)]
+    command = [
+        "xcrun",
+        "--sdk",
+        "macosx",
+        "clang",
+        "-O2",
+        "-fobjc-arc",
+        "-fblocks",
+        "-D_DARWIN_C_SOURCE",
+        "-DACOUPLET_LDAC_PROBE_ONLY=0",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "CoreBluetooth",
+        "-framework",
+        "IOBluetooth",
+        "-I",
+        str(helper.parent),
+        "-I",
+        str(root / "Vendor/libldac/inc"),
+        "-I",
+        str(root / "Vendor/libldac/src"),
+        str(check),
+        str(root / "Vendor/libldac/src/ldacBT.c"),
+        str(root / "Vendor/libldac/src/ldaclib.c"),
+        "-o",
+        str(binary),
+    ]
     subprocess.run(command, check=True)
     subprocess.run([str(binary)], check=True, timeout=5)
-    production = path / 'media'
+    production = path / "media"
     command[command.index(str(check))] = str(helper)
     command[-1] = str(production)
     subprocess.run(command, check=True)
     for arguments in [
-        ['--sender', 'socket'], ['--sender', 'packet'], ['--packet-window', '1'], ['--packet-window', '4'],
-        ['--trace-seconds', '61'], ['--trace-seconds', '-1'], ['--trace-seconds', '1.5'],
-        ['--trace-seconds', '1', '--trace-seconds', '2'], ['--trace-file', '/tmp/unused-trace-file'],
-        ['--trace-seconds', '0', '--trace-file', '/tmp/unused-trace-file'],
+        ["--sender", "socket"],
+        ["--sender", "packet"],
+        ["--packet-window", "1"],
+        ["--packet-window", "4"],
+        ["--trace-seconds", "61"],
+        ["--trace-seconds", "-1"],
+        ["--trace-seconds", "1.5"],
+        ["--trace-seconds", "1", "--trace-seconds", "2"],
+        ["--trace-file", "/tmp/unused-trace-file"],
+        ["--trace-seconds", "0", "--trace-file", "/tmp/unused-trace-file"],
     ]:
-        invalid = subprocess.run([str(production), '--media', '--pcm-fd', '3', '--address', '02-00-00-00-00-01', *arguments],
-                                 capture_output=True, text=True, timeout=5)
-        assert invalid.returncode == 2 and 'BEFORE' not in invalid.stdout, invalid.stdout + invalid.stderr
-    assert b'sendData:withCompletion:' not in production.read_bytes()
-    print('PASS production excludes packet API and rejects retired sender options and invalid trace settings before device access')
+        invalid = subprocess.run(
+            [
+                str(production),
+                "--media",
+                "--pcm-fd",
+                "3",
+                "--address",
+                "02-00-00-00-00-01",
+                *arguments,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert invalid.returncode == 2 and "BEFORE" not in invalid.stdout, (
+            invalid.stdout + invalid.stderr
+        )
+    assert b"sendData:withCompletion:" not in production.read_bytes()
+    print(
+        "PASS production excludes packet API and rejects retired sender options and invalid trace settings before device access"
+    )

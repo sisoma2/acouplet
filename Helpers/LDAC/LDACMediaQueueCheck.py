@@ -2,10 +2,9 @@ import pathlib
 import subprocess
 import tempfile
 
-
 root = pathlib.Path(__file__).resolve().parents[2]
 helper = root / "Helpers/LDAC/DirectAVDTPLiveMediaProbe.m"
-fixture = r'''
+fixture = r"""
 #define main ProductionMain
 #include "__HELPER__"
 #undef main
@@ -124,29 +123,68 @@ int main(void) {
         for (NSString *quality in @[@"low", @"mid", @"high", @"auto"]) Check((uint32_t)rate, quality);
     return 0;
 }
-'''
+"""
 
 with tempfile.TemporaryDirectory(prefix="acouplet-media-queue-") as directory:
     path = pathlib.Path(directory)
     check = path / "Queue.m"
     binary = path / "queue"
-    command = ["xcrun", "--sdk", "macosx", "clang", "-O2", "-fobjc-arc", "-fblocks", "-D_DARWIN_C_SOURCE",
-               "-DACOUPLET_LDAC_PROBE_ONLY=0", "-framework", "Foundation", "-framework", "CoreBluetooth", "-framework", "IOBluetooth",
-               "-I", str(root / "Vendor/libldac/inc"), "-I", str(root / "Vendor/libldac/src"),
-               "-I", str(helper.parent), str(check), str(root / "Vendor/libldac/src/ldacBT.c"),
-               str(root / "Vendor/libldac/src/ldaclib.c"), "-o", str(binary)]
+    command = [
+        "xcrun",
+        "--sdk",
+        "macosx",
+        "clang",
+        "-O2",
+        "-fobjc-arc",
+        "-fblocks",
+        "-D_DARWIN_C_SOURCE",
+        "-DACOUPLET_LDAC_PROBE_ONLY=0",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "CoreBluetooth",
+        "-framework",
+        "IOBluetooth",
+        "-I",
+        str(root / "Vendor/libldac/inc"),
+        "-I",
+        str(root / "Vendor/libldac/src"),
+        "-I",
+        str(helper.parent),
+        str(check),
+        str(root / "Vendor/libldac/src/ldacBT.c"),
+        str(root / "Vendor/libldac/src/ldaclib.c"),
+        "-o",
+        str(binary),
+    ]
     check.write_text(fixture.replace("__HELPER__", str(helper)))
     subprocess.run(command, check=True)
-    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
+    result = subprocess.run(
+        [str(binary)], check=False, capture_output=True, text=True, timeout=20
+    )
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr
-    print("\n".join(line for line in result.stdout.splitlines() if line.startswith("PASS ")))
+    print(
+        "\n".join(
+            line for line in result.stdout.splitlines() if line.startswith("PASS ")
+        )
+    )
     original = helper.read_text()
-    regression = original.replace("flushing ? NULL : pcm, sendQueue.tail, timestamp,", "flushing ? NULL : pcm, sentPackets, timestamp,")
+    regression = original.replace(
+        "flushing ? NULL : pcm, sendQueue.tail, timestamp,",
+        "flushing ? NULL : pcm, sentPackets, timestamp,",
+    )
     assert regression != original
     prior = path / "Prior.m"
     prior.write_text(regression)
     check.write_text(fixture.replace("__HELPER__", str(prior)))
     subprocess.run(command, check=True)
-    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
-    assert result.returncode == 1 and "Queued RTP sequence was duplicated or skipped" in result.stderr, result.stdout[-4000:] + result.stderr
-    print("PASS negative control: original transmitted-count RTP sequence duplicates are reproduced")
+    result = subprocess.run(
+        [str(binary)], check=False, capture_output=True, text=True, timeout=10
+    )
+    assert (
+        result.returncode == 1
+        and "Queued RTP sequence was duplicated or skipped" in result.stderr
+    ), result.stdout[-4000:] + result.stderr
+    print(
+        "PASS negative control: original transmitted-count RTP sequence duplicates are reproduced"
+    )

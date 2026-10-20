@@ -9,179 +9,382 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-runner = runpy.run_path(str(Path(__file__).with_name('check-all.py')))
-main = runner['main']
-main.__globals__['require_guest'] = lambda: None
+runner = runpy.run_path(str(Path(__file__).with_name("check-all.py")))
+main = runner["main"]
+main.__globals__["require_guest"] = lambda: None
 
-with tempfile.TemporaryDirectory(prefix='acouplet-check-all-check-') as directory:
+with tempfile.TemporaryDirectory(prefix="acouplet-check-all-check-") as directory:
     repo = Path(directory)
     commands = []
     summaries = []
 
     def run(arguments, **options):
-        assert options['cwd'] == repo and options['check'] is True
+        assert options["cwd"] == repo and options["check"] is True
         commands.append(arguments)
         return subprocess.CompletedProcess(arguments, 0)
 
     def summary(arguments, **options):
-        if arguments == ['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-path']:
-            return '/mock/SDK\n'
-        assert arguments[:6] == ['/usr/bin/xcrun', 'xcresulttool', 'get', 'test-results', 'summary', '--path']
-        assert options['cwd'] == repo
+        if arguments == ["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"]:
+            return "/mock/SDK\n"
+        assert arguments[:6] == [
+            "/usr/bin/xcrun",
+            "xcresulttool",
+            "get",
+            "test-results",
+            "summary",
+            "--path",
+        ]
+        assert options["cwd"] == repo
         result = Path(arguments[-1])
-        assert result.name == 'Acouplet.xcresult' and result.parent.parent == repo / '.build/check-all/Results'
+        assert (
+            result.name == "Acouplet.xcresult"
+            and result.parent.parent == repo / ".build/check-all/Results"
+        )
         assert result.parent.is_dir()
         assert result not in summaries
         summaries.append(result)
-        return json.dumps({'passedTests': 1, 'failedTests': 0}).encode()
+        return json.dumps({"passedTests": 1, "failedTests": 0}).encode()
 
-    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
+    with (
+        patch.dict(main.__globals__, repo=repo),
+        patch("subprocess.run", side_effect=run),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
         try:
             main()
         except ValueError as error:
-            assert 'fetch-sparkle.sh' in str(error)
+            assert "fetch-sparkle.sh" in str(error)
         else:
-            raise AssertionError('Missing test dependency was accepted')
+            raise AssertionError("Missing test dependency was accepted")
         assert not commands
-        sparkle = repo / '.build/Sparkle-2.10.0'
-        for name in ('Sparkle.framework/Resources/Info.plist', 'bin/generate_appcast', 'bin/sign_update', 'LICENSE'):
+        sparkle = repo / ".build/Sparkle-2.10.0"
+        for name in (
+            "Sparkle.framework/Resources/Info.plist",
+            "bin/generate_appcast",
+            "bin/sign_update",
+            "LICENSE",
+        ):
             path = sparkle / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(plistlib.dumps({'CFBundleShortVersionString': '2.10.0'}) if path.suffix == '.plist' else b'fixture')
+            path.write_bytes(
+                plistlib.dumps({"CFBundleShortVersionString": "2.10.0"})
+                if path.suffix == ".plist"
+                else b"fixture"
+            )
         try:
             main()
         except ValueError as error:
-            assert 'compiler extraction' in str(error)
+            assert "compiler extraction" in str(error)
         else:
-            raise AssertionError('Missing compiler extraction was accepted')
+            raise AssertionError("Missing compiler extraction was accepted")
         assert len(commands) == 1
-        extraction = repo / '.build/check-all/Build/Intermediates.noindex/Acouplet.build/Debug/Acouplet.build/Objects-normal/arm64/Acouplet.SwiftFileList'
+        extraction = (
+            repo
+            / ".build/check-all/Build/Intermediates.noindex/Acouplet.build/Debug/Acouplet.build/Objects-normal/arm64/Acouplet.SwiftFileList"
+        )
         extraction.parent.mkdir(parents=True)
         extraction.touch()
         commands.clear()
         main()
     xcode = commands[0]
-    assert xcode[:2] == ['/usr/bin/xcrun', 'xcodebuild'] and xcode[-1] == 'test' and 'clean' not in xcode
-    assert '-only-testing:AcoupletTests' in xcode and '-parallel-testing-enabled' in xcode
-    assert 'ACOUPLET_PUBLIC_APIS_ONLY=NO' in xcode and 'CODE_SIGN_IDENTITY=-' in xcode
-    assert 'ENABLE_DEBUG_DYLIB=NO' in xcode
-    assert 'ACOUPLET_DISTRIBUTION=development' in xcode and 'ACOUPLET_NO_SONY_ARTWORK=YES' in xcode
-    assert xcode[xcode.index('-resultBundlePath') + 1] == str(summaries[-1])
-    scripts = [Path(command[1]).name for command in commands if len(command) > 1 and command[1].endswith('.py')]
-    for path in runner['python_checks']:
+    assert (
+        xcode[:2] == ["/usr/bin/xcrun", "xcodebuild"]
+        and xcode[-1] == "test"
+        and "clean" not in xcode
+    )
+    assert (
+        "-only-testing:AcoupletTests" in xcode and "-parallel-testing-enabled" in xcode
+    )
+    assert "ACOUPLET_PUBLIC_APIS_ONLY=NO" in xcode and "CODE_SIGN_IDENTITY=-" in xcode
+    assert "ENABLE_DEBUG_DYLIB=NO" in xcode
+    assert (
+        "ACOUPLET_DISTRIBUTION=development" in xcode
+        and "ACOUPLET_NO_SONY_ARTWORK=YES" in xcode
+    )
+    assert xcode[xcode.index("-resultBundlePath") + 1] == str(summaries[-1])
+    scripts = [
+        Path(command[1]).name
+        for command in commands
+        if len(command) > 1 and command[1].endswith(".py")
+    ]
+    for path in runner["python_checks"]:
         assert Path(path).name in scripts, path
-    assert 'check-helper.py' in scripts and 'check-ldac-cli.py' in scripts and 'check-sparkle-bundle.py' in scripts
-    volume_check = next(command for command in commands if len(command) > 1 and Path(command[1]).name == 'LDACControllerVolumeCheck.py')
-    assert volume_check[2:] == ['--check-mutations']
-    bundle_check = next(command for command in commands if len(command) == 4 and Path(command[1]).name == 'check-localizations.py')
+    assert (
+        "check-helper.py" in scripts
+        and "check-ldac-cli.py" in scripts
+        and "check-sparkle-bundle.py" in scripts
+    )
+    volume_check = next(
+        command
+        for command in commands
+        if len(command) > 1 and Path(command[1]).name == "LDACControllerVolumeCheck.py"
+    )
+    assert volume_check[2:] == ["--check-mutations"]
+    bundle_check = next(
+        command
+        for command in commands
+        if len(command) == 4 and Path(command[1]).name == "check-localizations.py"
+    )
     assert bundle_check[-1] == str(extraction.parent)
-    assert any(Path(command[0]).name == 'BannerLifetimeCheck' for command in commands)
-    assert any(Path(command[0]).name == 'LDACSessionDiagnosticsCheck' for command in commands)
-    assert not any(Path(word).name in ('check-service.sh', 'NativeHUDCheck', 'install', 'direct.sh', 'package.sh', 'fetch-sparkle.sh') for command in commands for word in command)
-    assert not any('AcoupletUITests' in word for command in commands for word in command)
+    assert any(Path(command[0]).name == "BannerLifetimeCheck" for command in commands)
+    assert any(
+        Path(command[0]).name == "LDACSessionDiagnosticsCheck" for command in commands
+    )
+    assert not any(
+        Path(word).name
+        in (
+            "check-service.sh",
+            "NativeHUDCheck",
+            "install",
+            "direct.sh",
+            "package.sh",
+            "fetch-sparkle.sh",
+        )
+        for command in commands
+        for word in command
+    )
+    assert not any(
+        "AcoupletUITests" in word for command in commands for word in command
+    )
     commands.clear()
-    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
-        main(['--xctest-only', '--clean', '--only-testing', 'AcoupletTests/LDACCallAudioTests', '--only-testing', 'AcoupletTests/LDACRecoveryTests'])
-    assert commands[0][-2:] == ['clean', 'test']
-    assert '-only-testing:AcoupletTests/LDACCallAudioTests' in commands[0]
-    assert '-only-testing:AcoupletTests/LDACRecoveryTests' in commands[0]
-    assert '-only-testing:AcoupletTests' not in commands[0]
-    assert not any(str(repo / path) in command for path in runner['python_checks'] for command in commands)
+    with (
+        patch.dict(main.__globals__, repo=repo),
+        patch("subprocess.run", side_effect=run),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
+        main(
+            [
+                "--xctest-only",
+                "--clean",
+                "--only-testing",
+                "AcoupletTests/LDACCallAudioTests",
+                "--only-testing",
+                "AcoupletTests/LDACRecoveryTests",
+            ]
+        )
+    assert commands[0][-2:] == ["clean", "test"]
+    assert "-only-testing:AcoupletTests/LDACCallAudioTests" in commands[0]
+    assert "-only-testing:AcoupletTests/LDACRecoveryTests" in commands[0]
+    assert "-only-testing:AcoupletTests" not in commands[0]
+    assert not any(
+        str(repo / path) in command
+        for path in runner["python_checks"]
+        for command in commands
+    )
     commands.clear()
-    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
-        main(['--ui-only'])
-    assert '-only-testing:AcoupletUITests' in commands[0]
-    assert commands[0][commands[0].index('-scheme') + 1] == 'Acouplet UI Tests'
-    assert '-only-testing:AcoupletTests' not in commands[0]
-    assert not any(str(repo / path) in command for path in runner['python_checks'] for command in commands)
+    with (
+        patch.dict(main.__globals__, repo=repo),
+        patch("subprocess.run", side_effect=run),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
+        main(["--ui-only"])
+    assert "-only-testing:AcoupletUITests" in commands[0]
+    assert commands[0][commands[0].index("-scheme") + 1] == "Acouplet UI Tests"
+    assert "-only-testing:AcoupletTests" not in commands[0]
+    assert not any(
+        str(repo / path) in command
+        for path in runner["python_checks"]
+        for command in commands
+    )
     commands.clear()
-    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
-        main(['--xctest-only', '--include-ui', '--jobs', '4', '--clean'])
-    assert '-only-testing:AcoupletTests' in commands[0] and '-only-testing:AcoupletUITests' in commands[1]
-    assert '-only-testing:AcoupletUITests' not in commands[0]
-    assert commands[0][commands[0].index('-parallel-testing-enabled') + 1] == 'YES'
-    assert commands[0][commands[0].index('-maximum-parallel-testing-workers') + 1] == '4'
-    assert commands[0][commands[0].index('-default-test-execution-time-allowance') + 1] == '60'
-    assert commands[1][commands[1].index('-parallel-testing-enabled') + 1] == 'NO'
-    assert '-test-timeouts-enabled' not in commands[1]
-    assert commands[0][-2:] == ['clean', 'test'] and 'clean' not in commands[1]
-    assert commands[0][commands[0].index('-scheme') + 1] == 'Acouplet'
-    assert commands[1][commands[1].index('-scheme') + 1] == 'Acouplet UI Tests'
+    with (
+        patch.dict(main.__globals__, repo=repo),
+        patch("subprocess.run", side_effect=run),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
+        main(["--xctest-only", "--include-ui", "--jobs", "4", "--clean"])
+    assert (
+        "-only-testing:AcoupletTests" in commands[0]
+        and "-only-testing:AcoupletUITests" in commands[1]
+    )
+    assert "-only-testing:AcoupletUITests" not in commands[0]
+    assert commands[0][commands[0].index("-parallel-testing-enabled") + 1] == "YES"
+    assert (
+        commands[0][commands[0].index("-maximum-parallel-testing-workers") + 1] == "4"
+    )
+    assert (
+        commands[0][commands[0].index("-default-test-execution-time-allowance") + 1]
+        == "60"
+    )
+    assert commands[1][commands[1].index("-parallel-testing-enabled") + 1] == "NO"
+    assert "-test-timeouts-enabled" not in commands[1]
+    assert commands[0][-2:] == ["clean", "test"] and "clean" not in commands[1]
+    assert commands[0][commands[0].index("-scheme") + 1] == "Acouplet"
+    assert commands[1][commands[1].index("-scheme") + 1] == "Acouplet UI Tests"
     commands.clear()
-    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
-        main(['--include-ui'])
-    assert '-only-testing:AcoupletTests' in commands[0] and '-only-testing:AcoupletUITests' in commands[1]
-    assert all(any(str(repo / path) in command for command in commands) for path in runner['python_checks'])
+    with (
+        patch.dict(main.__globals__, repo=repo),
+        patch("subprocess.run", side_effect=run),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
+        main(["--include-ui"])
+    assert (
+        "-only-testing:AcoupletTests" in commands[0]
+        and "-only-testing:AcoupletUITests" in commands[1]
+    )
+    assert all(
+        any(str(repo / path) in command for command in commands)
+        for path in runner["python_checks"]
+    )
     commands.clear()
-    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
-        main(['--xctest-only', '--test-workers', '1'])
-    assert commands[0][commands[0].index('-parallel-testing-enabled') + 1] == 'NO'
+    with (
+        patch.dict(main.__globals__, repo=repo),
+        patch("subprocess.run", side_effect=run),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
+        main(["--xctest-only", "--test-workers", "1"])
+    assert commands[0][commands[0].index("-parallel-testing-enabled") + 1] == "NO"
     commands.clear()
-    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
-        main(['--xctest-only', '--test-workers', '2', '--only-testing', 'AcoupletTests/LDACCallAudioTests'])
-    assert commands[0][commands[0].index('-maximum-parallel-testing-workers') + 1] == '2'
+    with (
+        patch.dict(main.__globals__, repo=repo),
+        patch("subprocess.run", side_effect=run),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
+        main(
+            [
+                "--xctest-only",
+                "--test-workers",
+                "2",
+                "--only-testing",
+                "AcoupletTests/LDACCallAudioTests",
+            ]
+        )
+    assert (
+        commands[0][commands[0].index("-maximum-parallel-testing-workers") + 1] == "2"
+    )
     commands.clear()
-    phase_results = ['/mock/SDK\n', json.dumps({'passedTests': 1, 'failedTests': 0}).encode(),
-                     json.dumps({'passedTests': 0, 'failedTests': 0}).encode()]
-    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), \
-            patch('subprocess.check_output', side_effect=phase_results):
+    phase_results = [
+        "/mock/SDK\n",
+        json.dumps({"passedTests": 1, "failedTests": 0}).encode(),
+        json.dumps({"passedTests": 0, "failedTests": 0}).encode(),
+    ]
+    with (
+        patch.dict(main.__globals__, repo=repo),
+        patch("subprocess.run", side_effect=run),
+        patch("subprocess.check_output", side_effect=phase_results),
+    ):
         try:
-            main(['--include-ui'])
+            main(["--include-ui"])
         except ValueError as error:
-            assert 'execute passing tests with no failures' in str(error)
+            assert "execute passing tests with no failures" in str(error)
         else:
-            raise AssertionError('An empty GUI phase was accepted after passing unit tests')
+            raise AssertionError(
+                "An empty GUI phase was accepted after passing unit tests"
+            )
     assert len(commands) == 2
-    for arguments in (['--ui-only'], ['--include-ui'], ['--xctest-only', '--only-testing', 'AcoupletUITests/AppUITests/testNativeMenuBarControlsAndDismissal']):
-        with patch.dict(main.__globals__, require_guest=lambda: (_ for _ in ()).throw(ValueError('isolated macOS VM required'))), \
-                patch('subprocess.run', side_effect=AssertionError('Unsafe selection started a subprocess')), \
-                patch('subprocess.check_output', side_effect=AssertionError('Unsafe selection queried Xcode')):
+    for arguments in (
+        ["--ui-only"],
+        ["--include-ui"],
+        [
+            "--xctest-only",
+            "--only-testing",
+            "AcoupletUITests/AppUITests/testNativeMenuBarControlsAndDismissal",
+        ],
+    ):
+        with (
+            patch.dict(
+                main.__globals__,
+                require_guest=lambda: (_ for _ in ()).throw(
+                    ValueError("isolated macOS VM required")
+                ),
+            ),
+            patch(
+                "subprocess.run",
+                side_effect=AssertionError("Unsafe selection started a subprocess"),
+            ),
+            patch(
+                "subprocess.check_output",
+                side_effect=AssertionError("Unsafe selection queried Xcode"),
+            ),
+        ):
             try:
                 main(arguments)
             except ValueError as error:
-                assert str(error) == 'isolated macOS VM required'
+                assert str(error) == "isolated macOS VM required"
             else:
-                raise AssertionError('GUI automation was allowed on the host desktop')
+                raise AssertionError("GUI automation was allowed on the host desktop")
     commands.clear()
     vm_calls = []
-    with patch.dict(main.__globals__, repo=repo, validate_vm=lambda name: vm_calls.append(name),
-                    run_in_vm=lambda *args: vm_calls.append(args),
-                    require_guest=lambda: (_ for _ in ()).throw(AssertionError('VM run queried the host guard'))), \
-            patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
-        main(['--ui-only', '--ui-vm', 'test-base', '--jobs', '4'])
+    with (
+        patch.dict(
+            main.__globals__,
+            repo=repo,
+            validate_vm=lambda name: vm_calls.append(name),
+            run_in_vm=lambda *args: vm_calls.append(args),
+            require_guest=lambda: (_ for _ in ()).throw(
+                AssertionError("VM run queried the host guard")
+            ),
+        ),
+        patch("subprocess.run", side_effect=run),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
+        main(["--ui-only", "--ui-vm", "test-base", "--jobs", "4"])
     assert commands == []
-    assert vm_calls == ['test-base', (repo, 'test-base', ['AcoupletUITests'], 4)]
+    assert vm_calls == ["test-base", (repo, "test-base", ["AcoupletUITests"], 4)]
     vm_calls.clear()
-    with patch.dict(main.__globals__, repo=repo, validate_vm=lambda name: vm_calls.append(name),
-                    run_in_vm=lambda *args: vm_calls.append(args)), \
-            patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
-        main(['--xctest-only', '--include-ui', '--ui-vm', 'test-base', '--jobs', '2'])
-    assert '-only-testing:AcoupletTests' in commands[0]
-    assert not any('AcoupletUITests' in word for command in commands for word in command)
-    assert vm_calls == ['test-base', (repo, 'test-base', ['AcoupletUITests'], 2)]
+    with (
+        patch.dict(
+            main.__globals__,
+            repo=repo,
+            validate_vm=lambda name: vm_calls.append(name),
+            run_in_vm=lambda *args: vm_calls.append(args),
+        ),
+        patch("subprocess.run", side_effect=run),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
+        main(["--xctest-only", "--include-ui", "--ui-vm", "test-base", "--jobs", "2"])
+    assert "-only-testing:AcoupletTests" in commands[0]
+    assert not any(
+        "AcoupletUITests" in word for command in commands for word in command
+    )
+    assert vm_calls == ["test-base", (repo, "test-base", ["AcoupletUITests"], 2)]
     commands.clear()
-    for arguments in (['--fixtures-only', '--include-ui'], ['--ui-only', '--include-ui'],
-                      ['--ui-only', '--only-testing', 'AcoupletTests'], ['--test-workers', '0'],
-                      ['--ui-vm', 'base'], ['--fixtures-only', '--ui-vm', 'base'], ['--only-testing', 'UnknownTests']):
-        with patch('subprocess.run', side_effect=AssertionError('Invalid options ran a check')), redirect_stderr(StringIO()):
+    for arguments in (
+        ["--fixtures-only", "--include-ui"],
+        ["--ui-only", "--include-ui"],
+        ["--ui-only", "--only-testing", "AcoupletTests"],
+        ["--test-workers", "0"],
+        ["--ui-vm", "base"],
+        ["--fixtures-only", "--ui-vm", "base"],
+        ["--only-testing", "UnknownTests"],
+    ):
+        with (
+            patch(
+                "subprocess.run",
+                side_effect=AssertionError("Invalid options ran a check"),
+            ),
+            redirect_stderr(StringIO()),
+        ):
             try:
                 main(arguments)
             except SystemExit as error:
                 assert error.code == 2
             else:
-                raise AssertionError('Invalid test selection was accepted: ' + str(arguments))
-    for result_summary in ({'passedTests': 0, 'failedTests': 0},
-                           {'passedTests': 0, 'failedTests': 0, 'skippedTests': 4},
-                           {'passedTests': 1, 'failedTests': 1}):
+                raise AssertionError(
+                    "Invalid test selection was accepted: " + str(arguments)
+                )
+    for result_summary in (
+        {"passedTests": 0, "failedTests": 0},
+        {"passedTests": 0, "failedTests": 0, "skippedTests": 4},
+        {"passedTests": 1, "failedTests": 1},
+    ):
         commands.clear()
-        with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=run), \
-             patch('subprocess.check_output', return_value=json.dumps(result_summary).encode()):
+        with (
+            patch.dict(main.__globals__, repo=repo),
+            patch("subprocess.run", side_effect=run),
+            patch(
+                "subprocess.check_output",
+                return_value=json.dumps(result_summary).encode(),
+            ),
+        ):
             try:
                 main()
             except ValueError as error:
-                assert 'execute passing tests with no failures' in str(error)
+                assert "execute passing tests with no failures" in str(error)
             else:
-                raise AssertionError('Empty, skipped, or failing XCTest summary was accepted')
+                raise AssertionError(
+                    "Empty, skipped, or failing XCTest summary was accepted"
+                )
         assert len(commands) == 1
     commands.clear()
 
@@ -189,60 +392,93 @@ with tempfile.TemporaryDirectory(prefix='acouplet-check-all-check-') as director
         commands.append(arguments)
         raise subprocess.CalledProcessError(17, arguments)
 
-    with patch.dict(main.__globals__, repo=repo), patch('subprocess.run', side_effect=fail):
+    with (
+        patch.dict(main.__globals__, repo=repo),
+        patch("subprocess.run", side_effect=fail),
+    ):
         try:
             main()
         except subprocess.CalledProcessError as error:
             assert error.returncode == 17
         else:
-            raise AssertionError('Failed XCTest run was accepted')
+            raise AssertionError("Failed XCTest run was accepted")
     assert len(commands) == 1
 
     commands.clear()
-    with patch.dict(main.__globals__, repo=repo / 'fixtures-only'), patch('subprocess.run', side_effect=run), patch('subprocess.check_output', side_effect=summary):
-        fixture_repo = main.__globals__['repo']
-        def fixture_run(arguments, **options):
-            assert options['cwd'] == fixture_repo
-            assert options['env']['ACOUPLET_CHECK_JOBS'] == '1'
-            assert options['env']['SDKROOT'] == '/mock/SDK'
-            commands.append(arguments)
-            return subprocess.CompletedProcess(arguments, 0)
-        with patch('subprocess.run', side_effect=fixture_run):
-            main(['--fixtures-only', '--filter', '*check-runner-check.py', '--jobs', '2'])
-    assert len(commands) == 1 and Path(commands[0][1]).name == 'check-runner-check.py'
-    commands.clear()
-    with patch.dict(main.__globals__, repo=repo / 'fixture-group'), patch('subprocess.check_output', side_effect=summary):
-        def group_run(arguments, **options):
-            assert options['env']['ACOUPLET_CHECK_JOBS'] == '2'
-            commands.append(arguments)
-            return subprocess.CompletedProcess(arguments, 0)
-        with patch('subprocess.run', side_effect=group_run):
-            main(['--fixtures-only', '--filter', '*check-package.py', '--jobs', '2'])
-    assert len(commands) == 1 and Path(commands[0][1]).name == 'check-package.py'
-    output = StringIO()
-    with patch('subprocess.run', side_effect=AssertionError('Listing executed a check')), patch('subprocess.check_output', side_effect=AssertionError('Listing queried Xcode')), redirect_stdout(output):
-        main(['--list', '--filter', '*check-direct.py'])
-    assert output.getvalue().splitlines() == ['Packaging/check-direct.py']
+    with (
+        patch.dict(main.__globals__, repo=repo / "fixtures-only"),
+        patch("subprocess.run", side_effect=run),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
+        fixture_repo = main.__globals__["repo"]
 
-    cached = repo / 'cached'
-    objects = cached / 'Build/Intermediates.noindex/Acouplet.build/Debug/Acouplet.build/Objects-normal/arm64'
+        def fixture_run(arguments, **options):
+            assert options["cwd"] == fixture_repo
+            assert options["env"]["ACOUPLET_CHECK_JOBS"] == "1"
+            assert options["env"]["SDKROOT"] == "/mock/SDK"
+            commands.append(arguments)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with patch("subprocess.run", side_effect=fixture_run):
+            main(
+                ["--fixtures-only", "--filter", "*check-runner-check.py", "--jobs", "2"]
+            )
+    assert len(commands) == 1 and Path(commands[0][1]).name == "check-runner-check.py"
+    commands.clear()
+    with (
+        patch.dict(main.__globals__, repo=repo / "fixture-group"),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
+
+        def group_run(arguments, **options):
+            assert options["env"]["ACOUPLET_CHECK_JOBS"] == "2"
+            commands.append(arguments)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with patch("subprocess.run", side_effect=group_run):
+            main(["--fixtures-only", "--filter", "*check-package.py", "--jobs", "2"])
+    assert len(commands) == 1 and Path(commands[0][1]).name == "check-package.py"
+    output = StringIO()
+    with (
+        patch("subprocess.run", side_effect=AssertionError("Listing executed a check")),
+        patch(
+            "subprocess.check_output",
+            side_effect=AssertionError("Listing queried Xcode"),
+        ),
+        redirect_stdout(output),
+    ):
+        main(["--list", "--filter", "*check-direct.py"])
+    assert output.getvalue().splitlines() == ["Packaging/check-direct.py"]
+
+    cached = repo / "cached"
+    objects = (
+        cached
+        / "Build/Intermediates.noindex/Acouplet.build/Debug/Acouplet.build/Objects-normal/arm64"
+    )
     objects.mkdir(parents=True)
     sources = []
-    for name in ('Fresh', 'Stale', 'Missing Extraction'):
-        source = repo / (name + '.swift')
-        source.write_text('source')
+    for name in ("Fresh", "Stale", "Missing Extraction"):
+        source = repo / (name + ".swift")
+        source.write_text("source")
         os.utime(source, ns=(1650000000000000000, 1650000000000000000))
         sources.append(source)
-        (objects / (name + '.o')).write_text('object')
-        if name != 'Missing Extraction':
-            extraction = objects / (name + '.stringsdata')
-            extraction.write_text('extracted')
-            timestamp = 1650000000000000000 + (1 if name == 'Fresh' else -1)
+        (objects / (name + ".o")).write_text("object")
+        if name != "Missing Extraction":
+            extraction = objects / (name + ".stringsdata")
+            extraction.write_text("extracted")
+            timestamp = 1650000000000000000 + (1 if name == "Fresh" else -1)
             os.utime(extraction, ns=(timestamp, timestamp))
-    (objects / 'Acouplet.SwiftFileList').write_text('\n'.join('"' + str(source) + '"' for source in sources))
-    runner['refresh_extraction'](cached)
-    assert (objects / 'Fresh.o').is_file() and (objects / 'Fresh.stringsdata').is_file()
-    assert not (objects / 'Stale.o').exists() and not (objects / 'Stale.stringsdata').exists()
-    assert not (objects / 'Missing Extraction.o').exists()
-    assert all(source.read_text() == 'source' for source in sources)
-print('Local check inventory, prerequisites, native XCTest settings, compiler coverage and failure propagation: passed')
+    (objects / "Acouplet.SwiftFileList").write_text(
+        "\n".join('"' + str(source) + '"' for source in sources)
+    )
+    runner["refresh_extraction"](cached)
+    assert (objects / "Fresh.o").is_file() and (objects / "Fresh.stringsdata").is_file()
+    assert (
+        not (objects / "Stale.o").exists()
+        and not (objects / "Stale.stringsdata").exists()
+    )
+    assert not (objects / "Missing Extraction.o").exists()
+    assert all(source.read_text() == "source" for source in sources)
+print(
+    "Local check inventory, prerequisites, native XCTest settings, compiler coverage and failure propagation: passed"
+)

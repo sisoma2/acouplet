@@ -4,8 +4,8 @@ import tempfile
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
-source = (root / 'Sources/LDACUpdateHandoff.swift').read_text()
-fixture = r'''
+source = (root / "Sources/LDACUpdateHandoff.swift").read_text()
+fixture = r"""
 @main
 enum Check {
     static func main() throws {
@@ -68,16 +68,30 @@ enum Check {
         print("PASS failed recovery launch leaves normal quit restoration enabled")
     }
 }
-'''
+"""
 
-with tempfile.TemporaryDirectory(prefix='acouplet-update-handoff-') as temporary:
+with tempfile.TemporaryDirectory(prefix="acouplet-update-handoff-") as temporary:
     directory = Path(temporary)
-    swift = directory / 'Check.swift'
+    swift = directory / "Check.swift"
     swift.write_text(source + fixture)
-    helper = directory / 'helper'
-    helper.write_text('#!/bin/sh\nprintf "%s\\n" "$*" > "$HANDOFF_CHECK_ROOT/restored"\n')
+    helper = directory / "helper"
+    helper.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" > "$HANDOFF_CHECK_ROOT/restored"\n'
+    )
     helper.chmod(0o755)
-    executable = directory / 'check'
-    environment = {**os.environ, 'HANDOFF_CHECK_ROOT': str(directory)}
-    subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(swift), '-o', str(executable)], check=True)
+    executable = directory / "check"
+    environment = {**os.environ, "HANDOFF_CHECK_ROOT": str(directory)}
+    subprocess.run(
+        [
+            "xcrun",
+            "swiftc",
+            "-swift-version",
+            "6",
+            "-parse-as-library",
+            str(swift),
+            "-o",
+            str(executable),
+        ],
+        check=True,
+    )
     subprocess.run([str(executable)], check=True, env=environment, timeout=15)

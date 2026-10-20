@@ -2,16 +2,18 @@ import pathlib
 import subprocess
 import tempfile
 
-
 root = pathlib.Path(__file__).resolve().parents[2]
 source = (root / "Helpers/LDAC/DirectAVDTPLiveMediaProbe.m").read_text()
 start = source.index("static uint32_t MachTicks(")
 end = source.index("static kern_return_t ApplySenderRealtime(", start)
 timing = source[start:end]
-streaming = source[source.index("static BOOL FeedLive("):source.index("LiveQueueFree(&sendQueue)")]
+streaming = source[
+    source.index("static BOOL FeedLive(") : source.index("LiveQueueFree(&sendQueue)")
+]
 assert "RunLoopFor(" not in streaming
 assert streaming.count("WaitForSenderService(") == 4
-fixture = r'''
+fixture = (
+    r"""
 #import <Foundation/Foundation.h>
 #include <assert.h>
 #include <mach/mach_time.h>
@@ -51,7 +53,9 @@ static kern_return_t TestWait(uint64_t deadline) {
 #define mach_timebase_info TestTimebase
 #define CFRunLoopRunInMode TestRunLoop
 #define mach_wait_until TestWait
-''' + timing + r'''
+"""
+    + timing
+    + r"""
 #undef mach_absolute_time
 #undef mach_timebase_info
 #undef CFRunLoopRunInMode
@@ -90,20 +94,53 @@ int main(void) {
     }
     puts("PASS sender wake deadlines: nonblocking callback pump, no calendar timer, interrupted waits retain their deadline, overdue sources do not add a second wait, and 48/96 kHz Quality pacing does not accumulate drift");
 }
-'''
+"""
+)
 
 with tempfile.TemporaryDirectory(prefix="acouplet-sender-timing-") as directory:
     path = pathlib.Path(directory)
     check = path / "Timing.m"
     binary = path / "timing"
     check.write_text(fixture)
-    subprocess.run(["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-framework", "Foundation", str(check), "-o", str(binary)], check=True)
+    subprocess.run(
+        [
+            "xcrun",
+            "--sdk",
+            "macosx",
+            "clang",
+            "-fobjc-arc",
+            "-framework",
+            "Foundation",
+            str(check),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     subprocess.run([str(binary)], check=True, timeout=10)
-    old_timer = fixture.replace("CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true);",
-                                "CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.001, false);")
+    old_timer = fixture.replace(
+        "CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true);",
+        "CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.001, false);",
+    )
     assert old_timer != fixture
     check.write_text(old_timer)
-    subprocess.run(["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-framework", "Foundation", str(check), "-o", str(binary)], check=True)
-    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
+    subprocess.run(
+        [
+            "xcrun",
+            "--sdk",
+            "macosx",
+            "clang",
+            "-fobjc-arc",
+            "-framework",
+            "Foundation",
+            str(check),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
+    result = subprocess.run(
+        [str(binary)], check=False, capture_output=True, text=True, timeout=10
+    )
     assert result.returncode == 1 and "Sender used a coalesced timer" in result.stderr
     print("PASS negative control: restoring a timed run-loop wait is rejected")

@@ -3,10 +3,19 @@ import tempfile
 from pathlib import Path
 
 base = Path(__file__).resolve().parents[2]
-source = (base / 'Helpers/LDAC/DirectAVDTPSustainedPlaybackProbe.m').read_text()
-waiting = source[source.index('static BOOL AwaitConnection('):source.index('static BOOL PlaybackSequence(')]
-callbacks = source[source.index('@interface DirectSignalingCallbacks'):source.index('@interface IOBluetoothDevice (ClassicPeerAccess)')]
-fixture = r'''#import <Foundation/Foundation.h>
+source = (base / "Helpers/LDAC/DirectAVDTPSustainedPlaybackProbe.m").read_text()
+waiting = source[
+    source.index("static BOOL AwaitConnection(") : source.index(
+        "static BOOL PlaybackSequence("
+    )
+]
+callbacks = source[
+    source.index("@interface DirectSignalingCallbacks") : source.index(
+        "@interface IOBluetoothDevice (ClassicPeerAccess)"
+    )
+]
+fixture = (
+    r"""#import <Foundation/Foundation.h>
 #include <assert.h>
 #include <math.h>
 #import <IOKit/IOReturn.h>
@@ -41,7 +50,9 @@ fixture = r'''#import <Foundation/Foundation.h>
     return coordinator;
 }
 @end
-''' + callbacks + r'''
+"""
+    + callbacks
+    + r"""
 @interface DirectPlaybackProbe : NSObject
 @property BOOL stopRequested, stdinEnded, failed, connectionDone;
 @property IOReturn connectionStatus;
@@ -96,7 +107,9 @@ static NSString *ReadLine(DirectPlaybackProbe *probe, double deadline, BOOL requ
     command = nil;
     return next;
 }
-''' + waiting + r'''
+"""
+    + waiting
+    + r"""
 static DirectPlaybackProbe *Reset(void) {
     elapsed = 0;
     calls = opens = 0;
@@ -207,20 +220,51 @@ int main(void) {
         puts("PASS signaling registration: ACL/peer/callback ordering, registration required, rejected/failed/pending registration, bounded cancellation, existing ACL, stop/EOF/invalid input, power readiness");
     }
 }
-'''
-with tempfile.TemporaryDirectory(prefix='acouplet-signaling-startup-') as directory:
-    path = Path(directory) / 'Startup.m'
-    binary = path.with_suffix('')
+"""
+)
+with tempfile.TemporaryDirectory(prefix="acouplet-signaling-startup-") as directory:
+    path = Path(directory) / "Startup.m"
+    binary = path.with_suffix("")
     path.write_text(fixture)
-    subprocess.run(['xcrun', 'clang', '-fobjc-arc', '-fblocks', '-Werror', '-framework', 'Foundation', str(path), '-o', str(binary)], check=True)
+    subprocess.run(
+        [
+            "xcrun",
+            "clang",
+            "-fobjc-arc",
+            "-fblocks",
+            "-Werror",
+            "-framework",
+            "Foundation",
+            str(path),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     subprocess.run([str(binary)], check=True)
-for probe_only in ['0', '1']:
-    subprocess.run(['xcrun', 'clang', '-fobjc-arc', '-fblocks', '-Werror', '-fsyntax-only',
-                    '-mmacosx-version-min=15.4', '-DACOUPLET_LDAC_PROBE_ONLY=' + probe_only,
-                    str(base / 'Helpers/LDAC/DirectAVDTPSustainedPlaybackProbe.m')], check=True)
+for probe_only in ["0", "1"]:
+    subprocess.run(
+        [
+            "xcrun",
+            "clang",
+            "-fobjc-arc",
+            "-fblocks",
+            "-Werror",
+            "-fsyntax-only",
+            "-mmacosx-version-min=15.4",
+            "-DACOUPLET_LDAC_PROBE_ONLY=" + probe_only,
+            str(base / "Helpers/LDAC/DirectAVDTPSustainedPlaybackProbe.m"),
+        ],
+        check=True,
+    )
 
-writer = source[source.index('static BOOL SendSignal('):source.index('static NSData *ServiceBytes(')]
-writer_fixture = r'''#import <Foundation/Foundation.h>
+writer = source[
+    source.index("static BOOL SendSignal(") : source.index(
+        "static NSData *ServiceBytes("
+    )
+]
+writer_fixture = (
+    r"""#import <Foundation/Foundation.h>
 #include <assert.h>
 #include <signal.h>
 #include <sys/event.h>
@@ -259,7 +303,9 @@ static void RunLoopFor(double seconds) {
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, seconds, false);
 }
 static double MonotonicTime(void) { return clock_gettime_nsec_np(CLOCK_MONOTONIC) / 1000000000.0; }
-''' + writer.replace('MonotonicTime() + 2', 'MonotonicTime() + 0.2') + r'''
+"""
+    + writer.replace("MonotonicTime() + 2", "MonotonicTime() + 0.2")
+    + r"""
 static DirectPlaybackProbe *Reset(int descriptors[2]) {
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, descriptors) == 0);
     DirectPlaybackProbe *probe = [DirectPlaybackProbe new];
@@ -326,10 +372,25 @@ int main(void) {
         puts("PASS signaling writes: 20 delayed socket readers keep delay replies and OPEN requests separate; merged byte-stream negative control; stalled/closed/invalid/short writes, MTU and cancellation fail safely");
     }
 }
-'''
-with tempfile.TemporaryDirectory(prefix='acouplet-signaling-writes-') as directory:
-    path = Path(directory) / 'Writer.m'
-    binary = path.with_suffix('')
+"""
+)
+with tempfile.TemporaryDirectory(prefix="acouplet-signaling-writes-") as directory:
+    path = Path(directory) / "Writer.m"
+    binary = path.with_suffix("")
     path.write_text(writer_fixture)
-    subprocess.run(['xcrun', 'clang', '-fobjc-arc', '-fblocks', '-Werror', '-framework', 'Foundation', str(path), '-o', str(binary)], check=True)
+    subprocess.run(
+        [
+            "xcrun",
+            "clang",
+            "-fobjc-arc",
+            "-fblocks",
+            "-Werror",
+            "-framework",
+            "Foundation",
+            str(path),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     subprocess.run([str(binary)], check=True, timeout=10)

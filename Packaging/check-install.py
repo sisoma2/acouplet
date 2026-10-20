@@ -13,13 +13,21 @@ from check_runner import CheckCases
 from check_stubs import StubExecutable
 
 packaging = Path(__file__).parent
-service_check = (packaging / 'check-service.sh').read_text().split("<<'PLIST'\n", 1)[1].split('\nPLIST\n', 1)[0]
+service_check = (
+    (packaging / "check-service.sh")
+    .read_text()
+    .split("<<'PLIST'\n", 1)[1]
+    .split("\nPLIST\n", 1)[0]
+)
 service_policy = plistlib.loads(service_check.encode())
-assert service_policy['KeepAlive'] == {'SuccessfulExit': False} and service_policy['RunAtLoad'] is True
-native_label = 'dev.baglayan.Acouplet.agent'
-legacy_label = 'local.xm5control.native.agent'
-older_label = 'local.xm5control.agent'
-stub_source = r'''#!/usr/bin/python3
+assert (
+    service_policy["KeepAlive"] == {"SuccessfulExit": False}
+    and service_policy["RunAtLoad"] is True
+)
+native_label = "dev.baglayan.Acouplet.agent"
+legacy_label = "local.xm5control.native.agent"
+older_label = "local.xm5control.agent"
+stub_source = r"""#!/usr/bin/python3
 from pathlib import Path
 import json, os, plistlib, re, shutil, subprocess, sys
 root = Path(os.environ['ACOUPLET_INSTALL_CHECK_ROOT'])
@@ -176,503 +184,1179 @@ elif name in ('Acouplet', 'XM5 Control'):
         login_item.write_text(json.dumps({'enabled': args == ['--register-login-item']}))
 elif name != 'sleep':
     raise AssertionError('Unexpected stub: ' + name)
-'''
+"""
 stub_executable = StubExecutable(stub_source)
-sleep_executable = StubExecutable('#!/bin/sh\nexit 0\n')
-checks = CheckCases('check-install fixtures')
+sleep_executable = StubExecutable("#!/bin/sh\nexit 0\n")
+checks = CheckCases("check-install fixtures")
 
 
 replacements = {
-    '/usr/libexec/PlistBuddy': 'PlistBuddy', '/usr/bin/codesign': 'codesign',
-    '/usr/bin/ditto': 'ditto', '/bin/launchctl': 'launchctl',
-    '/usr/bin/osascript': 'osascript', '/usr/bin/pgrep': 'pgrep',
-    '/usr/bin/plutil': 'plutil', '/bin/kill': 'kill', '/usr/bin/pluginkit': 'pluginkit',
-    '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister': 'lsregister',
+    "/usr/libexec/PlistBuddy": "PlistBuddy",
+    "/usr/bin/codesign": "codesign",
+    "/usr/bin/ditto": "ditto",
+    "/bin/launchctl": "launchctl",
+    "/usr/bin/osascript": "osascript",
+    "/usr/bin/pgrep": "pgrep",
+    "/usr/bin/plutil": "plutil",
+    "/bin/kill": "kill",
+    "/usr/bin/pluginkit": "pluginkit",
+    "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister": "lsregister",
 }
 
 
 def fixture(root, mode):
-    (root / 'commands.jsonl').touch()
-    package, applications, agents, stubs = (root / name for name in ('package', 'Applications', 'LaunchAgents', 'stubs'))
-    for path in (package, applications, agents, stubs): path.mkdir()
-    for name in (*replacements.values(), 'mv', 'sleep'):
+    (root / "commands.jsonl").touch()
+    package, applications, agents, stubs = (
+        root / name for name in ("package", "Applications", "LaunchAgents", "stubs")
+    )
+    for path in (package, applications, agents, stubs):
+        path.mkdir()
+    for name in (*replacements.values(), "mv", "sleep"):
         stub = stubs / name
-        (sleep_executable if name == 'sleep' else stub_executable).link(stub)
+        (sleep_executable if name == "sleep" else stub_executable).link(stub)
     for parent, name, identifier, version in (
-        (package, 'Acouplet.app', 'dev.baglayan.Acouplet', 'new'),
-        (applications, 'Acouplet.app', 'dev.baglayan.Acouplet', 'old'),
-        (applications, 'XM5 Control Native.app', 'local.xm5control.native', 'legacy'),
-        (applications, 'XM5 Control.app', 'local.xm5control', 'older'),
+        (package, "Acouplet.app", "dev.baglayan.Acouplet", "new"),
+        (applications, "Acouplet.app", "dev.baglayan.Acouplet", "old"),
+        (applications, "XM5 Control Native.app", "local.xm5control.native", "legacy"),
+        (applications, "XM5 Control.app", "local.xm5control", "older"),
     ):
         app = parent / name
-        (app / 'Contents/MacOS').mkdir(parents=True)
-        (app / 'version').write_text(version)
-        (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': identifier}))
-        executable = app / ('Contents/MacOS/Acouplet' if identifier == 'dev.baglayan.Acouplet' else 'Contents/MacOS/XM5 Control')
+        (app / "Contents/MacOS").mkdir(parents=True)
+        (app / "version").write_text(version)
+        (app / "Contents/Info.plist").write_bytes(
+            plistlib.dumps({"CFBundleIdentifier": identifier})
+        )
+        executable = app / (
+            "Contents/MacOS/Acouplet"
+            if identifier == "dev.baglayan.Acouplet"
+            else "Contents/MacOS/XM5 Control"
+        )
         os.link(stub_executable.path, executable)
-        if version == 'old':
-            controls = app / 'Contents/PlugIns/Acouplet Controls.appex/Contents'
+        if version == "old":
+            controls = app / "Contents/PlugIns/Acouplet Controls.appex/Contents"
             controls.mkdir(parents=True)
-            (controls / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'dev.baglayan.Acouplet.controls'}))
-    if mode == 'embedded-controls':
-        (package / 'Acouplet.app/Contents/PlugIns/Acouplet Controls.appex').mkdir(parents=True)
-    if mode == 'foreign-controls':
-        (applications / 'Acouplet.app/Contents/PlugIns/Acouplet Controls.appex/Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'unrelated'}))
+            (controls / "Info.plist").write_bytes(
+                plistlib.dumps({"CFBundleIdentifier": "dev.baglayan.Acouplet.controls"})
+            )
+    if mode == "embedded-controls":
+        (package / "Acouplet.app/Contents/PlugIns/Acouplet Controls.appex").mkdir(
+            parents=True
+        )
+    if mode == "foreign-controls":
+        (
+            applications
+            / "Acouplet.app/Contents/PlugIns/Acouplet Controls.appex/Contents/Info.plist"
+        ).write_bytes(plistlib.dumps({"CFBundleIdentifier": "unrelated"}))
     state = {}
     configs = {}
-    for label, app_name, version in ((native_label, 'Acouplet.app', 'old'), (legacy_label, 'XM5 Control Native.app', 'legacy'), (older_label, 'XM5 Control.app', 'older')):
-        program = str(applications / app_name / ('Contents/MacOS/Acouplet' if label == native_label else 'Contents/MacOS/XM5 Control'))
-        configs[label] = plistlib.dumps({'Label': label, 'ProgramArguments': [program, '--background-service'], 'KeepAlive': True, 'OldConfiguration': 'preserve'})
-        if mode in ('matching-plist', 'matching-plist-failure', 'previous-plist') and label == native_label:
+    for label, app_name, version in (
+        (native_label, "Acouplet.app", "old"),
+        (legacy_label, "XM5 Control Native.app", "legacy"),
+        (older_label, "XM5 Control.app", "older"),
+    ):
+        program = str(
+            applications
+            / app_name
+            / (
+                "Contents/MacOS/Acouplet"
+                if label == native_label
+                else "Contents/MacOS/XM5 Control"
+            )
+        )
+        configs[label] = plistlib.dumps(
+            {
+                "Label": label,
+                "ProgramArguments": [program, "--background-service"],
+                "KeepAlive": True,
+                "OldConfiguration": "preserve",
+            }
+        )
+        if (
+            mode in ("matching-plist", "matching-plist-failure", "previous-plist")
+            and label == native_label
+        ):
             # previous-plist is the service installed before ProcessType was added; it must be rewritten.
-            current = {} if mode == 'previous-plist' else {'ProcessType': 'Interactive'}
-            configs[label] = plistlib.dumps({
-                'KeepAlive': {'SuccessfulExit': False}, 'RunAtLoad': True, 'LimitLoadToSessionType': 'Aqua',
-                'AssociatedBundleIdentifiers': ['dev.baglayan.Acouplet'],
-                'EnvironmentVariables': {'ACOUPLET_SERVICE_POLICY': 'successful-exit-v1'},
-                'ProgramArguments': [program, '--background-service'], 'Label': label, **current,
-            }, fmt=plistlib.FMT_BINARY, sort_keys=False)
-        (agents / (label + '.plist')).write_bytes(configs[label])
-        if mode in ('matching-plist', 'matching-plist-failure') and label == native_label:
-            os.utime(agents / (label + '.plist'), ns=(1650000000123456789, 1650000000123456789))
-        state[label] = {'loaded': True, 'program': program, 'version': version}
-    for relative in ('Applications/Unrelated.app/keep', 'Development/Acouplet.app/keep',
-                     'Preferences/dev.baglayan.Acouplet.plist', 'Applications/.Acouplet.previous-interrupted.app/keep',
-                     'LaunchAgents/dev.baglayan.Acouplet.agent.plist.previous-interrupted', 'LaunchAgents/unrelated.plist'):
+            current = {} if mode == "previous-plist" else {"ProcessType": "Interactive"}
+            configs[label] = plistlib.dumps(
+                {
+                    "KeepAlive": {"SuccessfulExit": False},
+                    "RunAtLoad": True,
+                    "LimitLoadToSessionType": "Aqua",
+                    "AssociatedBundleIdentifiers": ["dev.baglayan.Acouplet"],
+                    "EnvironmentVariables": {
+                        "ACOUPLET_SERVICE_POLICY": "successful-exit-v1"
+                    },
+                    "ProgramArguments": [program, "--background-service"],
+                    "Label": label,
+                    **current,
+                },
+                fmt=plistlib.FMT_BINARY,
+                sort_keys=False,
+            )
+        (agents / (label + ".plist")).write_bytes(configs[label])
+        if (
+            mode in ("matching-plist", "matching-plist-failure")
+            and label == native_label
+        ):
+            os.utime(
+                agents / (label + ".plist"),
+                ns=(1650000000123456789, 1650000000123456789),
+            )
+        state[label] = {"loaded": True, "program": program, "version": version}
+    for relative in (
+        "Applications/Unrelated.app/keep",
+        "Development/Acouplet.app/keep",
+        "Preferences/dev.baglayan.Acouplet.plist",
+        "Applications/.Acouplet.previous-interrupted.app/keep",
+        "LaunchAgents/dev.baglayan.Acouplet.agent.plist.previous-interrupted",
+        "LaunchAgents/unrelated.plist",
+    ):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('preserve')
-    if mode in ('inactive-update', 'fresh-install', 'login-item-rollback'): state[native_label]['loaded'] = False
-    if mode == 'fresh-install':
-        shutil.rmtree(applications / 'Acouplet.app')
-        (agents / (native_label + '.plist')).unlink()
-    if mode == 'login-item-rollback': (agents / (native_label + '.plist')).unlink()
-    if mode == 'orphan-service': (agents / (native_label + '.plist')).unlink()
-    if mode in ('legacy-wrong-team', 'installed-wrong-team'):
-        (applications / ('XM5 Control Native.app' if mode == 'legacy-wrong-team' else 'Acouplet.app') / 'team').write_text('OTHER12345')
-    if mode == 'unexpected-bundle':
-        (applications / 'Acouplet.app/Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'unrelated'}))
-    if mode in ('unrelated-legacy', 'repurposed-legacy'):
-        (applications / 'XM5 Control Native.app/Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'unrelated'}))
-    if mode == 'unrelated-legacy':
-        (agents / (legacy_label + '.plist')).unlink()
-        state[legacy_label]['loaded'] = False
-    if mode in ('unexpected-agent', 'unexpected-legacy-agent'):
-        label = native_label if mode == 'unexpected-agent' else legacy_label
+        path.write_text("preserve")
+    if mode in ("inactive-update", "fresh-install", "login-item-rollback"):
+        state[native_label]["loaded"] = False
+    if mode == "fresh-install":
+        shutil.rmtree(applications / "Acouplet.app")
+        (agents / (native_label + ".plist")).unlink()
+    if mode == "login-item-rollback":
+        (agents / (native_label + ".plist")).unlink()
+    if mode == "orphan-service":
+        (agents / (native_label + ".plist")).unlink()
+    if mode in ("legacy-wrong-team", "installed-wrong-team"):
+        (
+            applications
+            / (
+                "XM5 Control Native.app"
+                if mode == "legacy-wrong-team"
+                else "Acouplet.app"
+            )
+            / "team"
+        ).write_text("OTHER12345")
+    if mode == "unexpected-bundle":
+        (applications / "Acouplet.app/Contents/Info.plist").write_bytes(
+            plistlib.dumps({"CFBundleIdentifier": "unrelated"})
+        )
+    if mode in ("unrelated-legacy", "repurposed-legacy"):
+        (applications / "XM5 Control Native.app/Contents/Info.plist").write_bytes(
+            plistlib.dumps({"CFBundleIdentifier": "unrelated"})
+        )
+    if mode == "unrelated-legacy":
+        (agents / (legacy_label + ".plist")).unlink()
+        state[legacy_label]["loaded"] = False
+    if mode in ("unexpected-agent", "unexpected-legacy-agent"):
+        label = native_label if mode == "unexpected-agent" else legacy_label
         config = plistlib.loads(configs[label])
-        config['ProgramArguments'][0] = '/unrelated/program'
-        (agents / (label + '.plist')).write_bytes(plistlib.dumps(config))
-    if mode in ('unexpected-loaded-service', 'unexpected-loaded-legacy'):
-        state[native_label if mode == 'unexpected-loaded-service' else legacy_label]['program'] = '/unrelated/program'
-    if mode == 'symlink-agent':
-        plist = agents / (native_label + '.plist')
+        config["ProgramArguments"][0] = "/unrelated/program"
+        (agents / (label + ".plist")).write_bytes(plistlib.dumps(config))
+    if mode in ("unexpected-loaded-service", "unexpected-loaded-legacy"):
+        state[native_label if mode == "unexpected-loaded-service" else legacy_label][
+            "program"
+        ] = "/unrelated/program"
+    if mode == "symlink-agent":
+        plist = agents / (native_label + ".plist")
         plist.unlink()
-        plist.symlink_to(root / 'Preferences/dev.baglayan.Acouplet.plist')
-    (root / 'state.json').write_text(json.dumps(state))
-    (root / 'login-item.json').write_text(json.dumps({'enabled': mode in ('success', 'matching-plist', 'previous-plist', 'fresh-install', 'inactive-update', 'login-item-rollback', 'helper-failure')}))
-    (root / 'processes.json').write_text(json.dumps({
-        'native': [] if mode in ('inactive-update', 'fresh-install', 'login-item-rollback') else [100, 101] if mode == 'native-partial-quit' else [100],
-        'quit_requested': False, 'exit_checks': 0,
-        'legacy': [200] if mode in ('legacy-quit-success', 'legacy-quit-declined') else [],
-        'older': [201] if mode == 'legacy-quit-success' else [],
-        'owner': [150] if mode == 'ldac-owner-running' else [],
-    }))
+        plist.symlink_to(root / "Preferences/dev.baglayan.Acouplet.plist")
+    (root / "state.json").write_text(json.dumps(state))
+    (root / "login-item.json").write_text(
+        json.dumps(
+            {
+                "enabled": mode
+                in (
+                    "success",
+                    "matching-plist",
+                    "previous-plist",
+                    "fresh-install",
+                    "inactive-update",
+                    "login-item-rollback",
+                    "helper-failure",
+                )
+            }
+        )
+    )
+    (root / "processes.json").write_text(
+        json.dumps(
+            {
+                "native": []
+                if mode in ("inactive-update", "fresh-install", "login-item-rollback")
+                else [100, 101]
+                if mode == "native-partial-quit"
+                else [100],
+                "quit_requested": False,
+                "exit_checks": 0,
+                "legacy": [200]
+                if mode in ("legacy-quit-success", "legacy-quit-declined")
+                else [],
+                "older": [201] if mode == "legacy-quit-success" else [],
+                "owner": [150] if mode == "ldac-owner-running" else [],
+            }
+        )
+    )
     return configs, state
 
 
-def run(root, mode, name='Install.command', arguments=()):
-    script = (packaging / name).read_text().replace('/Applications', str(root / 'Applications')).replace('$HOME/Library/LaunchAgents', str(root / 'LaunchAgents')).replace('$HOME/Library/PreferencePanes', str(root / 'PreferencePanes')).replace('$HOME/Library/Caches', str(root / 'Caches'))
-    script = re.sub(r'for attempt in \{1\.\.(?:20|80|120)\}', 'for attempt in {1..4}', script)
-    for original, stub in replacements.items(): script = script.replace(original, str(root / 'stubs' / stub))
+def run(root, mode, name="Install.command", arguments=()):
+    script = (
+        (packaging / name)
+        .read_text()
+        .replace("/Applications", str(root / "Applications"))
+        .replace("$HOME/Library/LaunchAgents", str(root / "LaunchAgents"))
+        .replace("$HOME/Library/PreferencePanes", str(root / "PreferencePanes"))
+        .replace("$HOME/Library/Caches", str(root / "Caches"))
+    )
+    script = re.sub(
+        r"for attempt in \{1\.\.(?:20|80|120)\}", "for attempt in {1..4}", script
+    )
+    for original, stub in replacements.items():
+        script = script.replace(original, str(root / "stubs" / stub))
     assert not any(original in script for original in replacements)
-    assert '/Applications' not in script.replace(str(root / 'Applications'), '')
-    command = root / 'package' / name
+    assert "/Applications" not in script.replace(str(root / "Applications"), "")
+    command = root / "package" / name
     command.write_text(script)
-    env = {**os.environ, 'PATH': str(root / 'stubs') + ':' + os.environ['PATH'],
-           'ACOUPLET_INSTALL_CHECK_ROOT': str(root), 'ACOUPLET_INSTALL_CHECK_MODE': mode}
-    return subprocess.run(['/bin/zsh', str(command), *arguments], check=False, env=env, text=True, capture_output=True, timeout=60)
+    env = {
+        **os.environ,
+        "PATH": str(root / "stubs") + ":" + os.environ["PATH"],
+        "ACOUPLET_INSTALL_CHECK_ROOT": str(root),
+        "ACOUPLET_INSTALL_CHECK_MODE": mode,
+    }
+    return subprocess.run(
+        ["/bin/zsh", str(command), *arguments],
+        check=False,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
 
 
 def check_migration(scenario, mode, arguments, successful):
-    with tempfile.TemporaryDirectory(prefix='acouplet-team-migration-check-') as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="acouplet-team-migration-check-"
+    ) as directory:
         root = Path(directory)
         configs, original_state = fixture(root, mode)
-        applications = root / 'Applications'
-        for app in applications.glob('*.app'):
-            if (app / 'version').exists(): (app / 'team').write_text('OTHER12345')
-        pane_info = {'CFBundleIdentifier': 'dev.baglayan.Acouplet.preference-pane.001122334455',
-                     'SonyDeviceAddress': '00:11:22:33:44:55', 'NSPrincipalClass': 'SonyPreferencePane_001122334455'}
-        for parent, version in ((root / 'package/PreferencePanes', 'new'), (root / 'PreferencePanes', 'old')):
-            pane = parent / 'Sony-001122334455.prefPane'
-            (pane / 'Contents').mkdir(parents=True)
-            (pane / 'Contents/Info.plist').write_bytes(plistlib.dumps(pane_info))
-            (pane / 'version').write_text(version)
-            if version == 'old': (pane / 'team').write_text('OTHER12345')
+        applications = root / "Applications"
+        for app in applications.glob("*.app"):
+            if (app / "version").exists():
+                (app / "team").write_text("OTHER12345")
+        pane_info = {
+            "CFBundleIdentifier": "dev.baglayan.Acouplet.preference-pane.001122334455",
+            "SonyDeviceAddress": "00:11:22:33:44:55",
+            "NSPrincipalClass": "SonyPreferencePane_001122334455",
+        }
+        for parent, version in (
+            (root / "package/PreferencePanes", "new"),
+            (root / "PreferencePanes", "old"),
+        ):
+            pane = parent / "Sony-001122334455.prefPane"
+            (pane / "Contents").mkdir(parents=True)
+            (pane / "Contents/Info.plist").write_bytes(plistlib.dumps(pane_info))
+            (pane / "version").write_text(version)
+            if version == "old":
+                (pane / "team").write_text("OTHER12345")
         result = run(root, mode, arguments=arguments)
         output = result.stdout + result.stderr
         assert (result.returncode == 0) == successful, (scenario, output)
-        native = applications / 'Acouplet.app'
-        pane = root / 'PreferencePanes/Sony-001122334455.prefPane'
-        assert (native / 'version').read_text() == ('new' if successful else 'old'), (scenario, output)
-        assert (pane / 'version').read_text() == ('new' if successful else 'old'), (scenario, output)
-        commands = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines()]
+        native = applications / "Acouplet.app"
+        pane = root / "PreferencePanes/Sony-001122334455.prefPane"
+        assert (native / "version").read_text() == ("new" if successful else "old"), (
+            scenario,
+            output,
+        )
+        assert (pane / "version").read_text() == ("new" if successful else "old"), (
+            scenario,
+            output,
+        )
+        commands = [
+            json.loads(line)
+            for line in (root / "commands.jsonl").read_text().splitlines()
+        ]
         if successful:
-            validations = [command for command in commands if command[:2] == ['codesign', '--verify']]
-            assert any('subject.OU] = "OTHER12345"' in ' '.join(command) and command[-1] == str(native) for command in validations)
-            assert any('subject.OU] = "ABCDE12345"' in ' '.join(command) and command[-1] == str(native) for command in validations)
+            validations = [
+                command
+                for command in commands
+                if command[:2] == ["codesign", "--verify"]
+            ]
+            assert any(
+                'subject.OU] = "OTHER12345"' in " ".join(command)
+                and command[-1] == str(native)
+                for command in validations
+            )
+            assert any(
+                'subject.OU] = "ABCDE12345"' in " ".join(command)
+                and command[-1] == str(native)
+                for command in validations
+            )
         else:
-            assert json.loads((root / 'state.json').read_text()) == original_state, (scenario, output)
-            assert (root / 'LaunchAgents' / (native_label + '.plist')).read_bytes() == configs[native_label]
-            if mode != 'installed-validation-failure':
-                assert not any(command[0] in ('mv', 'osascript') for command in commands), (scenario, commands)
-        assert not list(applications.glob('.*installing-*.app'))
-        assert not [path for path in applications.glob('.*previous-*.app') if 'interrupted' not in path.name]
+            assert json.loads((root / "state.json").read_text()) == original_state, (
+                scenario,
+                output,
+            )
+            assert (
+                root / "LaunchAgents" / (native_label + ".plist")
+            ).read_bytes() == configs[native_label]
+            if mode != "installed-validation-failure":
+                assert not any(
+                    command[0] in ("mv", "osascript") for command in commands
+                ), (scenario, commands)
+        assert not list(applications.glob(".*installing-*.app"))
+        assert not [
+            path
+            for path in applications.glob(".*previous-*.app")
+            if "interrupted" not in path.name
+        ]
 
 
 for scenario, mode, arguments, successful in (
-    ('explicit-team-migration', 'success', ('--require-stopped', '--replace-team', 'OTHER12345'), True),
-    ('team-migration-without-opt-in', 'success', (), False),
-    ('team-migration-wrong-pin', 'success', ('--replace-team', 'WRONG12345'), False),
-    ('team-migration-invalid-pin', 'success', ('--replace-team', 'invalid'), False),
-    ('team-migration-missing-pin', 'success', ('--replace-team',), False),
-    ('team-migration-bad-installed-signature', 'installed-bad-signature', ('--replace-team', 'OTHER12345'), False),
-    ('team-migration-bad-source-signature', 'source-bad-signature', ('--replace-team', 'OTHER12345'), False),
-    ('team-migration-rollback', 'installed-validation-failure', ('--replace-team', 'OTHER12345'), False),
+    (
+        "explicit-team-migration",
+        "success",
+        ("--require-stopped", "--replace-team", "OTHER12345"),
+        True,
+    ),
+    ("team-migration-without-opt-in", "success", (), False),
+    ("team-migration-wrong-pin", "success", ("--replace-team", "WRONG12345"), False),
+    ("team-migration-invalid-pin", "success", ("--replace-team", "invalid"), False),
+    ("team-migration-missing-pin", "success", ("--replace-team",), False),
+    (
+        "team-migration-bad-installed-signature",
+        "installed-bad-signature",
+        ("--replace-team", "OTHER12345"),
+        False,
+    ),
+    (
+        "team-migration-bad-source-signature",
+        "source-bad-signature",
+        ("--replace-team", "OTHER12345"),
+        False,
+    ),
+    (
+        "team-migration-rollback",
+        "installed-validation-failure",
+        ("--replace-team", "OTHER12345"),
+        False,
+    ),
 ):
-    checks.add('migration/' + scenario, check_migration, scenario, mode, arguments, successful)
+    checks.add(
+        "migration/" + scenario, check_migration, scenario, mode, arguments, successful
+    )
 
-scenarios = ('helper-failure', 'success', 'matching-plist', 'matching-plist-failure', 'previous-plist', 'fresh-install', 'inactive-update', 'staging-failure',
-             'bootstrap-failure', 'stop-failure', 'restore-app-failure', 'restore-plist-failure',
-             'move-new-failure', 'restart-failure', 'legacy-stop-failure', 'legacy-running',
-             'legacy-unregister-failure', 'legacy-helper-failure', 'legacy-bad-signature', 'legacy-wrong-team', 'installed-wrong-team', 'legacy-quit-success', 'legacy-quit-declined', 'installed-bad-signature', 'installed-validation-failure', 'native-register-failure', 'unexpected-bundle', 'unexpected-agent',
-             'unexpected-legacy-agent', 'unexpected-loaded-service', 'unexpected-loaded-legacy',
-             'unrelated-legacy', 'repurposed-legacy', 'symlink-agent', 'orphan-service', 'concurrent-install',
-             'native-quit-declined', 'native-quit-timeout', 'native-quit-stalled', 'native-partial-quit',
-             'native-keepalive-relaunch', 'native-delayed-quit', 'login-item-rollback',
-             'controls-unregister-failure', 'embedded-controls', 'foreign-controls', 'ldac-owner-running',
-             'agent-exited', 'agent-stays-stopped')
+scenarios = (
+    "helper-failure",
+    "success",
+    "matching-plist",
+    "matching-plist-failure",
+    "previous-plist",
+    "fresh-install",
+    "inactive-update",
+    "staging-failure",
+    "bootstrap-failure",
+    "stop-failure",
+    "restore-app-failure",
+    "restore-plist-failure",
+    "move-new-failure",
+    "restart-failure",
+    "legacy-stop-failure",
+    "legacy-running",
+    "legacy-unregister-failure",
+    "legacy-helper-failure",
+    "legacy-bad-signature",
+    "legacy-wrong-team",
+    "installed-wrong-team",
+    "legacy-quit-success",
+    "legacy-quit-declined",
+    "installed-bad-signature",
+    "installed-validation-failure",
+    "native-register-failure",
+    "unexpected-bundle",
+    "unexpected-agent",
+    "unexpected-legacy-agent",
+    "unexpected-loaded-service",
+    "unexpected-loaded-legacy",
+    "unrelated-legacy",
+    "repurposed-legacy",
+    "symlink-agent",
+    "orphan-service",
+    "concurrent-install",
+    "native-quit-declined",
+    "native-quit-timeout",
+    "native-quit-stalled",
+    "native-partial-quit",
+    "native-keepalive-relaunch",
+    "native-delayed-quit",
+    "login-item-rollback",
+    "controls-unregister-failure",
+    "embedded-controls",
+    "foreign-controls",
+    "ldac-owner-running",
+    "agent-exited",
+    "agent-stays-stopped",
+)
+
+
 def check_install(scenario):
-    with tempfile.TemporaryDirectory(prefix='acouplet-install-check-') as directory:
+    with tempfile.TemporaryDirectory(prefix="acouplet-install-check-") as directory:
         root = Path(directory)
         configs, original_state = fixture(root, scenario)
-        applications, agents = root / 'Applications', root / 'LaunchAgents'
-        native = applications / 'Acouplet.app'
-        legacy = applications / 'XM5 Control Native.app'
-        plist = agents / (native_label + '.plist')
+        applications, agents = root / "Applications", root / "LaunchAgents"
+        native = applications / "Acouplet.app"
+        legacy = applications / "XM5 Control Native.app"
+        plist = agents / (native_label + ".plist")
         before_plist = plist.read_bytes() if plist.exists() else None
         before_plist_mtime = plist.stat().st_mtime_ns if plist.exists() else None
         before_plist_inode = plist.stat().st_ino if plist.exists() else None
-        with (applications / '.Acouplet-install.lock').open('w') as lock:
-            if scenario == 'concurrent-install': fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with (applications / ".Acouplet-install.lock").open("w") as lock:
+            if scenario == "concurrent-install":
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             result = run(root, scenario)
         output = result.stdout + result.stderr
-        assert not (root / 'Caches/dev.baglayan.Acouplet/ldac-update-request').exists(), scenario
-        if scenario in ('success', 'native-delayed-quit', 'native-quit-declined', 'native-quit-stalled'):
-            assert (root / 'handoff-requested').exists() == (scenario != 'native-quit-declined'), scenario
-        if scenario == 'inactive-update':
-            assert not (root / 'handoff-requested').exists(), scenario
-        state = json.loads((root / 'state.json').read_text())
-        successful = scenario in ('success', 'matching-plist', 'previous-plist', 'fresh-install', 'inactive-update',
-                                  'native-keepalive-relaunch', 'native-delayed-quit', 'legacy-quit-success', 'ldac-owner-running',
-                                  'agent-exited')
-        assert (result.returncode == 0) == successful, (scenario, result.returncode, output)
-        recovery_apps = [path for path in applications.glob('.*previous-*.app') if 'interrupted' not in path.name]
-        recovery_plists = [path for path in agents.glob('*.previous-*') if 'interrupted' not in path.name]
-        staged_apps = list(applications.glob('.*installing-*.app'))
-        if scenario == 'restore-app-failure':
-            assert not native.exists() and len(recovery_apps) == len(recovery_plists) == len(staged_apps) == 1, output
-            assert (recovery_apps[0] / 'version').read_text() == 'old'
-        elif scenario == 'move-new-failure':
-            assert (native / 'version').read_text() == 'new' and len(recovery_apps) == len(recovery_plists) == 1, output
-        elif scenario in ('restore-plist-failure', 'restart-failure', 'stop-failure'):
-            assert (native / 'version').read_text() == 'old' and len(staged_apps) == 1, output
+        assert not (
+            root / "Caches/dev.baglayan.Acouplet/ldac-update-request"
+        ).exists(), scenario
+        if scenario in (
+            "success",
+            "native-delayed-quit",
+            "native-quit-declined",
+            "native-quit-stalled",
+        ):
+            assert (root / "handoff-requested").exists() == (
+                scenario != "native-quit-declined"
+            ), scenario
+        if scenario == "inactive-update":
+            assert not (root / "handoff-requested").exists(), scenario
+        state = json.loads((root / "state.json").read_text())
+        successful = scenario in (
+            "success",
+            "matching-plist",
+            "previous-plist",
+            "fresh-install",
+            "inactive-update",
+            "native-keepalive-relaunch",
+            "native-delayed-quit",
+            "legacy-quit-success",
+            "ldac-owner-running",
+            "agent-exited",
+        )
+        assert (result.returncode == 0) == successful, (
+            scenario,
+            result.returncode,
+            output,
+        )
+        recovery_apps = [
+            path
+            for path in applications.glob(".*previous-*.app")
+            if "interrupted" not in path.name
+        ]
+        recovery_plists = [
+            path
+            for path in agents.glob("*.previous-*")
+            if "interrupted" not in path.name
+        ]
+        staged_apps = list(applications.glob(".*installing-*.app"))
+        if scenario == "restore-app-failure":
+            assert (
+                not native.exists()
+                and len(recovery_apps) == len(recovery_plists) == len(staged_apps) == 1
+            ), output
+            assert (recovery_apps[0] / "version").read_text() == "old"
+        elif scenario == "move-new-failure":
+            assert (native / "version").read_text() == "new" and len(
+                recovery_apps
+            ) == len(recovery_plists) == 1, output
+        elif scenario in ("restore-plist-failure", "restart-failure", "stop-failure"):
+            assert (native / "version").read_text() == "old" and len(
+                staged_apps
+            ) == 1, output
             assert len(recovery_plists) == 1, output
         else:
             assert not recovery_apps and not recovery_plists and not staged_apps, output
-            expected = 'new' if successful or scenario in ('legacy-unregister-failure', 'legacy-helper-failure', 'native-register-failure', 'agent-stays-stopped') else 'old'
-            assert (native / 'version').read_text() == expected, output
+            expected = (
+                "new"
+                if successful
+                or scenario
+                in (
+                    "legacy-unregister-failure",
+                    "legacy-helper-failure",
+                    "native-register-failure",
+                    "agent-stays-stopped",
+                )
+                else "old"
+            )
+            assert (native / "version").read_text() == expected, output
         if successful:
-            assert json.loads((root / 'login-item.json').read_text())['enabled'] == (scenario == 'inactive-update'), output
-            assert ('running in the background (process 4242)' in output) == (scenario != 'inactive-update'), output
-            restarts = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines() if '"kickstart"' in line]
-            assert len(restarts) == (1 if scenario == 'agent-exited' else 0), restarts
-            assert state[native_label]['loaded'] == (scenario != 'inactive-update'), state
+            assert json.loads((root / "login-item.json").read_text())["enabled"] == (
+                scenario == "inactive-update"
+            ), output
+            assert ("running in the background (process 4242)" in output) == (
+                scenario != "inactive-update"
+            ), output
+            restarts = [
+                json.loads(line)
+                for line in (root / "commands.jsonl").read_text().splitlines()
+                if '"kickstart"' in line
+            ]
+            assert len(restarts) == (1 if scenario == "agent-exited" else 0), restarts
+            assert state[native_label]["loaded"] == (scenario != "inactive-update"), (
+                state
+            )
             assert plistlib.loads(plist.read_bytes()) == {
-                'Label': native_label,
-                'ProgramArguments': [str(native / 'Contents/MacOS/Acouplet'), '--background-service'],
-                'AssociatedBundleIdentifiers': ['dev.baglayan.Acouplet'],
-                'LimitLoadToSessionType': 'Aqua', 'RunAtLoad': True, 'KeepAlive': {'SuccessfulExit': False},
-                'EnvironmentVariables': {'ACOUPLET_SERVICE_POLICY': 'successful-exit-v1'}, 'ProcessType': 'Interactive',
+                "Label": native_label,
+                "ProgramArguments": [
+                    str(native / "Contents/MacOS/Acouplet"),
+                    "--background-service",
+                ],
+                "AssociatedBundleIdentifiers": ["dev.baglayan.Acouplet"],
+                "LimitLoadToSessionType": "Aqua",
+                "RunAtLoad": True,
+                "KeepAlive": {"SuccessfulExit": False},
+                "EnvironmentVariables": {
+                    "ACOUPLET_SERVICE_POLICY": "successful-exit-v1"
+                },
+                "ProcessType": "Interactive",
             }, output
-            if scenario == 'previous-plist':
+            if scenario == "previous-plist":
                 assert plist.read_bytes() != before_plist, output
-            assert not legacy.exists() and not (applications / 'XM5 Control.app').exists(), output
-            assert not state[legacy_label]['loaded'] and not (agents / (legacy_label + '.plist')).exists(), state
-        elif scenario in ('legacy-unregister-failure', 'legacy-helper-failure'):
-            assert state[native_label]['loaded'] and state[native_label]['version'] == 'new' and legacy.exists(), state
-        elif scenario == 'agent-stays-stopped':
-            assert state[native_label]['loaded'] and state[native_label]['version'] == 'new', state
-            assert 'background service is not running' in output and 'running in the background' not in output, output
-        elif scenario == 'native-register-failure':
-            assert state[native_label]['loaded'] and state[native_label]['version'] == 'new', state
-            assert not state[legacy_label]['loaded'] and not legacy.exists(), state
-            assert 'application registration could not be refreshed' in output
-        elif scenario in ('bootstrap-failure', 'matching-plist-failure', 'installed-validation-failure', 'helper-failure'):
-            assert state == original_state and plist.read_bytes() == configs[native_label], state
-            if scenario == 'helper-failure':
-                assert 'previous login-item registration could not be removed' in output and legacy.exists(), output
-        elif scenario not in ('restore-app-failure', 'restore-plist-failure', 'move-new-failure', 'restart-failure'):
-            assert state == original_state and (plist.read_bytes() if plist.exists() else None) == before_plist, (scenario, state, original_state, output)
-        if scenario in ('matching-plist', 'matching-plist-failure'):
-            assert plist.read_bytes() == before_plist and plist.stat().st_mtime_ns == before_plist_mtime and plist.stat().st_ino == before_plist_inode, output
-        if successful or scenario == 'native-register-failure':
-            commands = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines()]
-            assert ['lsregister', '-f', str(native)] in commands, commands
-            assert (['Acouplet', '--unregister-login-item'] in commands) == (scenario != 'inactive-update'), commands
-            assert commands.count(['XM5 Control', '--unregister-login-item']) == 2, commands
-            if scenario != 'inactive-update':
+            assert (
+                not legacy.exists() and not (applications / "XM5 Control.app").exists()
+            ), output
+            assert (
+                not state[legacy_label]["loaded"]
+                and not (agents / (legacy_label + ".plist")).exists()
+            ), state
+        elif scenario in ("legacy-unregister-failure", "legacy-helper-failure"):
+            assert (
+                state[native_label]["loaded"]
+                and state[native_label]["version"] == "new"
+                and legacy.exists()
+            ), state
+        elif scenario == "agent-stays-stopped":
+            assert (
+                state[native_label]["loaded"]
+                and state[native_label]["version"] == "new"
+            ), state
+            assert (
+                "background service is not running" in output
+                and "running in the background" not in output
+            ), output
+        elif scenario == "native-register-failure":
+            assert (
+                state[native_label]["loaded"]
+                and state[native_label]["version"] == "new"
+            ), state
+            assert not state[legacy_label]["loaded"] and not legacy.exists(), state
+            assert "application registration could not be refreshed" in output
+        elif scenario in (
+            "bootstrap-failure",
+            "matching-plist-failure",
+            "installed-validation-failure",
+            "helper-failure",
+        ):
+            assert (
+                state == original_state and plist.read_bytes() == configs[native_label]
+            ), state
+            if scenario == "helper-failure":
+                assert (
+                    "previous login-item registration could not be removed" in output
+                    and legacy.exists()
+                ), output
+        elif scenario not in (
+            "restore-app-failure",
+            "restore-plist-failure",
+            "move-new-failure",
+            "restart-failure",
+        ):
+            assert (
+                state == original_state
+                and (plist.read_bytes() if plist.exists() else None) == before_plist
+            ), (scenario, state, original_state, output)
+        if scenario in ("matching-plist", "matching-plist-failure"):
+            assert (
+                plist.read_bytes() == before_plist
+                and plist.stat().st_mtime_ns == before_plist_mtime
+                and plist.stat().st_ino == before_plist_inode
+            ), output
+        if successful or scenario == "native-register-failure":
+            commands = [
+                json.loads(line)
+                for line in (root / "commands.jsonl").read_text().splitlines()
+            ]
+            assert ["lsregister", "-f", str(native)] in commands, commands
+            assert (["Acouplet", "--unregister-login-item"] in commands) == (
+                scenario != "inactive-update"
+            ), commands
+            assert commands.count(["XM5 Control", "--unregister-login-item"]) == 2, (
+                commands
+            )
+            if scenario != "inactive-update":
                 # The login item goes before the service starts, so no copy of the app is running when it checks for duplicates.
-                bootstrap_index = next(index for index, command in enumerate(commands)
-                                       if command[:2] == ['launchctl', 'bootstrap'] and command[3].endswith(native_label + '.plist'))
-                assert commands.index(['Acouplet', '--unregister-login-item']) < bootstrap_index, commands
-            assert ['Acouplet', '--register-login-item'] not in commands, commands
-        if scenario in ('login-item-rollback', 'helper-failure'):
-            assert json.loads((root / 'login-item.json').read_text())['enabled']
-            commands = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines()]
-            assert ['Acouplet', '--unregister-login-item'] in commands, commands
+                bootstrap_index = next(
+                    index
+                    for index, command in enumerate(commands)
+                    if command[:2] == ["launchctl", "bootstrap"]
+                    and command[3].endswith(native_label + ".plist")
+                )
+                assert (
+                    commands.index(["Acouplet", "--unregister-login-item"])
+                    < bootstrap_index
+                ), commands
+            assert ["Acouplet", "--register-login-item"] not in commands, commands
+        if scenario in ("login-item-rollback", "helper-failure"):
+            assert json.loads((root / "login-item.json").read_text())["enabled"]
+            commands = [
+                json.loads(line)
+                for line in (root / "commands.jsonl").read_text().splitlines()
+            ]
+            assert ["Acouplet", "--unregister-login-item"] in commands, commands
             # A failed start gives the login item back; a failed removal never took it away.
-            assert (['Acouplet', '--register-login-item'] in commands) == (scenario == 'login-item-rollback'), commands
-        if scenario.startswith('native-quit-') or scenario == 'native-partial-quit':
-            commands = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines()]
-            assert ['osascript', '-', 'dev.baglayan.Acouplet'] in commands, commands
-            assert not any(command[0] == 'launchctl' and command[1] in ('bootout', 'bootstrap') for command in commands), commands
-            assert not any(command[0] == 'mv' for command in commands), commands
-            assert plist.stat().st_mtime_ns == before_plist_mtime and plist.stat().st_ino == before_plist_inode, output
-            assert 'Nothing was replaced' in output, output
-            processes = json.loads((root / 'processes.json').read_text())
-            assert processes['native'] == ([101] if scenario == 'native-partial-quit' else [100]), processes
-        if scenario == 'legacy-quit-success':
-            assert ['osascript', '-', 'local.xm5control.native'] in commands and ['osascript', '-', 'local.xm5control'] in commands, commands
-            first_move = next(index for index, command in enumerate(commands) if command[0] == 'mv')
-            assert commands.index(['kill', '-0', '200']) < first_move and commands.index(['kill', '-0', '201']) < first_move, commands
-        if scenario in ('success', 'native-keepalive-relaunch', 'native-delayed-quit', 'ldac-owner-running'):
-            commands = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines()]
-            quit_index = commands.index(['osascript', '-', 'dev.baglayan.Acouplet'])
-            bootout_index = next(index for index, command in enumerate(commands)
-                                if command[:2] == ['launchctl', 'bootout'] and command[2].endswith('/' + native_label))
+            assert (["Acouplet", "--register-login-item"] in commands) == (
+                scenario == "login-item-rollback"
+            ), commands
+        if scenario.startswith("native-quit-") or scenario == "native-partial-quit":
+            commands = [
+                json.loads(line)
+                for line in (root / "commands.jsonl").read_text().splitlines()
+            ]
+            assert ["osascript", "-", "dev.baglayan.Acouplet"] in commands, commands
+            assert not any(
+                command[0] == "launchctl" and command[1] in ("bootout", "bootstrap")
+                for command in commands
+            ), commands
+            assert not any(command[0] == "mv" for command in commands), commands
+            assert (
+                plist.stat().st_mtime_ns == before_plist_mtime
+                and plist.stat().st_ino == before_plist_inode
+            ), output
+            assert "Nothing was replaced" in output, output
+            processes = json.loads((root / "processes.json").read_text())
+            assert processes["native"] == (
+                [101] if scenario == "native-partial-quit" else [100]
+            ), processes
+        if scenario == "legacy-quit-success":
+            assert ["osascript", "-", "local.xm5control.native"] in commands and [
+                "osascript",
+                "-",
+                "local.xm5control",
+            ] in commands, commands
+            first_move = next(
+                index for index, command in enumerate(commands) if command[0] == "mv"
+            )
+            assert (
+                commands.index(["kill", "-0", "200"]) < first_move
+                and commands.index(["kill", "-0", "201"]) < first_move
+            ), commands
+        if scenario in (
+            "success",
+            "native-keepalive-relaunch",
+            "native-delayed-quit",
+            "ldac-owner-running",
+        ):
+            commands = [
+                json.loads(line)
+                for line in (root / "commands.jsonl").read_text().splitlines()
+            ]
+            quit_index = commands.index(["osascript", "-", "dev.baglayan.Acouplet"])
+            bootout_index = next(
+                index
+                for index, command in enumerate(commands)
+                if command[:2] == ["launchctl", "bootout"]
+                and command[2].endswith("/" + native_label)
+            )
             assert quit_index < bootout_index, commands
-            checks = [command for command in commands[quit_index + 1:bootout_index] if command[0] == 'kill']
-            assert checks and all(command == ['kill', '-0', '100'] for command in checks), commands
-            assert len(checks) == (3 if scenario == 'native-delayed-quit' else 1), checks
-        for marker in root.rglob('keep'): assert marker.read_text() == 'preserve'
-        assert (root / 'Preferences/dev.baglayan.Acouplet.plist').read_text() == 'preserve'
-        assert (agents / 'unrelated.plist').read_text() == 'preserve'
-        assert (agents / (native_label + '.plist.previous-interrupted')).read_text() == 'preserve'
-        commands = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines()]
-        controls = native / 'Contents/PlugIns/Acouplet Controls.appex'
-        unregistered = ['pluginkit', '-r', str(controls)] in commands
-        reregistered = ['pluginkit', '-a', str(controls)] in commands
+            checks = [
+                command
+                for command in commands[quit_index + 1 : bootout_index]
+                if command[0] == "kill"
+            ]
+            assert checks and all(
+                command == ["kill", "-0", "100"] for command in checks
+            ), commands
+            assert len(checks) == (3 if scenario == "native-delayed-quit" else 1), (
+                checks
+            )
+        for marker in root.rglob("keep"):
+            assert marker.read_text() == "preserve"
+        assert (
+            root / "Preferences/dev.baglayan.Acouplet.plist"
+        ).read_text() == "preserve"
+        assert (agents / "unrelated.plist").read_text() == "preserve"
+        assert (
+            agents / (native_label + ".plist.previous-interrupted")
+        ).read_text() == "preserve"
+        commands = [
+            json.loads(line)
+            for line in (root / "commands.jsonl").read_text().splitlines()
+        ]
+        controls = native / "Contents/PlugIns/Acouplet Controls.appex"
+        unregistered = ["pluginkit", "-r", str(controls)] in commands
+        reregistered = ["pluginkit", "-a", str(controls)] in commands
         if successful:
             assert not controls.exists()
-            assert unregistered == (scenario != 'fresh-install'), commands
+            assert unregistered == (scenario != "fresh-install"), commands
             assert not reregistered, commands
-        if scenario in ('bootstrap-failure', 'matching-plist-failure', 'login-item-rollback', 'helper-failure'):
+        if scenario in (
+            "bootstrap-failure",
+            "matching-plist-failure",
+            "login-item-rollback",
+            "helper-failure",
+        ):
             assert controls.exists() and unregistered and reregistered, commands
-        if scenario in ('embedded-controls', 'foreign-controls'):
+        if scenario in ("embedded-controls", "foreign-controls"):
             assert not unregistered and not reregistered, commands
-        if scenario == 'concurrent-install':
-            assert run(root, 'success').returncode == 0
+        if scenario == "concurrent-install":
+            assert run(root, "success").returncode == 0
 
 
 for scenario in scenarios:
-    checks.add('install/' + str(scenario), check_install, scenario)
+    checks.add("install/" + str(scenario), check_install, scenario)
+
 
 def check_uninstall(scenario):
-    with tempfile.TemporaryDirectory(prefix='acouplet-uninstall-check-') as directory:
+    with tempfile.TemporaryDirectory(prefix="acouplet-uninstall-check-") as directory:
         root = Path(directory)
         configs, original_state = fixture(root, scenario)
-        if scenario == 'inactive-update':
-            (root / 'processes.json').write_text(json.dumps({'native': [100], 'quit_requested': False, 'exit_checks': 0, 'legacy': [], 'older': []}))
-        result = run(root, scenario, 'Uninstall Service.command')
-        state = json.loads((root / 'state.json').read_text())
-        if scenario in ('success', 'orphan-service', 'inactive-update', 'native-keepalive-relaunch', 'native-delayed-quit', 'legacy-quit-success'):
+        if scenario == "inactive-update":
+            (root / "processes.json").write_text(
+                json.dumps(
+                    {
+                        "native": [100],
+                        "quit_requested": False,
+                        "exit_checks": 0,
+                        "legacy": [],
+                        "older": [],
+                    }
+                )
+            )
+        result = run(root, scenario, "Uninstall Service.command")
+        state = json.loads((root / "state.json").read_text())
+        if scenario in (
+            "success",
+            "orphan-service",
+            "inactive-update",
+            "native-keepalive-relaunch",
+            "native-delayed-quit",
+            "legacy-quit-success",
+        ):
             assert result.returncode == 0, result.stdout + result.stderr
-            assert all(not service['loaded'] for service in state.values()), state
-            assert not any((root / 'LaunchAgents' / (label + '.plist')).exists() for label in configs)
-            assert run(root, scenario, 'Uninstall Service.command').returncode == 0
+            assert all(not service["loaded"] for service in state.values()), state
+            assert not any(
+                (root / "LaunchAgents" / (label + ".plist")).exists()
+                for label in configs
+            )
+            assert run(root, scenario, "Uninstall Service.command").returncode == 0
         else:
-            assert result.returncode != 0 and state == original_state, result.stdout + result.stderr
-            assert all((root / 'LaunchAgents' / (label + '.plist')).exists() for label in configs)
-        commands = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines()]
-        if scenario.startswith('native-quit-') or scenario == 'native-partial-quit':
-            assert ['osascript', '-', 'dev.baglayan.Acouplet'] in commands, commands
-            assert not any(command[0] == 'launchctl' and command[1] in ('bootout', 'bootstrap') for command in commands), commands
-            assert 'Nothing was removed' in result.stdout + result.stderr
-        if scenario in ('success', 'orphan-service', 'native-keepalive-relaunch', 'native-delayed-quit'):
-            quit_index = commands.index(['osascript', '-', 'dev.baglayan.Acouplet'])
-            bootout_index = next(index for index, command in enumerate(commands)
-                                 if command[:2] == ['launchctl', 'bootout'] and command[2].endswith('/' + native_label))
+            assert result.returncode != 0 and state == original_state, (
+                result.stdout + result.stderr
+            )
+            assert all(
+                (root / "LaunchAgents" / (label + ".plist")).exists()
+                for label in configs
+            )
+        commands = [
+            json.loads(line)
+            for line in (root / "commands.jsonl").read_text().splitlines()
+        ]
+        if scenario.startswith("native-quit-") or scenario == "native-partial-quit":
+            assert ["osascript", "-", "dev.baglayan.Acouplet"] in commands, commands
+            assert not any(
+                command[0] == "launchctl" and command[1] in ("bootout", "bootstrap")
+                for command in commands
+            ), commands
+            assert "Nothing was removed" in result.stdout + result.stderr
+        if scenario in (
+            "success",
+            "orphan-service",
+            "native-keepalive-relaunch",
+            "native-delayed-quit",
+        ):
+            quit_index = commands.index(["osascript", "-", "dev.baglayan.Acouplet"])
+            bootout_index = next(
+                index
+                for index, command in enumerate(commands)
+                if command[:2] == ["launchctl", "bootout"]
+                and command[2].endswith("/" + native_label)
+            )
             assert quit_index < bootout_index, commands
-            checks = [command for command in commands[quit_index + 1:bootout_index] if command[0] == 'kill']
-            assert len(checks) == (3 if scenario == 'native-delayed-quit' else 1), checks
-        if scenario == 'inactive-update':
-            assert ['osascript', '-', 'dev.baglayan.Acouplet'] in commands, commands
-            assert json.loads((root / 'processes.json').read_text())['native'] == []
-        assert (root / 'Applications/Acouplet.app/version').read_text() == 'old'
-        assert (root / 'Applications/XM5 Control Native.app/version').read_text() == 'legacy'
-        assert (root / 'Preferences/dev.baglayan.Acouplet.plist').read_text() == 'preserve'
+            checks = [
+                command
+                for command in commands[quit_index + 1 : bootout_index]
+                if command[0] == "kill"
+            ]
+            assert len(checks) == (3 if scenario == "native-delayed-quit" else 1), (
+                checks
+            )
+        if scenario == "inactive-update":
+            assert ["osascript", "-", "dev.baglayan.Acouplet"] in commands, commands
+            assert json.loads((root / "processes.json").read_text())["native"] == []
+        assert (root / "Applications/Acouplet.app/version").read_text() == "old"
+        assert (
+            root / "Applications/XM5 Control Native.app/version"
+        ).read_text() == "legacy"
+        assert (
+            root / "Preferences/dev.baglayan.Acouplet.plist"
+        ).read_text() == "preserve"
 
 
-for scenario in ('success', 'orphan-service', 'unexpected-agent', 'unexpected-loaded-legacy',
-                 'unexpected-bundle', 'repurposed-legacy', 'stop-failure', 'inactive-update',
-                 'native-quit-declined', 'native-quit-timeout', 'native-quit-stalled', 'native-partial-quit',
-                 'native-keepalive-relaunch', 'native-delayed-quit', 'legacy-quit-success', 'legacy-quit-declined', 'legacy-wrong-team'):
-    checks.add('uninstall/' + str(scenario), check_uninstall, scenario)
+for scenario in (
+    "success",
+    "orphan-service",
+    "unexpected-agent",
+    "unexpected-loaded-legacy",
+    "unexpected-bundle",
+    "repurposed-legacy",
+    "stop-failure",
+    "inactive-update",
+    "native-quit-declined",
+    "native-quit-timeout",
+    "native-quit-stalled",
+    "native-partial-quit",
+    "native-keepalive-relaunch",
+    "native-delayed-quit",
+    "legacy-quit-success",
+    "legacy-quit-declined",
+    "legacy-wrong-team",
+):
+    checks.add("uninstall/" + str(scenario), check_uninstall, scenario)
+
 
 def check_local(scenario):
-    with tempfile.TemporaryDirectory(prefix='acouplet-local-install-check-') as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="acouplet-local-install-check-"
+    ) as directory:
         root = Path(directory)
-        mode = 'success' if scenario.startswith('running') else 'inactive-update'
+        mode = "success" if scenario.startswith("running") else "inactive-update"
         _, initial_state = fixture(root, mode)
-        source = root / 'package/Acouplet.app'
-        binaries = ('Contents/MacOS/Acouplet', 'Contents/Helpers/Acouplet Battery Publisher', 'Contents/Frameworks/SonyNativeHUD.dylib', 'Contents/Helpers/SonyNativeHUDCheck', 'Contents/Resources/Assets.car', 'Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle', 'Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate', 'Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app/Contents/MacOS/Updater', 'Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer', 'Contents/Helpers/LDACSignaling', 'Contents/Helpers/LDACMediaTransport', 'Contents/Helpers/SonyAudioConnection', 'Contents/Helpers/LDACLogObserver', 'Contents/Helpers/Acouplet Audio.app/Contents/MacOS/AcoupletAudio', 'Contents/Helpers/AcoupletLDACOutput.driver/Contents/MacOS/AcoupletVirtualOutput', 'Contents/Helpers/AcoupletLDACOutput.driver/Contents/Info.plist', 'Contents/Resources/Acouplet LDAC Output.pkg', 'Contents/Resources/Acouplet LDAC Removal.pkg', 'Contents/_CodeSignature/CodeResources')
+        source = root / "package/Acouplet.app"
+        binaries = (
+            "Contents/MacOS/Acouplet",
+            "Contents/Helpers/Acouplet Battery Publisher",
+            "Contents/Frameworks/SonyNativeHUD.dylib",
+            "Contents/Helpers/SonyNativeHUDCheck",
+            "Contents/Resources/Assets.car",
+            "Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle",
+            "Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate",
+            "Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app/Contents/MacOS/Updater",
+            "Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer",
+            "Contents/Helpers/LDACSignaling",
+            "Contents/Helpers/LDACMediaTransport",
+            "Contents/Helpers/SonyAudioConnection",
+            "Contents/Helpers/LDACLogObserver",
+            "Contents/Helpers/Acouplet Audio.app/Contents/MacOS/AcoupletAudio",
+            "Contents/Helpers/AcoupletLDACOutput.driver/Contents/MacOS/AcoupletVirtualOutput",
+            "Contents/Helpers/AcoupletLDACOutput.driver/Contents/Info.plist",
+            "Contents/Resources/Acouplet LDAC Output.pkg",
+            "Contents/Resources/Acouplet LDAC Removal.pkg",
+            "Contents/_CodeSignature/CodeResources",
+        )
         for relative in binaries[1:]:
             binary = source / relative
             binary.parent.mkdir(parents=True, exist_ok=True)
             binary.write_text(relative)
-        release = root / 'Release.app'
+        release = root / "Release.app"
         shutil.copytree(source, release)
-        lines = ['Prepared UTC: 2026-09-27T00:00:00Z', 'Revision: fixture', 'Worktree: dirty', 'Release app: ' + str(release)]
-        lines += ['SHA256\t' + hashlib.sha256((source / relative).read_bytes()).hexdigest() + '\t' + relative for relative in binaries]
-        (root / 'package/Local Build Receipt.txt').write_text('\n'.join(lines) + '\n')
-        if scenario in ('local-release-changed', 'running-release-changed'): (release / binaries[0]).write_text('later build')
-        if scenario == 'local-stage-changed': (source / binaries[1]).write_text('changed stage')
-        if scenario == 'local-hud-check-changed': (source / 'Contents/Helpers/SonyNativeHUDCheck').write_text('changed probe')
-        if scenario == 'local-ldac-media-changed': (source / 'Contents/Helpers/LDACMediaTransport').write_text('changed encoder')
-        if scenario == 'local-audio-capture-changed': (release / 'Contents/Helpers/Acouplet Audio.app/Contents/MacOS/AcoupletAudio').write_text('changed capture')
-        if scenario == 'local-output-driver-changed': (source / 'Contents/Helpers/AcoupletLDACOutput.driver/Contents/MacOS/AcoupletVirtualOutput').write_text('changed driver')
-        if scenario == 'local-output-driver-info-changed': (release / 'Contents/Helpers/AcoupletLDACOutput.driver/Contents/Info.plist').write_text('changed driver metadata')
-        if scenario == 'local-driver-installer-changed': (source / 'Contents/Resources/Acouplet LDAC Output.pkg').write_text('changed installer')
-        if scenario == 'local-driver-uninstaller-changed': (source / 'Contents/Resources/Acouplet LDAC Removal.pkg').write_text('changed uninstaller')
-        if scenario == 'local-resource-seal-changed': (source / 'Contents/_CodeSignature/CodeResources').write_text('changed resource seal')
-        result = run(root, mode, arguments=('--require-stopped',))
-        commands = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines()]
+        lines = [
+            "Prepared UTC: 2026-09-27T00:00:00Z",
+            "Revision: fixture",
+            "Worktree: dirty",
+            "Release app: " + str(release),
+        ]
+        lines += [
+            "SHA256\t"
+            + hashlib.sha256((source / relative).read_bytes()).hexdigest()
+            + "\t"
+            + relative
+            for relative in binaries
+        ]
+        (root / "package/Local Build Receipt.txt").write_text("\n".join(lines) + "\n")
+        if scenario in ("local-release-changed", "running-release-changed"):
+            (release / binaries[0]).write_text("later build")
+        if scenario == "local-stage-changed":
+            (source / binaries[1]).write_text("changed stage")
+        if scenario == "local-hud-check-changed":
+            (source / "Contents/Helpers/SonyNativeHUDCheck").write_text("changed probe")
+        if scenario == "local-ldac-media-changed":
+            (source / "Contents/Helpers/LDACMediaTransport").write_text(
+                "changed encoder"
+            )
+        if scenario == "local-audio-capture-changed":
+            (
+                release
+                / "Contents/Helpers/Acouplet Audio.app/Contents/MacOS/AcoupletAudio"
+            ).write_text("changed capture")
+        if scenario == "local-output-driver-changed":
+            (
+                source
+                / "Contents/Helpers/AcoupletLDACOutput.driver/Contents/MacOS/AcoupletVirtualOutput"
+            ).write_text("changed driver")
+        if scenario == "local-output-driver-info-changed":
+            (
+                release
+                / "Contents/Helpers/AcoupletLDACOutput.driver/Contents/Info.plist"
+            ).write_text("changed driver metadata")
+        if scenario == "local-driver-installer-changed":
+            (source / "Contents/Resources/Acouplet LDAC Output.pkg").write_text(
+                "changed installer"
+            )
+        if scenario == "local-driver-uninstaller-changed":
+            (source / "Contents/Resources/Acouplet LDAC Removal.pkg").write_text(
+                "changed uninstaller"
+            )
+        if scenario == "local-resource-seal-changed":
+            (source / "Contents/_CodeSignature/CodeResources").write_text(
+                "changed resource seal"
+            )
+        result = run(root, mode, arguments=("--require-stopped",))
+        commands = [
+            json.loads(line)
+            for line in (root / "commands.jsonl").read_text().splitlines()
+        ]
         # The local-build mode quits the running app itself, but only once the receipt has been verified.
-        assert any(command[0] == 'osascript' for command in commands) == (scenario == 'running'), commands
-        receipts = list(root.glob('Local Install-*.txt'))
-        installed = root / 'Applications/Acouplet.app'
-        if scenario in ('local-stopped', 'running'):
+        assert any(command[0] == "osascript" for command in commands) == (
+            scenario == "running"
+        ), commands
+        receipts = list(root.glob("Local Install-*.txt"))
+        installed = root / "Applications/Acouplet.app"
+        if scenario in ("local-stopped", "running"):
             assert result.returncode == 0, result.stdout + result.stderr
             assert len(receipts) == 1
-            assert 'Release/staged/installed identity and strict signature verification: passed' in receipts[0].read_text()
-            assert 'Installed UTC:' in receipts[0].read_text()
-            for relative in binaries: assert (installed / relative).read_bytes() == (release / relative).read_bytes()
-            assert json.loads((root / 'state.json').read_text())[native_label]['loaded'] == (scenario == 'running')
+            assert (
+                "Release/staged/installed identity and strict signature verification: passed"
+                in receipts[0].read_text()
+            )
+            assert "Installed UTC:" in receipts[0].read_text()
+            for relative in binaries:
+                assert (installed / relative).read_bytes() == (
+                    release / relative
+                ).read_bytes()
+            assert json.loads((root / "state.json").read_text())[native_label][
+                "loaded"
+            ] == (scenario == "running")
         else:
             assert result.returncode != 0, result.stdout + result.stderr
             assert not receipts
-            assert (installed / 'version').read_text() == 'old'
-            assert json.loads((root / 'state.json').read_text()) == initial_state
-        assert (root / 'Preferences/dev.baglayan.Acouplet.plist').read_text() == 'preserve'
+            assert (installed / "version").read_text() == "old"
+            assert json.loads((root / "state.json").read_text()) == initial_state
+        assert (
+            root / "Preferences/dev.baglayan.Acouplet.plist"
+        ).read_text() == "preserve"
 
 
-for scenario in ('running', 'running-release-changed', 'local-stopped', 'local-release-changed', 'local-stage-changed', 'local-hud-check-changed', 'local-ldac-media-changed', 'local-audio-capture-changed', 'local-output-driver-changed', 'local-output-driver-info-changed', 'local-driver-installer-changed', 'local-driver-uninstaller-changed', 'local-resource-seal-changed'):
-    checks.add('local/' + str(scenario), check_local, scenario)
+for scenario in (
+    "running",
+    "running-release-changed",
+    "local-stopped",
+    "local-release-changed",
+    "local-stage-changed",
+    "local-hud-check-changed",
+    "local-ldac-media-changed",
+    "local-audio-capture-changed",
+    "local-output-driver-changed",
+    "local-output-driver-info-changed",
+    "local-driver-installer-changed",
+    "local-driver-uninstaller-changed",
+    "local-resource-seal-changed",
+):
+    checks.add("local/" + str(scenario), check_local, scenario)
 
 
 def check_driver_message(driver_state, message):
-    with tempfile.TemporaryDirectory(prefix='acouplet-driver-message-check-') as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="acouplet-driver-message-check-"
+    ) as directory:
         root = Path(directory)
-        fixture(root, 'success')
-        driver_installer = root / 'package/Acouplet.app/Contents/Resources/Acouplet LDAC Output.pkg'
+        fixture(root, "success")
+        driver_installer = (
+            root / "package/Acouplet.app/Contents/Resources/Acouplet LDAC Output.pkg"
+        )
         driver_installer.parent.mkdir(parents=True)
-        driver_installer.write_text('fixture')
-        (root / 'driver-state').write_text(driver_state)
-        result = run(root, 'success')
+        driver_installer.write_text("fixture")
+        (root / "driver-state").write_text(driver_state)
+        result = run(root, "success")
         assert result.returncode == 0, result.stdout + result.stderr
         assert message in result.stdout, (driver_state, result.stdout)
-        assert ('restart the mac' in result.stdout.lower()) == (driver_state not in ('current', 'unavailable', 'fail')), result.stdout
-        assert ('did not install the driver' in result.stdout) == (driver_state != 'current'), result.stdout
+        assert ("restart the mac" in result.stdout.lower()) == (
+            driver_state not in ("current", "unavailable", "fail")
+        ), result.stdout
+        assert ("did not install the driver" in result.stdout) == (
+            driver_state != "current"
+        ), result.stdout
 
 
-for driver_state, message in (('current', 'already up to date; no restart is needed'),
-                              ('restartRequired', 'The LDAC audio driver is installed. Restart the Mac to activate it.'),
-                              ('outdated', 'includes a newer LDAC audio driver. Use Update LDAC Driver in the app'),
-                              ('missing', 'turn it on in the app to install its audio driver'),
-                              ('unavailable', 'could not be checked'), ('fail', 'could not be checked')):
-    checks.add('driver-message/' + driver_state, check_driver_message, driver_state, message)
+for driver_state, message in (
+    ("current", "already up to date; no restart is needed"),
+    (
+        "restartRequired",
+        "The LDAC audio driver is installed. Restart the Mac to activate it.",
+    ),
+    (
+        "outdated",
+        "includes a newer LDAC audio driver. Use Update LDAC Driver in the app",
+    ),
+    ("missing", "turn it on in the app to install its audio driver"),
+    ("unavailable", "could not be checked"),
+    ("fail", "could not be checked"),
+):
+    checks.add(
+        "driver-message/" + driver_state, check_driver_message, driver_state, message
+    )
+
 
 def check_pane(scenario):
-    with tempfile.TemporaryDirectory(prefix='acouplet-pane-install-check-') as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="acouplet-pane-install-check-"
+    ) as directory:
         root = Path(directory)
-        fixture(root, 'inactive-update')
-        panes = root / 'PreferencePanes'
+        fixture(root, "inactive-update")
+        panes = root / "PreferencePanes"
         panes.mkdir()
-        for suffix in ('001122334455', '001122334466'):
-            info = {'CFBundleIdentifier': 'dev.baglayan.Acouplet.preference-pane.' + suffix.lower(),
-                    'SonyDeviceAddress': ':'.join(suffix[i:i + 2] for i in range(0, 12, 2)),
-                    'NSPrincipalClass': 'SonyPreferencePane_' + suffix}
-            for parent, version in ((root / 'package/PreferencePanes', 'new'), (panes, 'old')):
-                pane = parent / ('Sony-' + suffix + '.prefPane')
-                (pane / 'Contents').mkdir(parents=True)
-                (pane / 'Contents/Info.plist').write_bytes(plistlib.dumps({**info, 'CFBundleIdentifier': 'local.xm5control.native.preference-pane.' + suffix.lower()} if scenario == 'pane-legacy-target' and version == 'old' else info))
-                (pane / 'version').write_text(version)
-        prototype = panes / 'Sony Headphones Compatibility.prefPane'
-        (prototype / 'Contents').mkdir(parents=True)
-        prototype_id = 'unrelated' if scenario == 'pane-foreign-prototype' else 'dev.baglayan.Acouplet.research.preference-pane'
-        (prototype / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': prototype_id}))
-        (panes / 'Other.prefPane').mkdir()
-        first = panes / 'Sony-001122334455.prefPane'
-        second = panes / 'Sony-001122334466.prefPane'
-        if scenario == 'pane-foreign-target':
-            (second / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'unrelated'}))
-        if scenario == 'pane-symlink-target':
+        for suffix in ("001122334455", "001122334466"):
+            info = {
+                "CFBundleIdentifier": "dev.baglayan.Acouplet.preference-pane."
+                + suffix.lower(),
+                "SonyDeviceAddress": ":".join(
+                    suffix[i : i + 2] for i in range(0, 12, 2)
+                ),
+                "NSPrincipalClass": "SonyPreferencePane_" + suffix,
+            }
+            for parent, version in (
+                (root / "package/PreferencePanes", "new"),
+                (panes, "old"),
+            ):
+                pane = parent / ("Sony-" + suffix + ".prefPane")
+                (pane / "Contents").mkdir(parents=True)
+                (pane / "Contents/Info.plist").write_bytes(
+                    plistlib.dumps(
+                        {
+                            **info,
+                            "CFBundleIdentifier": "local.xm5control.native.preference-pane."
+                            + suffix.lower(),
+                        }
+                        if scenario == "pane-legacy-target" and version == "old"
+                        else info
+                    )
+                )
+                (pane / "version").write_text(version)
+        prototype = panes / "Sony Headphones Compatibility.prefPane"
+        (prototype / "Contents").mkdir(parents=True)
+        prototype_id = (
+            "unrelated"
+            if scenario == "pane-foreign-prototype"
+            else "dev.baglayan.Acouplet.research.preference-pane"
+        )
+        (prototype / "Contents/Info.plist").write_bytes(
+            plistlib.dumps({"CFBundleIdentifier": prototype_id})
+        )
+        (panes / "Other.prefPane").mkdir()
+        first = panes / "Sony-001122334455.prefPane"
+        second = panes / "Sony-001122334466.prefPane"
+        if scenario == "pane-foreign-target":
+            (second / "Contents/Info.plist").write_bytes(
+                plistlib.dumps({"CFBundleIdentifier": "unrelated"})
+            )
+        if scenario == "pane-symlink-target":
             shutil.rmtree(second)
-            second.symlink_to(panes / 'Other.prefPane', target_is_directory=True)
+            second.symlink_to(panes / "Other.prefPane", target_is_directory=True)
         result = run(root, scenario)
-        succeeded = scenario in ('pane-success', 'pane-legacy-target', 'pane-foreign-prototype')
-        assert (result.returncode == 0) == succeeded, (scenario, result.stdout, result.stderr)
-        app = root / 'Applications/Acouplet.app'
+        succeeded = scenario in (
+            "pane-success",
+            "pane-legacy-target",
+            "pane-foreign-prototype",
+        )
+        assert (result.returncode == 0) == succeeded, (
+            scenario,
+            result.stdout,
+            result.stderr,
+        )
+        app = root / "Applications/Acouplet.app"
         if succeeded:
-            assert (app / 'version').read_text() == 'new'
-            assert (first / 'version').read_text() == (second / 'version').read_text() == 'new'
-            assert prototype.exists() == (scenario == 'pane-foreign-prototype')
-        elif scenario == 'pane-commit-failure':
-            assert (app / 'version').read_text() == 'new'
-            assert (first / 'version').read_text() == 'new' and (second / 'version').read_text() == 'old'
+            assert (app / "version").read_text() == "new"
+            assert (
+                (first / "version").read_text()
+                == (second / "version").read_text()
+                == "new"
+            )
+            assert prototype.exists() == (scenario == "pane-foreign-prototype")
+        elif scenario == "pane-commit-failure":
+            assert (app / "version").read_text() == "new"
+            assert (first / "version").read_text() == "new" and (
+                second / "version"
+            ).read_text() == "old"
             assert prototype.exists()
-            assert 'could not all be installed' in result.stderr
+            assert "could not all be installed" in result.stderr
         else:
-            assert (app / 'version').read_text() == (first / 'version').read_text() == 'old'
+            assert (
+                (app / "version").read_text()
+                == (first / "version").read_text()
+                == "old"
+            )
             assert prototype.exists()
-        assert (panes / 'Other.prefPane').is_dir()
-        assert not list(panes.glob('.*.installing-*')) and not list(panes.glob('.*.previous-*'))
-        assert not json.loads((root / 'state.json').read_text())[native_label]['loaded']
+        assert (panes / "Other.prefPane").is_dir()
+        assert not list(panes.glob(".*.installing-*")) and not list(
+            panes.glob(".*.previous-*")
+        )
+        assert not json.loads((root / "state.json").read_text())[native_label]["loaded"]
 
 
-for scenario in ('pane-success', 'pane-legacy-target', 'pane-foreign-target', 'pane-symlink-target', 'pane-bad-signature', 'pane-stage-failure', 'pane-commit-failure', 'pane-foreign-prototype'):
-    checks.add('pane/' + str(scenario), check_pane, scenario)
+for scenario in (
+    "pane-success",
+    "pane-legacy-target",
+    "pane-foreign-target",
+    "pane-symlink-target",
+    "pane-bad-signature",
+    "pane-stage-failure",
+    "pane-commit-failure",
+    "pane-foreign-prototype",
+):
+    checks.add("pane/" + str(scenario), check_pane, scenario)
+
 
 def check_legacy(scenario):
-    with tempfile.TemporaryDirectory(prefix='acouplet-legacy-install-check-') as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="acouplet-legacy-install-check-"
+    ) as directory:
         root = Path(directory)
-        fixture(root, 'success')
-        controls = root / 'Applications/XM5 Control Native.app/Contents/PlugIns/XM5 Controls.appex'
-        (controls / 'Contents').mkdir(parents=True)
-        (controls / 'Contents/Info.plist').write_bytes(plistlib.dumps({
-            'CFBundleIdentifier': 'unrelated' if scenario == 'foreign-legacy-controls' else 'local.xm5control.native.controls'}))
-        with (root / 'Applications/.XM5-Control-install.lock').open('w') as lock:
-            if scenario == 'concurrent-legacy-install': fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            result = run(root, 'success')
-        assert (result.returncode == 0) == (scenario == 'legacy-controls'), (scenario, result.stdout, result.stderr)
-        commands = [json.loads(line) for line in (root / 'commands.jsonl').read_text().splitlines()]
-        assert (['pluginkit', '-r', str(controls)] in commands) == (scenario == 'legacy-controls'), commands
-        assert (root / 'Applications/Acouplet.app/version').read_text() == ('new' if scenario == 'legacy-controls' else 'old')
+        fixture(root, "success")
+        controls = (
+            root
+            / "Applications/XM5 Control Native.app/Contents/PlugIns/XM5 Controls.appex"
+        )
+        (controls / "Contents").mkdir(parents=True)
+        (controls / "Contents/Info.plist").write_bytes(
+            plistlib.dumps(
+                {
+                    "CFBundleIdentifier": "unrelated"
+                    if scenario == "foreign-legacy-controls"
+                    else "local.xm5control.native.controls"
+                }
+            )
+        )
+        with (root / "Applications/.XM5-Control-install.lock").open("w") as lock:
+            if scenario == "concurrent-legacy-install":
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = run(root, "success")
+        assert (result.returncode == 0) == (scenario == "legacy-controls"), (
+            scenario,
+            result.stdout,
+            result.stderr,
+        )
+        commands = [
+            json.loads(line)
+            for line in (root / "commands.jsonl").read_text().splitlines()
+        ]
+        assert (["pluginkit", "-r", str(controls)] in commands) == (
+            scenario == "legacy-controls"
+        ), commands
+        assert (root / "Applications/Acouplet.app/version").read_text() == (
+            "new" if scenario == "legacy-controls" else "old"
+        )
 
 
-for scenario in ('legacy-controls', 'foreign-legacy-controls', 'concurrent-legacy-install'):
-    checks.add('legacy/' + str(scenario), check_legacy, scenario)
+for scenario in (
+    "legacy-controls",
+    "foreign-legacy-controls",
+    "concurrent-legacy-install",
+):
+    checks.add("legacy/" + str(scenario), check_legacy, scenario)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     checks.main()
