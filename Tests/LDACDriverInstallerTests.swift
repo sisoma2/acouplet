@@ -627,6 +627,186 @@ final class LDACDefaultCodecTests: XCTestCase {
 }
 
 @MainActor
+final class LDACRequestLifecycleTests: XCTestCase {
+    private let first = "02:53:4F:4E:59:01"
+    private let second = "02:53:4F:4E:59:02"
+
+    func testSelectingEarbudsReplacesTheOvernightHeadphoneRequest() async throws {
+        var date = Date(timeIntervalSince1970: 1_000)
+        let (ldac, devices, _) = try prepared(now: { date })
+        defer { stop(ldac, devices) }
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [first])
+        devices.isSystemSleeping = true
+        ldac.suspend()
+        await drainTasks()
+        XCTAssertEqual(ldac.state, .waitingForDevice)
+        devices.controller(for: first)?.simulateControlLoss(deviceConnected: false)
+        date = date.addingTimeInterval(12 * 60 * 60)
+        devices.isSystemSleeping = false
+        devices.reconcileConnectedDevices([device(second, model: .wfXM5)])
+        await drainTasks()
+
+        XCTAssertEqual(ldac.simulatedRequestedAddress, second)
+        XCTAssertEqual(ldac.simulatedStarts, [first, second])
+    }
+
+    func testSelectingDifferentHeadphonesCancelsWaitingWithoutWaitingForExpiry() async throws {
+        let (ldac, devices, _) = try prepared()
+        defer { stop(ldac, devices) }
+        await drainTasks()
+        devices.controller(for: first)?.simulateControlLoss(deviceConnected: false)
+        ldac.simulateSessionFinished(.init(message: nil, canRetry: true, requiresAttention: false,
+            targetDisconnected: true, waitForReconnect: true))
+        await drainTasks()
+        XCTAssertEqual(ldac.state, .waitingForDevice)
+
+        devices.reconcileConnectedDevices([device(second, model: .wfXM5)])
+        await drainTasks()
+
+        XCTAssertEqual(ldac.simulatedRequestedAddress, second)
+        XCTAssertEqual(ldac.simulatedStarts, [first, second])
+    }
+
+    func testChangingSelectionDuringPlaybackStartsTheNewAutomaticProfileAfterCleanup() async throws {
+        let (ldac, devices, _) = try prepared()
+        defer { stop(ldac, devices) }
+        await drainTasks()
+        let headphones = try XCTUnwrap(devices.controller(for: first))
+        ldac.simulateActiveSession(headphones)
+        devices.reconcileConnectedDevices([device(first, model: .whXM5), device(second, model: .wfXM5)])
+        devices.select(address: second)
+        await drainTasks()
+
+        XCTAssertEqual(ldac.simulatedRequestedAddress, second)
+        XCTAssertEqual(ldac.simulatedStarts, [first, second])
+    }
+
+    func testDisconnectedRequestExpiresAtSixtySecondsAndReconnectionStartsFresh() async throws {
+        var date = Date(timeIntervalSince1970: 1_000)
+        let (ldac, devices, route) = try prepared(now: { date })
+        defer { stop(ldac, devices) }
+        await drainTasks()
+        let headphones = try XCTUnwrap(devices.controller(for: first))
+        headphones.simulateControlLoss(deviceConnected: false)
+        ldac.simulateSessionFinished(.init(message: nil, canRetry: true, requiresAttention: false,
+            targetDisconnected: true, waitForReconnect: true))
+        await drainTasks()
+        XCTAssertEqual(ldac.state, .waitingForDevice)
+
+        date = date.addingTimeInterval(59.9)
+        ldac.refreshPreferredCodec()
+        XCTAssertEqual(ldac.simulatedRequestedAddress, first)
+        date = date.addingTimeInterval(0.1)
+        ldac.refreshPreferredCodec()
+        await drainTasks()
+        XCTAssertEqual(ldac.state, .off)
+        XCTAssertNil(ldac.simulatedRequestedAddress)
+        XCTAssertNil(ldac.targetAddress)
+        XCTAssertFalse(ldac.isAwaitingAutomaticRetry)
+        XCTAssertEqual(ldac.simulatedStarts, [first])
+
+        headphones.simulateDeviceConnection(named: "WH-1000XM5", simulatedAddress: first, galleryModel: .whXM5)
+        route.simulateRoute(output)
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedRequestedAddress, first)
+        XCTAssertEqual(ldac.simulatedStarts, [first, first])
+    }
+
+    func testBriefDisconnectionResumesTheSameRequest() async throws {
+        var date = Date(timeIntervalSince1970: 1_000)
+        let (ldac, devices, route) = try prepared(now: { date })
+        defer { stop(ldac, devices) }
+        await drainTasks()
+        let headphones = try XCTUnwrap(devices.controller(for: first))
+        headphones.simulateControlLoss(deviceConnected: false)
+        ldac.simulateSessionFinished(.init(message: nil, canRetry: true, requiresAttention: false,
+            targetDisconnected: true, waitForReconnect: true))
+        await drainTasks()
+        date = date.addingTimeInterval(59)
+        headphones.simulateDeviceConnection(named: "WH-1000XM5", simulatedAddress: first, galleryModel: .whXM5)
+        route.simulateRoute(output)
+        await drainTasks()
+
+        XCTAssertEqual(ldac.simulatedRequestedAddress, first)
+        XCTAssertEqual(ldac.simulatedStarts, [first, first])
+        date = date.addingTimeInterval(120)
+        ldac.refreshPreferredCodec()
+        XCTAssertEqual(ldac.simulatedRequestedAddress, first)
+        XCTAssertTrue(ldac.isSessionRunning)
+    }
+
+    func testSleepCountsTowardsExpiryBeforeTheOldRequestCanResume() async throws {
+        var date = Date(timeIntervalSince1970: 1_000)
+        let (ldac, devices, _) = try prepared(now: { date })
+        defer { stop(ldac, devices) }
+        await drainTasks()
+        devices.isSystemSleeping = true
+        ldac.suspend()
+        await drainTasks()
+        XCTAssertEqual(ldac.state, .waitingForDevice)
+        date = date.addingTimeInterval(12 * 60 * 60)
+        devices.isSystemSleeping = false
+        await drainTasks()
+
+        XCTAssertEqual(ldac.state, .off)
+        XCTAssertNil(ldac.simulatedRequestedAddress)
+        XCTAssertEqual(ldac.simulatedStarts, [first])
+    }
+
+    func testDeadlineTimerExpiresWithoutAnotherDeviceEvent() async throws {
+        let (ldac, devices, _) = try prepared(timeout: 0.02)
+        defer { stop(ldac, devices) }
+        await drainTasks()
+        devices.controller(for: first)?.simulateControlLoss(deviceConnected: false)
+        ldac.simulateSessionFinished(.init(message: nil, canRetry: true, requiresAttention: false,
+            targetDisconnected: true, waitForReconnect: true))
+        await drainTasks()
+        try await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(ldac.state, .off)
+        XCTAssertNil(ldac.simulatedRequestedAddress)
+    }
+
+    private var output: MacAudioRoute {
+        MacAudioRoute(deviceID: 1, name: nil, uid: first,
+            transport: MacAudioTransport(rawValue: kAudioDeviceTransportTypeBluetooth),
+            outputChannels: 2, nominalSampleRate: 48000)
+    }
+
+    private func device(_ address: String, model: SonyDeviceModel) -> SonyConnectedDevice {
+        SonyConnectedDevice(address: address, name: model.name, model: model)!
+    }
+
+    private func prepared(now: @escaping () -> Date = Date.init, timeout: TimeInterval = 60) throws
+        -> (LDACController, SonyDeviceCoordinator, MacAudioRouteObserver) {
+        let devices = SonyDeviceCoordinator(fallbackController: SonyHeadphonesController(startAutomatically: false, simulated: true)) { device in
+            let headphones = SonyHeadphonesController(startAutomatically: false, simulatedReady: true,
+                pinnedAddress: device.address, advertisedName: device.name)
+            headphones.simulateDeviceConnection(named: device.name, simulatedAddress: device.address, galleryModel: device.model)
+            return headphones
+        }
+        devices.reconcileConnectedDevices([device(first, model: .whXM5)])
+        let route = MacAudioRouteObserver(startAutomatically: false)
+        route.simulateRoute(output)
+        let ldac = LDACController(devices: devices, audioRoute: route, inspectDriver: { _ in .current },
+            preferredConfiguration: { _ in LDACConfiguration() }, localBluetoothAddress: { "02:00:00:00:00:01" },
+            now: now, requestWaitTimeout: timeout)
+        ldac.simulateHelpers()
+        return (ldac, devices, route)
+    }
+
+    private func drainTasks() async {
+        for _ in 0..<100 { await Task.yield() }
+    }
+
+    private func stop(_ ldac: LDACController, _ devices: SonyDeviceCoordinator) {
+        ldac.stop(restoreAudio: false)
+        for headphones in devices.controllers { headphones.simulateControlLoss() }
+    }
+}
+
+@MainActor
 final class LDACConnectionPreferenceTests: XCTestCase {
     func testFinderDefersOwnedRestorationUntilStopIsConfirmed() async throws {
         for phase in [EarbudFindingSession.Phase.connecting, .starting, .ringing, .stopping, .unconfirmed] {

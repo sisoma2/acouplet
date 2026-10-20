@@ -166,6 +166,11 @@ final class Session {
 
 @MainActor
 final class Controller: ObservableObject {
+    let now: () -> Date = Date.init
+    let requestWaitTimeout: TimeInterval = 60
+    var waitingDeadline: Date?
+    var waitingTask: Task<Void, Never>?
+    func refreshPreferredCodec(resetAttempts: Bool = false) {}
     var codecPreferences: [String: Bool] = [:]
     var automaticStartAttempts: [ObjectIdentifier: UInt64] = [:]
     let localBluetoothAddress: () -> String? = { IOBluetoothHostController.default()?.addressAsString() }
@@ -787,7 +792,8 @@ enum LDACControllerCleanupCheck {
             waiting.devices!.controller(for: address)!.isDeviceConnected = true
             block(waiting)
             for _ in 0..<5 { waiting.availabilityChanged() }
-            precondition(waiting.starts.isEmpty && waiting.state == .waitingForDevice,
+            let expectedState: LDACState = name == "missing controller" ? .off : .waitingForDevice
+            precondition(waiting.starts.isEmpty && waiting.state == expectedState,
                          "Automatic LDAC resume bypassed \(name)")
             waiting.stop()
         }
@@ -882,7 +888,7 @@ enum LDACControllerCleanupCheck {
         print("PASS actual finder admission: active finding and unconfirmed Stop block LDAC; manual driver installation is independent of headphones and preserves busy/driver-state checks")
     }
 }
-'''.replace("__METHODS__", "\n".join(method(name) for name in ["canStartDirectly", "synchronizeMicrophoneHandoff", "sampleRateUnavailableReason", "support", "capabilityContext", "recordDiscoveredSupport", "checkSupportAgain", "needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "openDriverInstaller", "setEnabled", "stop", "suspend", "resumeIfReady", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
+'''.replace("__METHODS__", "\n".join(method(name) for name in ["canStartDirectly", "synchronizeMicrophoneHandoff", "sampleRateUnavailableReason", "support", "capabilityContext", "recordDiscoveredSupport", "checkSupportAgain", "needsStopBeforeTermination", "deviceUnavailableReason", "canEnable", "refreshDriverState", "updateDriver", "installDriver", "openDriverInstaller", "setEnabled", "stop", "suspend", "resumeIfReady", "clearWaitingDeadline", "updateWaitingDeadline", "reconcileRequestedDevice", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "stopSession", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode", "restoreConnectionPreference", "finish", "completeStop", "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry"]))
 
 native_types = (pathlib.Path(__file__).resolve().parents[2] / "Sources/LDACNativeSession.swift").read_text()
 fixture = fixture.replace("__TYPES__", native_types[native_types.index("struct LDACFormat:"):native_types.index("enum LDACState:")])

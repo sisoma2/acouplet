@@ -217,6 +217,18 @@ Activation requires a current driver and respects another active music source. M
 its suppression across reconnects; another multipoint source taking ownership
 also suppresses automatic activation until the user explicitly enables LDAC.
 
+Pending playback requests expire after 60 seconds, including time spent asleep.
+Selecting different headphones cancels the previous request immediately and checks
+the newly selected device's automatic profile after cleanup. Acouplet's Disconnect
+and Power Off actions cancel immediately. Physical power-off, returning earbuds to
+their case, and disconnecting through macOS use the reconnect grace period because
+their connection loss cannot reliably be distinguished from a temporary dropout.
+Microphone handoff can wait for a longer call while the same headphones remain
+connected; losing that connection starts the same 60-second deadline. Expiry clears
+only the pending request, leaving the device's automatic profile and Manual Off
+preference intact for future connections. Cancellation reasons appear in the LDAC
+lifecycle log.
+
 A configuration becomes the last successful configuration after 30 seconds of
 active playback. After two failed attempts, Settings offers an explicit restore
 button. A fixed quality choice is never replaced automatically. Music and Video

@@ -319,6 +319,12 @@ final class LDACNativeSession {
 
 @MainActor
 final class Controller: ObservableObject {
+    let now: () -> Date = Date.init
+    let requestWaitTimeout: TimeInterval = 60
+    var waitingDeadline: Date?
+    var waitingTask: Task<Void, Never>?
+    func refreshPreferredCodec(resetAttempts: Bool = false) {}
+    var isSuspendedForMicrophone = false
     var automaticStartAttempts: [ObjectIdentifier: UInt64] = [:]
     let localBluetoothAddress: () -> String? = { IOBluetoothHostController.default()?.addressAsString() }
     func synchronizeMicrophoneHandoff() -> Bool { true }
@@ -1017,7 +1023,7 @@ names = ["canStartDirectly", "needsStopBeforeTermination", "deviceUnavailableRea
          "hasOtherMusicSource", "bindingIsCurrent", "bindingCheck", "musicControlStatus", "prepareControlsForMedia", "waitForControls", "controlsChanged",
          "holdBinding", "recoverBinding", "stopForChange", "sendPendingVolume", "setOutputGain", "fail", "beginRecovery",
          "scheduleRecovery", "endRetryWait", "cancelAutomaticRetry", "stop", "stopSession",
-         "suspend", "resumeIfReady", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode",
+         "suspend", "resumeIfReady", "clearWaitingDeadline", "updateWaitingDeadline", "reconcileRequestedDevice", "startWhenMicrophoneIsIdle", "canResumeOnCurrentOutput", "recordRetryBlocked", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode",
          "restoreConnectionPreference", "finish", "completeStop"]
 fixture = fixture.replace("precondition(", "check(")
 transfer_start = output_source.index("    nonisolated static func canTransferControls(")

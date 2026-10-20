@@ -107,15 +107,6 @@ final class AppEnvironment {
                 devices?.setReconnectAutomatically(enabled, suppressing: address)
             }
             .store(in: &cancellables)
-        devices.$selectedAddress.removeDuplicates()
-            .sink { [weak ldac] address in
-                Task { @MainActor [weak ldac] in
-                    if let target = ldac?.targetAddress, let address, address != target, ldac?.state != .waitingForDevice {
-                        ldac?.stop(reason: "selected headphones changed")
-                    }
-                }
-            }
-            .store(in: &cancellables)
         #else
         settings.$reconnectAutomatically
             .removeDuplicates()

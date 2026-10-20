@@ -319,6 +319,34 @@ final class LDACCallAudioTests: XCTestCase {
         XCTAssertEqual(hardware.input, "headset-input")
     }
 
+    func testLongCallKeepsRequestWhileConnectedButDisconnectExpiresIt() async throws {
+        var date = Date(timeIntervalSince1970: 1_000)
+        let hardware = Hardware()
+        let audio = hardware.audio()
+        let (controller, headphones) = try controller(audio: audio, now: { date })
+        defer { controller.stop(); headphones.simulateControlLoss() }
+        hardware.active = true
+        audio.refresh()
+        await drainTasks()
+        date = date.addingTimeInterval(60 * 60)
+        controller.refreshPreferredCodec()
+        XCTAssertEqual(controller.simulatedRequestedAddress, address)
+        XCTAssertTrue(controller.isSuspendedForMicrophone)
+
+        headphones.simulateControlLoss(deviceConnected: false)
+        await drainTasks()
+        date = date.addingTimeInterval(60)
+        controller.refreshPreferredCodec()
+        XCTAssertEqual(controller.state, .off)
+        XCTAssertNil(controller.simulatedRequestedAddress)
+        XCTAssertFalse(controller.isSuspendedForMicrophone)
+        hardware.active = false
+        hardware.time = 10
+        audio.refresh()
+        await drainTasks()
+        XCTAssertTrue(controller.simulatedStarts?.isEmpty == true)
+    }
+
     func testEnablingLDACDuringACallWaitsWithoutStartingPlayback() async throws {
         let hardware = Hardware()
         let audio = hardware.audio()
@@ -337,10 +365,11 @@ final class LDACCallAudioTests: XCTestCase {
     }
 
     func testSelectingAnotherOutputDuringACallBlocksAutomaticResume() async throws {
+        var date = Date(timeIntervalSince1970: 1_000)
         let hardware = Hardware()
         let audio = hardware.audio()
         let route = MacAudioRouteObserver(startAutomatically: false)
-        let (controller, headphones) = try controller(audio: audio, route: route)
+        let (controller, headphones) = try controller(audio: audio, route: route, now: { date })
         defer { controller.stop(); headphones.simulateControlLoss() }
         hardware.active = true
         audio.refresh()
@@ -357,6 +386,11 @@ final class LDACCallAudioTests: XCTestCase {
         XCTAssertFalse(controller.isSuspendedForMicrophone)
         XCTAssertEqual(controller.state, .waitingForDevice)
         XCTAssertTrue(controller.simulatedStarts?.isEmpty == true)
+        XCTAssertEqual(hardware.output, "usb-output")
+        date = date.addingTimeInterval(60)
+        controller.refreshPreferredCodec()
+        XCTAssertEqual(controller.state, .off)
+        XCTAssertNil(controller.simulatedRequestedAddress)
         XCTAssertEqual(hardware.output, "usb-output")
     }
 
@@ -387,7 +421,8 @@ final class LDACCallAudioTests: XCTestCase {
         for _ in 0..<40 { await Task.yield() }
     }
 
-    private func controller(audio: LDACCallAudio, route: MacAudioRouteObserver? = nil) throws -> (LDACController, SonyHeadphonesController) {
+    private func controller(audio: LDACCallAudio, route: MacAudioRouteObserver? = nil,
+                            now: @escaping () -> Date = Date.init) throws -> (LDACController, SonyHeadphonesController) {
         let coordinator = SonyDeviceCoordinator(fallbackController: SonyHeadphonesController(startAutomatically: false, simulated: true)) { device in
             let controller = SonyHeadphonesController(startAutomatically: false, simulatedReady: true,
                 pinnedAddress: device.address, advertisedName: device.name)
@@ -401,7 +436,7 @@ final class LDACCallAudioTests: XCTestCase {
                                          transport: MacAudioTransport(rawValue: kAudioDeviceTransportTypeBuiltIn),
                                          outputChannels: 2, nominalSampleRate: 48000))
         let controller = LDACController(devices: coordinator, audioRoute: route, inspectDriver: { _ in .current }, callAudio: audio,
-                                        localBluetoothAddress: { "02:00:00:00:00:01" })
+                                        localBluetoothAddress: { "02:00:00:00:00:01" }, now: now)
         controller.simulateHelpers()
         controller.simulateRecoverySession(headphones)
         return (controller, headphones)

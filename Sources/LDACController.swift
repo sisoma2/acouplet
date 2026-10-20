@@ -8,7 +8,12 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class LDACController: ObservableObject {
-    @Published private(set) var state: LDACState = .off { didSet { syncStreamingFlag() } }
+    @Published private(set) var state: LDACState = .off {
+        didSet {
+            syncStreamingFlag()
+            updateWaitingDeadline()
+        }
+    }
     @Published private(set) var targetAddress: String?
     @Published private(set) var isSessionRunning = false
     @Published private(set) var isRecovering = false
@@ -44,10 +49,16 @@ final class LDACController: ObservableObject {
     private var sessionID = UUID()
     private var requestedAddress: String? {
         didSet {
+            if oldValue != requestedAddress { clearWaitingDeadline() }
             callAudio?.monitor(address: requestedAddress)
             if requestedAddress == nil { isSuspendedForMicrophone = false }
+            updateWaitingDeadline()
         }
     }
+    private let now: () -> Date
+    private let requestWaitTimeout: TimeInterval
+    private var waitingDeadline: Date?
+    private var waitingTask: Task<Void, Never>?
     private let callAudio: LDACCallAudio?
     var microphoneHandoffIssue: String? { callAudio?.issue }
     private var requestedConfiguration = LDACConfiguration()
@@ -125,6 +136,8 @@ final class LDACController: ObservableObject {
          isDriverInspectionEnabled: @escaping () -> Bool = { true },
          preferredConfiguration: @escaping (String) -> LDACConfiguration? = { _ in nil },
          localBluetoothAddress: @escaping () -> String? = { IOBluetoothHostController.default()?.addressAsString() },
+         now: @escaping () -> Date = Date.init,
+         requestWaitTimeout: TimeInterval = 60,
          isClassicConnected: @escaping (String) -> Bool = { IOBluetoothDevice(addressString: $0)?.isClassicConnected() == true }) {
         self.bundle = bundle
         self.defaults = defaults
@@ -136,12 +149,23 @@ final class LDACController: ObservableObject {
         codecPreferences = defaults?.dictionary(forKey: "ldac.codecPreferences") as? [String: Bool] ?? [:]
         self.isClassicConnected = isClassicConnected
         self.localBluetoothAddress = localBluetoothAddress
+        self.now = now
+        self.requestWaitTimeout = requestWaitTimeout
         driverState = inspectDriver?(bundle) ?? .unavailable("")
         helpers = LDACNativeSession.Helpers(bundle: bundle)
         self.devices = devices
         self.audioRoute = audioRoute
         devices?.$controllers.sink { [weak self] controllers in
             self?.observeDisconnectionRequests(controllers)
+        }.store(in: &availabilityObservations)
+        devices?.$selectedAddress.removeDuplicates().dropFirst().sink { [weak self] address in
+            Task { @MainActor [weak self] in
+                guard let self, let address, self.devices?.selectedAddress == address,
+                      let requested = self.requestedAddress, requested != address else { return }
+                self.recordRecovery("request-cancelled", reason: "selected headphones changed")
+                self.stop(reason: "selected headphones changed")
+                self.refreshPreferredCodec()
+            }
         }.store(in: &availabilityObservations)
         if let saved = defaults?.dictionary(forKey: "ldac.pendingConnectionPreferences") as? [String: String] {
             for (address, value) in saved where SonyBLEIdentity.normalizedAddress(address) == address {
@@ -473,6 +497,7 @@ final class LDACController: ObservableObject {
     }
 
     func refreshPreferredCodec(resetAttempts: Bool = false) {
+        guard reconcileRequestedDevice() else { return }
         switch state {
         case .off:
             if resetAttempts { automaticStartAttempts.removeAll() }
@@ -695,11 +720,17 @@ final class LDACController: ObservableObject {
     /// `fromRetryTimer` is true only for the automatic-retry timer; when it cannot start LDAC it records which
     /// clauses failed (L1), so a silent no-op is visible in the log. Other callers stay silent.
     private func resumeIfReady(fromRetryTimer: Bool = false) {
+        guard reconcileRequestedDevice() else {
+            refreshPreferredCodec()
+            return
+        }
         guard devices?.isSystemSleeping != true else {
             if fromRetryTimer { recordRecovery("retry-blocked", reason: "failed=systemSleeping") }
             return
         }
-        guard synchronizeMicrophoneHandoff() else { return }
+        let microphoneIsIdle = synchronizeMicrophoneHandoff()
+        updateWaitingDeadline()
+        guard microphoneIsIdle else { return }
         reconcileConnectionPreferences()
         for (address, request) in deferredConnectionModes where address != requestedAddress && preferenceRestoreTasks[address] == nil {
             guard let headphones = devices?.controller(for: address), headphones.isDeviceConnected, headphones.isReady, !headphones.isReconnectPaused,
@@ -734,6 +765,53 @@ final class LDACController: ObservableObject {
             return
         }
         start(address)
+    }
+
+    private func clearWaitingDeadline() {
+        waitingTask?.cancel()
+        waitingTask = nil
+        waitingDeadline = nil
+    }
+
+    private func updateWaitingDeadline() {
+        guard state == .waitingForDevice, let address = requestedAddress else {
+            clearWaitingDeadline()
+            return
+        }
+        if isSuspendedForMicrophone, devices?.isSystemSleeping != true,
+           devices?.controller(for: address)?.isDeviceConnected == true {
+            clearWaitingDeadline()
+            return
+        }
+        guard waitingDeadline == nil else { return }
+        let deadline = now().addingTimeInterval(requestWaitTimeout)
+        waitingDeadline = deadline
+        waitingTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(deadline.timeIntervalSince(self?.now() ?? deadline))) }
+            catch { return }
+            guard let self, self.waitingDeadline == deadline else { return }
+            self.resumeIfReady()
+            self.refreshPreferredCodec()
+        }
+    }
+
+    private func reconcileRequestedDevice() -> Bool {
+        guard let address = requestedAddress, let devices else { return true }
+        let headphones = devices.controller(for: address)
+        let reason: String?
+        if headphones == nil || headphones?.isReconnectPaused == true {
+            reason = "headphones disconnected by user or removed"
+        } else if let waitingDeadline, now() >= waitingDeadline {
+            reason = "pending playback request expired"
+        } else { reason = nil }
+        if let reason {
+            recordRecovery("request-cancelled", reason: reason)
+            stop(restoreAudio: !devices.isSystemSleeping && headphones?.isDeviceConnected == true
+                && headphones?.isReconnectPaused != true, reason: reason)
+            return false
+        }
+        updateWaitingDeadline()
+        return true
     }
 
     private func startWhenMicrophoneIsIdle(_ address: String) {
@@ -1946,6 +2024,7 @@ final class LDACController: ObservableObject {
                 }
             }
             self.resumeIfReady()
+            self.refreshPreferredCodec()
             if !self.isSessionRunning { self.completeStop() }
         }
     }
