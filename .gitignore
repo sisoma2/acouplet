@@ -7,6 +7,8 @@ work/
 xcuserdata/
 
 .build/
+.venv/
+.ruff_cache/
 __pycache__/
 dist/
 public-source/

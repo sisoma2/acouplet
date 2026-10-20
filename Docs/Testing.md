@@ -4,6 +4,23 @@
 
 Run shell commands from the repository root.
 
+## Python lint and formatting
+
+Set up the [Python tooling environment](Development.md#python-tooling), then run:
+
+```sh
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+```
+
+These checks report existing lint and formatting findings as well as new ones.
+Use `uv run --locked ruff format .` to apply formatting deliberately. The
+native test runner does not invoke Ruff. To run its checks with the project's
+Python interpreter, use `uv run --locked python Packaging/check-all.py` and
+the same selection flags documented below. Direct `python3` commands remain
+supported for environments without uv, including the isolated GUI-test VM.
+
 ## Tests
 
 ```sh

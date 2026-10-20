@@ -8,7 +8,7 @@ For installation and everyday use, start with the [project README](../README.md)
 
 | Guide | Contents |
 | --- | --- |
-| [Development](Development.md) | Xcode requirements, builds, signed local installation, artwork and build options. |
+| [Development](Development.md) | Python tooling and Ruff, Xcode requirements, builds, signed local installation, artwork and build options. |
 | [Source boundaries](Architecture.md) | Feature state, Settings and menu views, LDAC driver operations and their validation. |
 | [Testing](Testing.md) | Unit tests, offline fixtures, isolated GUI tests, build reuse and logs. |
 | [Headphone controls](HeadphoneControls.md) | Noise-mode recovery, confirmation and audible feedback. |

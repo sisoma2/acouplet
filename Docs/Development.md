@@ -9,6 +9,42 @@ running the commands below.
 
 Run shell commands from the repository root.
 
+## Python tooling
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then
+create the project environment with the locked development dependencies:
+
+```sh
+uv sync --locked
+```
+
+The project uses Python 3.15 for development, selected by `.python-version`.
+uv can download that interpreter when it is unavailable locally. The scripts
+remain compatible with Python 3.9 or later and use only the standard library
+and repository modules. Ruff is a development dependency pinned in
+`pyproject.toml` and `uv.lock`; there is no separate requirements file or Python
+package to build. Keep `.venv/` and `.ruff_cache/` out of version control.
+
+Run tools through the project environment:
+
+```sh
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked python Packaging/check-all.py
+```
+
+Use `uv run --locked ruff format .` to apply formatting. The repository has
+existing lint and formatting findings; adding the environment does not reformat
+the existing scripts. Ruff targets Python 3.9 and excludes build outputs and
+vendored code. Configure editor integrations to use `.venv/bin/ruff` so they
+use the same version as the command line.
+
+Xcode phases, packaging scripts and the isolated GUI-test VM continue to use
+their existing Python interpreters. They do not require uv or Ruff. Python
+checks launched by `Packaging/check-all.py` use that runner's interpreter,
+so invoking it through uv exercises the development environment. See
+[Testing](Testing.md) for focused checks and VM requirements.
+
 ## Build
 
 Fetch the build dependency, then open `Acouplet.xcodeproj`:

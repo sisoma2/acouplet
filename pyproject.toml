@@ -1,0 +1,17 @@
+[project]
+name = "acouplet-tooling"
+version = "0.1.0"
+description = "Development, packaging and diagnostic tooling for Acouplet"
+requires-python = ">=3.9"
+dependencies = []
+
+[dependency-groups]
+dev = ["ruff==0.17.1"]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+required-version = "==0.17.1"
+target-version = "py39"
+extend-exclude = [".build", "Vendor"]
