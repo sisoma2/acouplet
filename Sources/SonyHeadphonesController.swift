@@ -1464,7 +1464,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         equalizer = SonyEqualizer(supportedFunctions: supportedFunctions)
         let tenBandEqualizer = galleryModel.map { [.wfXM6, .whXM6].contains($0) }
             ?? CommandLine.arguments.contains("--ten-band-equalizer")
-        if tenBandEqualizer, galleryModel == nil { deviceName = "Ten-band test device" }
+        if tenBandEqualizer, galleryModel == nil { deviceName = SonyDeviceModel.wfXM6.name }
         let presets: [UInt8] = tenBandEqualizer
             ? [0x00, 0x30, 0x31, 0x32, 0x33, 0xA0, 0xA1, 0xA2]
             : [0x00, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0xA0]
@@ -5730,6 +5730,22 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             self.beginMultipointConfirmation(frame)
             #if DEBUG
             if self.isSimulated, self.simulatesSettingReplies {
+                if frame.type == 0x0C, frame.payload.count == 2 {
+                    if let noise = self.noiseControl, frame.payload[1] == noise.inquiryType {
+                        if frame.payload[0] == 0x62, let available = noise.available {
+                            self.dispatch([0x63, noise.inquiryType, available ? 0 : 1], type: 0x0C)
+                        } else if frame.payload[0] == 0x66, let state = noise.state {
+                            self.dispatch(state.payload, type: 0x0C)
+                        }
+                    } else if frame.payload[1] == 0x02, let legacy = self.legacyControls {
+                        if frame.payload[0] == 0x62, let available = legacy.noiseAvailable {
+                            self.dispatch([0x63, 0x02, available ? 0 : 1], type: 0x0C)
+                        } else if frame.payload[0] == 0x66, let state = legacy.noiseState {
+                            self.dispatch([0x67, 0x02, state.effect, state.noiseType, state.noiseValue,
+                                           state.ambientType, state.ambientID, state.ambientValue], type: 0x0C)
+                        }
+                    }
+                }
                 if frame.type == 0x0E, self.voiceGuidanceReads[frame.payload]?.transmitted == true {
                     let inquiry = frame.payload[1]
                     switch frame.payload[0] {

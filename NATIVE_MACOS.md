@@ -165,6 +165,9 @@ explicitly requested gallery screenshots and contrast evidence are always kept,
 including on success.
 GUI fixtures place titled windows on the primary display, keeping captures and
 controls reachable when the desktop has multiple displays with different scales.
+Tests force visible native scrollbars and page through their tracks to reveal
+offscreen Settings controls. Captures crop the containing display using its own
+scale, including menu bar items and HUDs on secondary displays.
 Noise-control contrast checks crop each button from the panel screenshot already
 captured for that state, preserving all mode, appearance, selection and readability checks
 without requesting separate screenshots for each button.

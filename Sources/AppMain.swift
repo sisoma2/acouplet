@@ -294,14 +294,14 @@ struct UITestHostView: View {
                         let timer = Timer(timeInterval: 4, repeats: false) { _ in
                             MainActor.assumeIsolated {
                                 for _ in 0..<5 { headphones.simulateAutomaticRefresh() }
-                                headphones.simulateProtocolData(SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: [0x15, 0x02, 0x10]))
+                                headphones.simulateProtocolMessage([0x15, 0x02, 0x10])
                             }
                         }
                         RunLoop.main.add(timer, forMode: .common)
                     }
                     ForEach([("Publish SBC", UInt8(0x01)), ("Publish LDAC", UInt8(0x10))], id: \.0) { title, codec in
                         Button(title) {
-                            headphones.simulateProtocolData(SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: [0x15, 0x02, codec]))
+                            headphones.simulateProtocolMessage([0x15, 0x02, codec])
                         }
                     }
                 }

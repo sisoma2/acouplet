@@ -287,16 +287,16 @@ final class SettingsStore: ObservableObject {
         defaults.set(true, forKey: migrationKey)
     }
 
-    func selectEqualizerDevice(address: String, defaultDraft: EqualizerSettings?) {
+    func selectEqualizerDevice(address: String, defaultDraft: EqualizerSettings?, provisionalDraft: EqualizerSettings? = nil) {
         let address = address.replacingOccurrences(of: "-", with: ":").uppercased()
         guard !address.isEmpty,
-              equalizerDeviceAddress != address || (equalizerDraftsByDevice[address] == nil && defaultDraft != nil) else { return }
+              equalizerDeviceAddress != address || (equalizerDraftsByDevice[address] == nil && (defaultDraft != nil || provisionalDraft != nil)) else { return }
         let legacyDraft = equalizerDeviceAddress == nil && equalizerDraftsByDevice.isEmpty
             ? Self.decode(EqualizerSettings.self, from: defaults.data(forKey: Keys.customEqualizerDraft)) : nil
         let draft = equalizerDraftsByDevice[address] ?? legacyDraft ?? defaultDraft
         equalizerDeviceAddress = address
         isLoadingEqualizerDraft = draft == nil
-        customEqualizerDraft = draft ?? .flat
+        customEqualizerDraft = draft ?? provisionalDraft ?? .flat
         isLoadingEqualizerDraft = false
     }
 

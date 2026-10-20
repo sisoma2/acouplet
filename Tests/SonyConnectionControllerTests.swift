@@ -911,18 +911,22 @@ final class SonyConnectionControllerTests: XCTestCase {
                 device.service = ServiceDiscoveryRecord()
                 device.openStatus = failure == "immediate" ? kIOReturnNotOpen : kIOReturnSuccess
                 device.channel = oldChannel
+                let queried = expectation(description: "Fresh service query started")
+                device.onDiscovery = { queried.fulfill() }
                 controller.simulateSonyLink(to: device)
                 if failure == "callback" { controller.classicChannelOpenComplete(oldChannel, status: kIOReturnNotOpen) }
                 if failure == "timeout" { controller.simulateHandshakeTimeout() }
-                for _ in 0..<10 { await Task.yield() }
+                await fulfillment(of: [queried], timeout: 2)
                 XCTAssertEqual(device.discoveryCallbacks.count, 1, failure)
                 guard !device.discoveryCallbacks.isEmpty else { continue }
                 await fulfillment(of: [oldChannel.closeFinished], timeout: 2)
                 device.service = ServiceDiscoveryRecord(channelID: 9)
                 device.openStatus = freshOpenSucceeds ? kIOReturnSuccess : kIOReturnNotOpen
                 device.channel = nil
+                let opened = expectation(description: "Fresh service channel opened")
+                device.onOpen = { opened.fulfill() }
                 device.complete()
-                for _ in 0..<10 { await Task.yield() }
+                await fulfillment(of: [opened], timeout: 2)
                 XCTAssertEqual(device.openedChannels, [7, 9], failure)
                 XCTAssertEqual(device.discoveryCallbacks.count, 1, failure)
                 XCTAssertEqual(controller.linkState, freshOpenSucceeds ? .opening : .controlBusy, failure)
@@ -2886,6 +2890,7 @@ private final class ServiceDiscoveryDevice: NSObject, SonyBluetoothDevice, @unch
     /// When set, only this service UUID resolves, to model devices that publish just one Sony service.
     var serviceUUID: Data?
     var onOpen: (() -> Void)?
+    var onDiscovery: (() -> Void)?
 
     func isClassicConnected() -> Bool { connected }
     func isPaired() -> Bool { true }
@@ -2913,6 +2918,7 @@ private final class ServiceDiscoveryDevice: NSObject, SonyBluetoothDevice, @unch
 
     func performSonySDPQuery(_ target: any SonyServiceDiscoveryDelegate) -> IOReturn {
         discoveryCallbacks.append(target)
+        onDiscovery?()
         return discoveryStartStatus
     }
 

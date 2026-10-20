@@ -637,6 +637,30 @@ final class SettingsStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testEnvironmentUsesAdvertisedEqualizerLayoutBeforeFirstCurve() throws {
+        let suiteName = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        controller.simulateDeviceConnection(named: "WF-1000XM6", galleryModel: .wfXM6)
+        defer { controller.simulateControlLoss() }
+        let environment = AppEnvironment(settings: SettingsStore(defaults: defaults), headphones: controller,
+                                         audioRoute: MacAudioRouteObserver(startAutomatically: false))
+        let provisional = try XCTUnwrap(controller.equalizer.flatSettings)
+        XCTAssertEqual(provisional.layout, SonyEqualizerBand.tenBand)
+        XCTAssertEqual(provisional.levelSteps, 13)
+        XCTAssertNil(controller.equalizer.settings)
+        XCTAssertEqual(environment.settings.customEqualizerDraft, provisional)
+        XCTAssertNil(defaults.data(forKey: "preferences.equalizerDraftsByDevice"))
+        var received = provisional
+        received.values = Array(repeating: 2, count: 10)
+        let payload = try XCTUnwrap(controller.equalizer.settingsPayload(received))
+        controller.simulateProtocolMessage([0x59] + payload.dropFirst())
+        XCTAssertEqual(controller.equalizer.settings, received)
+        XCTAssertEqual(environment.settings.customEqualizerDraft, received)
+    }
+
+    @MainActor
     func testMultipointSourcesWithTheSameNameRemainDistinguishable() {
         let first = SonyMultipointDevice(address: "02:00:00:00:00:01", connectionID: 1, classOfDevice: 0, name: "MacBook Pro")
         let second = SonyMultipointDevice(address: "02:00:00:00:00:02", connectionID: 2, classOfDevice: 0, name: "macbook pro")

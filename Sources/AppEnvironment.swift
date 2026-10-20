@@ -129,10 +129,10 @@ final class AppEnvironment {
                 settings?.selectLDACDevice(address: address)
                 #endif
                 self?.equalizerObservation = controller.$equalizer
-                    .map(\.settings)
                     .removeDuplicates()
-                    .sink { [weak settings] draft in
-                        settings?.selectEqualizerDevice(address: address, defaultDraft: draft)
+                    .sink { [weak settings] equalizer in
+                        settings?.selectEqualizerDevice(address: address, defaultDraft: equalizer.settings,
+                                                       provisionalDraft: equalizer.flatSettings)
                     }
             }
             .store(in: &cancellables)

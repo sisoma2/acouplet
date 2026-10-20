@@ -6,6 +6,22 @@ import XCTest
 @testable import Acouplet
 
 final class SonyProtocolTests: XCTestCase {
+    @MainActor
+    func testSimulatedReadyNoiseRefreshReturnsCurrentState() throws {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulatedReady: true)
+        defer { controller.simulateControlLoss() }
+        let inquiry = try XCTUnwrap(controller.noiseControl?.inquiryType)
+        let state = controller.noiseControl?.state
+        controller.refreshNoiseControl()
+        XCTAssertNil(controller.simulatedNoiseReadTimeoutID([0x62, inquiry]))
+        XCTAssertNil(controller.simulatedNoiseReadTimeoutID([0x66, inquiry]))
+        XCTAssertEqual(controller.noiseControl?.state, state)
+        controller.simulateNoiseReadTimeout([0x62, inquiry])
+        controller.simulateNoiseReadTimeout([0x66, inquiry])
+        XCTAssertTrue(controller.isReady)
+        XCTAssertTrue(controller.canChangeNoiseControl)
+    }
+
     #if ACOUPLET_NO_SONY_ARTWORK
     private let expectsProductArtwork = false
     #else
