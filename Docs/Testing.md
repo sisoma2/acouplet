@@ -54,6 +54,11 @@ cannot leave the entire run waiting indefinitely. GUI galleries retain their
 normal execution allowance. LDAC recovery fixtures inject the local Bluetooth
 address instead of querying the real host controller.
 
+The inventory-notification callback test sends an Objective-C device fixture
+through the real callback selectors from a background queue. Its address getter
+uses stored data, so the test exercises the main-actor hop without creating an
+`IOBluetoothDevice` or contacting the system Bluetooth service.
+
 The native HUD, LDAC helper compilers and standalone Swift checks also reuse
 unchanged build outputs. Reuse checks source and header contents, compiler
 arguments, toolchain, SDK and build settings. Missing or changed outputs are

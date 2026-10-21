@@ -244,9 +244,10 @@ fails at release creation.
 
 The workflow runs three jobs in sequence: **Tests**, **Build Release** and
 **Publish GitHub Release**. The test job runs the unit and offline fixture suite
-and uploads `Acouplet-test-results-RUN_ID`, including its summary and
-individual check logs, even when tests fail. A failed test job prevents the build
-and publishing jobs from running. Rerunning tests replaces that run's
+and uploads `Acouplet-test-results-RUN_ID`, including its summary,
+individual check logs and the XCTest `.xcresult` bundle, even when tests fail.
+A failed test job prevents the build and publishing jobs from running.
+Rerunning tests replaces that run's
 test-results artifact. Test logs remain in that separate Actions artifact;
 the build job does not download them or include them in the release evidence.
 

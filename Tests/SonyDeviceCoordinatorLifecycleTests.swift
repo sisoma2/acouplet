@@ -403,15 +403,14 @@ final class SonyDeviceCoordinatorLifecycleTests: XCTestCase {
         devices.reconcileDiscoveredDevices([earbuds], connectedAddresses: [earbuds.address])
         let controller = try XCTUnwrap(devices.controller(for: earbuds.address))
         devices.cachedBluetoothAuthorization = .denied
-        let device = try XCTUnwrap(IOBluetoothDevice(addressString: earbuds.address))
+        let device = InventoryNotificationDevice(address: earbuds.address)
         let queue = DispatchQueue(label: "test.iobluetooth.coordinatorQueue")
-        nonisolated(unsafe) let unsafeDevice = device
         nonisolated(unsafe) let unsafeDevices = devices
         for _ in 0..<2 {
             let finished = expectation(description: "callback returned")
             queue.async {
-                _ = unsafeDevices.perform(#selector(SonyDeviceCoordinator.bluetoothDeviceConnected(_:device:)), with: nil, with: unsafeDevice)
-                _ = unsafeDevices.perform(#selector(SonyDeviceCoordinator.bluetoothDeviceDisconnected(_:device:)), with: nil, with: unsafeDevice)
+                _ = unsafeDevices.perform(#selector(SonyDeviceCoordinator.bluetoothDeviceConnected(_:device:)), with: nil, with: device)
+                _ = unsafeDevices.perform(#selector(SonyDeviceCoordinator.bluetoothDeviceDisconnected(_:device:)), with: nil, with: device)
                 finished.fulfill()
             }
             await fulfillment(of: [finished], timeout: 5)
@@ -436,5 +435,13 @@ final class SonyDeviceCoordinatorLifecycleTests: XCTestCase {
 
     private var headphones: SonyConnectedDevice {
         SonyConnectedDevice(address: "02:00:00:00:00:02", name: "WH-1000XM5", model: .whXM5)!
+    }
+}
+
+private final class InventoryNotificationDevice: NSObject, @unchecked Sendable {
+    @objc let addressString: String
+
+    init(address: String) {
+        addressString = address
     }
 }

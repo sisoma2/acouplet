@@ -52,7 +52,9 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: Acouplet-test-results-${{ github.run_id }}
-          path: .build/check-all/Logs/
+          path: |
+            .build/check-all/Logs/
+            .build/check-all/Results/
           overwrite: true
           include-hidden-files: true
           if-no-files-found: ignore
