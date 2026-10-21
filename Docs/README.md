@@ -9,7 +9,7 @@ For installation and everyday use, start with the [project README](../README.md)
 | Guide | Contents |
 | --- | --- |
 | [Development](Development.md) | Python tooling and Ruff, Xcode requirements, builds, signed local installation, artwork and build options. |
-| [Release automation](Releasing.md) | Private certificate setup, LDAC-enabled Release DMGs and GitHub Actions artifacts without Apple membership. |
+| [Release automation](Releasing.md) | Private certificate setup, LDAC-enabled DMGs published to GitHub Releases and Actions diagnostics without Apple membership. |
 | [Source boundaries](Architecture.md) | Feature state, Settings and menu views, normal app startup, legacy service migration and LDAC driver operations. |
 | [Testing](Testing.md) | Unit tests, offline fixtures, isolated GUI tests, build reuse and logs. |
 | [Headphone controls](HeadphoneControls.md) | Noise-mode recovery, confirmation and audible feedback. |

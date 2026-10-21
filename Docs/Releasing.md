@@ -3,10 +3,10 @@
 # Release builds with GitHub Actions
 
 The [Release workflow](../.github/workflows/release.yml) generates a DMG with LDAC
-support using your own code-signing certificate. It requires no Apple Developer
-membership and performs no Apple notarization. The app, driver and helpers are
-signed with one private identity; the DMG and embedded installer packages remain
-unsigned.
+support using your own code-signing certificate and publishes it in a GitHub
+Release. It requires no Apple Developer membership and performs no Apple
+notarization. The app, driver and helpers are signed with one private identity;
+the DMG and embedded installer packages remain unsigned.
 
 The app and driver recognize the exact certificate fingerprint. This preserves
 an identity across builds without accepting other certificates or ad-hoc apps.
@@ -48,22 +48,28 @@ overwrite existing files, and `.build/` is ignored by Git.
 Under **Settings > Actions > General**, the workflow supports allowing repository
 owner actions plus selected external actions, with **Allow actions created by
 GitHub** and **Require actions to be pinned to a full-length commit SHA** enabled.
-It uses only `actions/checkout` and `actions/upload-artifact`, so Marketplace
-verified creators and additional allowed-action patterns are unnecessary.
+It uses only `actions/checkout`, `actions/upload-artifact` and
+`actions/download-artifact`, so Marketplace verified creators and additional
+allowed-action patterns are unnecessary.
 
-All three action references are pinned to full commit SHAs resolved from the
+All action references are pinned to full commit SHAs resolved from the
 official repositories' `v6` tags:
 
 | Action | Pinned commit |
 | --- | --- |
 | `actions/checkout` | `d23441a48e516b6c34aea4fa41551a30e30af803` |
 | `actions/upload-artifact` | `b7c566a772e6b6bfb58ed0dc250532a479d7789f` |
+| `actions/download-artifact` | `018cc2cf5baa6db3ef3c5f8a56943fffe632ef53` |
 
 When updating an action, verify the release's commit in its official repository,
 replace every reference to that action with the full 40-character commit SHA,
 and update this table. Keep the repository's SHA requirement enabled.
-The workflow grants `GITHUB_TOKEN` only `contents: read` and disables checkout
-credential persistence.
+The test and build jobs grant `GITHUB_TOKEN` only `contents: read` and disable
+checkout credential persistence. A separate publishing job grants
+`contents: write` to create the release and its tag using the
+[GitHub CLI](https://cli.github.com/manual/gh_release_create) and the automatic
+`GITHUB_TOKEN`. It downloads the build artifact without checking out or running
+repository code and has no signing secrets. No personal access token is needed.
 
 Under **Settings > Secrets and variables > Actions**, add these repository
 secrets:
@@ -85,11 +91,11 @@ certificate that does not match it.
 
 The workflow uses GitHub's
 [Xcode 27 runner](https://github.blog/changelog/2026-10-15-xcode-27-runner-image-generally-available/).
-It tests the source before importing the private identity, then creates a
-password-protected temporary keychain and trusts the certificate for code signing
-on that disposable runner. Cleanup removes the trust entry, keychain and
-credential files. Users installing the app do not need your private key or a
-system-wide trust entry for your certificate.
+The test and build jobs run on separate disposable runners. The test job has no
+signing secrets. After tests pass, the build job creates a password-protected
+temporary keychain and trusts the certificate for code signing. Cleanup removes
+the trust entry, keychain and credential files. Users installing the app do not
+need your private key or a system-wide trust entry for your certificate.
 
 ## Generate and download a Release
 
@@ -103,7 +109,13 @@ Open **Actions > Release > Run workflow**, select the branch to build, and enter
 | `build_number` | Positive integer greater than every previously distributed build number. |
 
 Build numbers are explicit because a fresh runner cannot read the local build
-counter or an installed app. Use a new number for each new build.
+counter or an installed app. Use a new number for each new build and a new
+version for each published release.
+
+The publishing job creates the tag `vVERSION` at the exact commit built by the
+run and publishes `Acouplet VERSION` as the latest release. An existing tag is
+accepted only when it resolves to that same commit. Existing releases are not
+overwritten; rerunning an already published version fails at release creation.
 
 To build a tag with the GitHub CLI, provide it with `--ref`:
 
@@ -111,24 +123,35 @@ To build a tag with the GitHub CLI, provide it with `--ref`:
 gh workflow run release.yml --ref YOUR_TAG -f version=0.31.0 -f build_number=123
 ```
 
-The workflow runs the unit and offline fixture suite, builds a Release with
-`Packaging/package.sh --local`, and exercises the driver's real certificate
-checks with signed test processes. It verifies that the expected signer is
-accepted and that an unrelated app identifier, an ad-hoc signature and a
+The workflow runs three jobs in sequence: **Tests**, **Build Release** and
+**Publish GitHub Release**. The test job runs the unit and offline fixture suite
+and uploads `Acouplet-test-results-RUN_ID`, including its summary and
+individual check logs, even when tests fail. A failed test job prevents the build
+and publishing jobs from running. Test results use a stable name within each
+workflow run so rerunning a failed build can download the earlier passing
+results. Rerunning tests replaces that run's test-results artifact.
+
+The build job downloads the passing test results for the release evidence,
+builds a Release with `Packaging/package.sh --local`, and exercises the driver's
+real certificate checks with signed test processes. It verifies that the expected
+signer is accepted and that an unrelated app identifier, an ad-hoc signature and a
 certificate outside the configured pin are rejected. It then creates and
 verifies a compressed DMG without Finder automation. It clears extended
 attributes from the app inside a writable image before compression, then verifies
 the final mounted app's certificate and executable. This prevents Finder metadata
 introduced during image creation from invalidating the strict signature check.
 
-A successful run uploads the `Acouplet-VERSION-BUILD` artifact containing:
+A successful build uploads the `Acouplet-VERSION-BUILD` Actions artifact. The
+publishing job downloads it, rechecks the DMG checksum and creates a GitHub
+Release with these downloadable assets:
 
 - `Acouplet-VERSION.dmg`, containing Acouplet and a shortcut to Applications.
 - `SHA256SUMS.txt`, a checksum using the DMG's downloadable filename.
 - `Acouplet-VERSION-evidence.tar.gz`, the build receipt, test and build logs,
   and debugging symbols.
 
-Download and extract the artifact, then verify the DMG from that directory:
+Open the repository's **Releases** page and download the DMG and `SHA256SUMS.txt`
+into the same directory, then verify the DMG there:
 
 ```sh
 shasum -a 256 -c SHA256SUMS.txt
@@ -159,9 +182,11 @@ identity change. Permission continuity for private certificates depends on macOS
 verify it on the versions you distribute to.
 
 These builds use the development distribution, which disables the production
-Sparkle update feed. The workflow does not create a GitHub Release or publish an
-update feed. Release artifacts are retained for 30 days; separate diagnostics
-are retained for 14 days. Archive release files elsewhere before they expire.
+Sparkle update feed. Publishing a GitHub Release does not publish a Sparkle
+update feed. Release assets remain available beyond the Actions artifact
+retention periods. The build artifact is retained for 30 days; test results and
+release diagnostics remain separate Actions artifacts and are retained for 14
+days.
 
 ## Local builds and validation
 

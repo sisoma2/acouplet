@@ -20,7 +20,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  tests:
+    name: Tests
+    runs-on: xcode-27
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      ACOUPLET_MARKETING_VERSION: ${{ inputs.version }}
+      ACOUPLET_BUILD_NUMBER: ${{ inputs.build_number }}
+      CODE_SIGN_IDENTITY: '-'
+      DEVELOPMENT_TEAM: ''
+      ACOUPLET_INSTALLER_SIGNING_IDENTITY: ''
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: |
+          echo "DEVELOPER_DIR=$(/usr/bin/xcode-select -p)" >> "$GITHUB_ENV"
+          /usr/bin/xcodebuild -version
+          /usr/bin/xcrun --sdk macosx --show-sdk-version
+
+      - name: Run tests
+        run: |
+          Packaging/fetch-sparkle.sh
+          mkdir -p .build/check-all/Logs
+          if ! /usr/bin/python3 Packaging/check-all.py > .build/check-all/Logs/checks.log 2>&1; then
+            tail -n 60 .build/check-all/Logs/checks.log
+            exit 1
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: Acouplet-test-results-${{ github.run_id }}
+          path: .build/check-all/Logs/
+          overwrite: true
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
   release:
+    name: Build Release
+    needs: tests
     runs-on: xcode-27
     timeout-minutes: 90
     defaults:
@@ -60,14 +107,11 @@ jobs:
           /usr/bin/xcodebuild -version
           /usr/bin/xcrun --sdk macosx --show-sdk-version
 
-      - name: Run tests
-        run: |
-          Packaging/fetch-sparkle.sh
-          mkdir -p .build/release
-          if ! /usr/bin/python3 Packaging/check-all.py > .build/release/checks.log 2>&1; then
-            tail -n 60 .build/release/checks.log
-            exit 1
-          fi
+      - name: Download passing test results
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: Acouplet-test-results-${{ github.run_id }}
+          path: .build/release/test-results
 
       - name: Import private signing certificate
         env:
@@ -143,7 +187,7 @@ jobs:
           evidence="$PWD/.build/release/evidence"
           mkdir -p "$evidence"
           /bin/cp '.build/local-update/Acouplet/Local Build Receipt.txt' "$evidence/Build Receipt.txt"
-          /bin/cp .build/release/checks.log .build/package-build.log "$evidence/"
+          /bin/cp .build/release/test-results/checks.log .build/package-build.log "$evidence/"
           /usr/bin/ditto .build/Build/Products/Release/Acouplet.app.dSYM "$evidence/Acouplet.app.dSYM"
           /usr/bin/ditto '.build/Build/Products/Release/Acouplet Battery Publisher.dSYM' \
             "$evidence/Acouplet Battery Publisher.dSYM"
@@ -184,9 +228,74 @@ jobs:
           name: Acouplet-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .build/package-build.log
-            .build/release/checks.log
             .build/local-update/Acouplet/Local Build Receipt.txt
-            .build/check-all/Logs/
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      ACOUPLET_MARKETING_VERSION: ${{ inputs.version }}
+      ACOUPLET_BUILD_NUMBER: ${{ inputs.build_number }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download verified Release files
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: Acouplet-${{ inputs.version }}-${{ inputs.build_number }}
+          path: dist
+
+      - name: Verify downloaded DMG checksum
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS.txt
+
+      - name: Publish Release with DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$ACOUPLET_MARKETING_VERSION"
+          existing_tag="$(gh api --paginate "repos/$GH_REPO/git/matching-refs/tags/$tag" \
+            --jq ".[] | select(.ref == \"refs/tags/$tag\") | .ref")"
+          if [[ -n "$existing_tag" ]]; then
+            tag_commit="$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha)"
+            if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+              echo "::error::Tag $tag does not point to the commit built by this run."
+              exit 1
+            fi
+          fi
+          notes="$RUNNER_TEMP/acouplet-release-notes.md"
+          cat > "$notes" <<EOF
+          Acouplet $ACOUPLET_MARKETING_VERSION (build $ACOUPLET_BUILD_NUMBER).
+
+          Download Acouplet-$ACOUPLET_MARKETING_VERSION.dmg and SHA256SUMS.txt, then verify with:
+
+          ~~~sh
+          shasum -a 256 -c SHA256SUMS.txt
+          ~~~
+
+          The app includes experimental LDAC support and is signed with the project's private certificate. The DMG is unsigned and the app is not notarized.
+
+          The evidence archive contains the build receipt, test and build logs, and debugging symbols.
+
+          Source commit: $GITHUB_SHA
+          Build run: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$GITHUB_RUN_ID
+          EOF
+          release_url="$(gh release create "$tag" \
+            "dist/Acouplet-$ACOUPLET_MARKETING_VERSION.dmg" \
+            dist/SHA256SUMS.txt \
+            "dist/Acouplet-$ACOUPLET_MARKETING_VERSION-evidence.tar.gz" \
+            --repo "$GH_REPO" \
+            --target "$GITHUB_SHA" \
+            --title "Acouplet $ACOUPLET_MARKETING_VERSION" \
+            --notes-file "$notes" \
+            --latest)"
+          printf 'Published Release: %s\n' "$release_url" >> "$GITHUB_STEP_SUMMARY"
