@@ -7,6 +7,9 @@ work/
 xcuserdata/
 
 .build/
+!.vscode/
+.vscode/*
+!.vscode/settings.json
 .venv/
 .ruff_cache/
 __pycache__/

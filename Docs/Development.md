@@ -9,6 +9,22 @@ running the commands below.
 
 Run shell commands from the repository root.
 
+## VS Code
+
+The shared [workspace settings](../.vscode/settings.json) exclude `.build/` from
+the Explorer, searches and recursive file watching. Other files in `.vscode/`
+remain ignored. Packaging artifacts in `.build/` include `Applications` links
+to `/Applications`, so browsing through them can open installed application
+files, including VS Code's own extension manifests. Keep those generated files
+closed during normal development.
+Exclusions do not disable validation for files that are already open or stop
+extensions that scan files independently.
+
+After changing these settings, close tabs opened through `.build/` and run
+`Developer: Reload Window` from the Command Palette. JSON problems in installed
+extension manifests are not Acouplet source errors; do not edit those manifests
+to resolve them.
+
 ## Python tooling
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then
