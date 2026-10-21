@@ -18,16 +18,59 @@ driver must be updated, and the Mac must restart before loaded revision 8 can
 be confirmed. The revision identifies driver behavior; verify the certificate
 fingerprint separately to identify a private build.
 
-## Create a signing identity once
+## Choose the signing identity
+
+Reuse the same Acouplet private release certificate and private key for local
+and GitHub builds. The identity belongs to the app's release lineage, rather
+than to a particular machine or runner. A new certificate has a different
+fingerprint even if its name is identical, and requires the LDAC
+[identity-change procedure](#updates-and-signing-identity-changes). Create a new
+identity only for an initial setup or an intentional signing-key rotation.
+
+The development Mac checked on 2026-10-21 has its existing identity in
+`.build/private-hardware-test/identity/`. Its public certificate fingerprint is
+`7466B0F0B564832D0ACA341A99C028B186F36E5B`, matching the pins in both the installed
+app and LDAC driver. To reuse those files, select:
+
+```sh
+acouplet_identity_dir=.build/private-hardware-test/identity
+```
+
+This identity's export password is already saved in
+`.build/private-hardware-test/identity/password`. It was verified to open the
+matching `.p12`. The setup block below reads that file automatically when
+present, so there is no password to invent or enter for this existing identity.
+To set only its password secret without displaying the value:
+
+```sh
+(
+  set -e
+  set -o pipefail
+  set +x
+  printf '%s' "$(< .build/private-hardware-test/identity/password)" |
+    gh secret set P12_PASSWORD --repo sisoma2/acouplet
+)
+```
+
+Keep a secure backup of the password-protected `.p12` and its password outside
+`.build/`, which is disposable. The `.p12` must include the private key; the
+public `.pem` or a certificate extracted from the app cannot sign a build. If
+the identity is available only in Keychain Access, export that certificate
+together with its private key as a password-protected `.p12`. Changing the
+export password preserves the signing identity.
+
+### Create a new identity only when needed
 
 Choose a strong password, then run these commands from the repository root in
 zsh. Enter the password at the silent `read` prompt:
 
 ```sh
-read -r -s P12_PASSWORD
+IFS= read -r -s 'P12_PASSWORD?New .p12 password: '
+printf '\n'
 export P12_PASSWORD
 Packaging/create-private-signing-certificate.sh .build/private-signing
 unset P12_PASSWORD
+acouplet_identity_dir=.build/private-signing
 ```
 
 The script creates:
@@ -79,15 +122,77 @@ secrets:
 | `BUILD_CERTIFICATE_BASE64` | Base64 of `Acouplet-private-signing.p12`. |
 | `P12_PASSWORD` | Password chosen when generating that file. |
 
-Copy the encoded identity to the clipboard with:
+Add the repository variable `ACOUPLET_SIGNING_CERTIFICATE_SHA1` with the exact
+fingerprint of that certificate, without colons. The workflow rejects a
+certificate that does not match it. The fingerprint is public and belongs in a
+variable; the `.p12` and its password belong in secrets.
+
+### Create repository secrets with the GitHub CLI
+
+Run these commands from the repository root in zsh. Check the CLI login first:
 
 ```sh
-base64 -i .build/private-signing/Acouplet-private-signing.p12 | pbcopy
+gh auth status --hostname github.com
 ```
 
-Add the repository variable `ACOUPLET_SIGNING_CERTIFICATE_SHA1` with the exact
-fingerprint printed by the script, without colons. The workflow rejects a
-certificate that does not match it.
+If needed, sign in with `gh auth login --hostname github.com` using an account
+that can manage this repository's Actions secrets and variables.
+
+Set `acouplet_identity_dir` using one of the choices above. Then run this block.
+It reads `password` from that directory when present; otherwise, enter the
+existing `.p12` password at the silent prompt. It validates the
+password and reads the fingerprint directly from the `.p12` before writing
+anything to GitHub. It creates or replaces the two repository secrets and the
+repository variable in `sisoma2/acouplet`:
+
+```sh
+(
+  set -e
+  set -o pipefail
+  set +x
+  acouplet_github_repo=sisoma2/acouplet
+  if [[ -f "$acouplet_identity_dir/password" ]]; then
+    P12_PASSWORD="$(< "$acouplet_identity_dir/password")"
+  else
+    IFS= read -r -s 'P12_PASSWORD?Existing .p12 password: '
+    printf '\n'
+  fi
+  [[ -n "$P12_PASSWORD" ]]
+  export P12_PASSWORD
+  acouplet_certificate_sha1="$(
+    /usr/bin/openssl pkcs12 -in "$acouplet_identity_dir/Acouplet-private-signing.p12" \
+      -passin env:P12_PASSWORD -clcerts -nokeys |
+      /usr/bin/openssl x509 -noout -fingerprint -sha1 |
+      /usr/bin/sed 's/.*=//;s/://g'
+  )"
+  [[ "$acouplet_certificate_sha1" =~ ^[A-Fa-f0-9]{40}$ ]]
+  printf 'Certificate SHA1: %s\n' "$acouplet_certificate_sha1"
+  /usr/bin/base64 -i "$acouplet_identity_dir/Acouplet-private-signing.p12" |
+    gh secret set BUILD_CERTIFICATE_BASE64 --repo "$acouplet_github_repo"
+  printf '%s' "$P12_PASSWORD" |
+    gh secret set P12_PASSWORD --repo "$acouplet_github_repo"
+  gh variable set ACOUPLET_SIGNING_CERTIFICATE_SHA1 \
+    --repo "$acouplet_github_repo" --body "$acouplet_certificate_sha1"
+)
+```
+
+The subshell discards its password variable when it exits. Secret values go to
+[`gh secret set`](https://cli.github.com/manual/gh_secret_set) through standard
+input, which the CLI encrypts locally before upload. The public fingerprint goes
+to [`gh variable set`](https://cli.github.com/manual/gh_variable_set). No secret
+value is placed in a command argument or copied to the clipboard.
+
+Verify the stored names and public fingerprint:
+
+```sh
+gh secret list --repo sisoma2/acouplet
+gh variable get ACOUPLET_SIGNING_CERTIFICATE_SHA1 --repo sisoma2/acouplet
+```
+
+The secret list shows names and update times; it does not reveal secret values.
+There is no need to create a `GITHUB_TOKEN`, provisioning-profile secret or
+keychain-password secret for this workflow. GitHub supplies the token and the
+build job generates its temporary keychain password.
 
 The workflow uses GitHub's
 [Xcode 27 runner](https://github.blog/changelog/2026-10-15-xcode-27-runner-image-generally-available/).
