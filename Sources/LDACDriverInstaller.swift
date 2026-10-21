@@ -76,18 +76,19 @@ enum LDACDriverInstaller {
         let bundled = bundle.bundleURL.appendingPathComponent("Contents/Helpers/AcoupletLDACOutput.driver", isDirectory: true)
         let key = cacheKey(bundle: bundle, bundled: bundled)
         if useCache, let hit = cache.value(for: key) { return hit }
-        let team = try signingTeam(bundle: bundle)
         let development = isDevelopment(bundle: bundle)
-        try validateCode(at: bundled, identifier: identifier, team: team, development: development)
+        let signer = try signerRequirement(bundle: bundle)
+        try validateCode(at: bundle.bundleURL, identifier: bundle.bundleIdentifier ?? "", signer: signer, development: development)
+        try validateCode(at: bundled, identifier: identifier, signer: signer, development: development)
         let required = try revision(at: bundled)
         guard required > 0 else { throw failure("The app’s LDAC driver is incomplete. Reinstall the app.") }
         let disk: Disk
         if FileManager.default.fileExists(atPath: installedURL.path) {
-            try validateCode(at: installedURL, identifier: identifier, team: team, development: development)
+            try validateCode(at: installedURL, identifier: identifier, signer: signer, development: development)
             let installed = try revision(at: installedURL)
             disk = installed >= required ? .installed(required: required, installed: installed) : .outdated
         } else if FileManager.default.fileExists(atPath: legacyURL.path) {
-            try validateCode(at: legacyURL, identifier: "local.xm5control.ldac-output-driver", team: team, development: development)
+            try validateCode(at: legacyURL, identifier: "local.xm5control.ldac-output-driver", signer: signer, development: development)
             disk = .outdated
         } else {
             disk = .missing
@@ -157,7 +158,7 @@ enum LDACDriverInstaller {
             throw failure("The app’s identity could not be verified. Reinstall the app.")
         }
         let development = isDevelopment(bundle: bundle)
-        try validateCode(at: bundle.bundleURL, identifier: identifier, team: signingTeam(bundle: bundle),
+        try validateCode(at: bundle.bundleURL, identifier: identifier, signer: signerRequirement(bundle: bundle),
                          development: development, resources: true)
         let installer = URL(fileURLWithPath: "/System/Library/CoreServices/Installer.app", isDirectory: true)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -202,10 +203,32 @@ enum LDACDriverInstaller {
         #endif
     }
 
-    private nonisolated static func validateCode(at url: URL, identifier: String, team: String, development: Bool, resources: Bool = false) throws {
+    nonisolated static func signerRequirement(team: String?, certificate: String?, development: Bool) throws -> String {
+        if let certificate, !certificate.isEmpty {
+            guard development, certificate.range(of: "\\A[A-Fa-f0-9]{40}\\z", options: .regularExpression) != nil else {
+                throw failure("The app’s signing identity could not be verified. Reinstall the app.")
+            }
+            return "certificate leaf = H\"\(certificate)\""
+        }
+        guard let team, team.range(of: "\\A[A-Z0-9]{10}\\z", options: .regularExpression) != nil else {
+            throw failure("The app’s signing identity could not be verified. Reinstall the app.")
+        }
+        return "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\""
+    }
+
+    private nonisolated static func signerRequirement(bundle: Bundle) throws -> String {
+        let certificate = bundle.object(forInfoDictionaryKey: "AcoupletSigningCertificateSHA1") as? String
+        return try signerRequirement(team: certificate?.isEmpty == false ? nil : signingTeam(bundle: bundle),
+                                     certificate: certificate, development: isDevelopment(bundle: bundle))
+    }
+
+    private nonisolated static func validateCode(at url: URL, identifier: String, signer: String, development: Bool, resources: Bool = false) throws {
+        guard identifier.range(of: "\\A[A-Za-z0-9.-]+\\z", options: .regularExpression) != nil else {
+            throw failure("The app’s identity could not be verified. Reinstall the app.")
+        }
         var code: SecStaticCode?
         var requirement: SecRequirement?
-        let identity = "identifier \"\(identifier)\" and anchor apple generic and certificate leaf[subject.OU] = \"\(team)\""
+        let identity = "identifier \"\(identifier)\" and \(signer)"
         let certificate = development ? "" : " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
         let flags = kSecCSStrictValidate | kSecCSCheckAllArchitectures | (resources ? kSecCSCheckNestedCode : kSecCSDoNotValidateResources)
         guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess,

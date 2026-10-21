@@ -30,15 +30,30 @@ if [ -e "$ldac_driver" ] || [ -L "$ldac_driver" ] || [ -e "$ldac_legacy_driver" 
         printf '%s\n' 'A valid installed Acouplet or XM5 Control app is required to verify driver ownership. Nothing was removed.' >&2
         exit 1
     fi
-    /usr/bin/codesign --verify --deep --strict --all-architectures --test-requirement='=anchor apple generic' "$ldac_app"
-    ldac_team="$(/usr/bin/codesign --display --verbose=2 "$ldac_app" 2>&1 | /usr/bin/sed -n 's/^TeamIdentifier=//p')"
-    if [ "${#ldac_team}" != 10 ]; then
-        printf '%s\n' 'The installed app has no valid signing team. Nothing was removed.' >&2
-        exit 1
+    ldac_certificate="$(/usr/libexec/PlistBuddy -c 'Print :AcoupletSigningCertificateSHA1' "$ldac_app/Contents/Info.plist" 2>/dev/null || true)"
+    if [ -n "$ldac_certificate" ]; then
+        if [ "${#ldac_certificate}" != 40 ] || [ "$(/usr/libexec/PlistBuddy -c 'Print :AcoupletDistribution' "$ldac_app/Contents/Info.plist")" != development ]; then
+            printf '%s\n' 'The installed app has an invalid private signing identity. Nothing was removed.' >&2
+            exit 1
+        fi
+        case "$ldac_certificate" in
+            *[!A-Fa-f0-9]*) printf '%s\n' 'The installed app has an invalid private signing identity. Nothing was removed.' >&2; exit 1 ;;
+        esac
+        ldac_requirement="certificate leaf = H\"$ldac_certificate\""
+        /usr/bin/codesign --verify --deep --strict --all-architectures \
+            --test-requirement="=identifier \"$ldac_app_identifier\" and $ldac_requirement" "$ldac_app"
+    else
+        /usr/bin/codesign --verify --deep --strict --all-architectures --test-requirement='=anchor apple generic' "$ldac_app"
+        ldac_team="$(/usr/bin/codesign --display --verbose=2 "$ldac_app" 2>&1 | /usr/bin/sed -n 's/^TeamIdentifier=//p')"
+        if [ "${#ldac_team}" != 10 ]; then
+            printf '%s\n' 'The installed app has no valid signing team. Nothing was removed.' >&2
+            exit 1
+        fi
+        case "$ldac_team" in
+            *[!A-Z0-9]*) printf '%s\n' 'The installed app has no valid signing team. Nothing was removed.' >&2; exit 1 ;;
+        esac
+        ldac_requirement="anchor apple generic and certificate leaf[subject.OU] = \"$ldac_team\""
     fi
-    case "$ldac_team" in
-        *[!A-Z0-9]*) printf '%s\n' 'The installed app has no valid signing team. Nothing was removed.' >&2; exit 1 ;;
-    esac
     for ldac_path in "$ldac_driver" "$ldac_legacy_driver"; do
         case "$ldac_path" in
             */AcoupletLDACOutput.driver) ldac_identifier=dev.baglayan.Acouplet.LDACOutput; ldac_executable=AcoupletVirtualOutput ;;
@@ -54,7 +69,7 @@ if [ -e "$ldac_driver" ] || [ -L "$ldac_driver" ] || [ -e "$ldac_legacy_driver" 
                 exit 1
             fi
             /usr/bin/codesign --verify --deep --strict --all-architectures \
-                --test-requirement="=anchor apple generic and certificate leaf[subject.OU] = \"$ldac_team\"" "$ldac_path"
+                --test-requirement="=identifier \"$ldac_identifier\" and $ldac_requirement" "$ldac_path"
         fi
     done
     for ldac_path in "$ldac_legacy_driver" "$ldac_driver"; do

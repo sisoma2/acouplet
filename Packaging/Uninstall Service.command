@@ -7,6 +7,7 @@ executables=("/Applications/Acouplet.app/Contents/MacOS/Acouplet" "/Applications
 identifiers=(dev.baglayan.Acouplet local.xm5control.native local.xm5control)
 patterns=('^/Applications/Acouplet\.app/Contents/MacOS/Acouplet( |$)' '^/Applications/XM5 Control Native\.app/Contents/MacOS/XM5 Control( |$)' '^/Applications/XM5 Control\.app/Contents/MacOS/XM5 Control( |$)')
 app_team=""
+app_requirement=""
 
 if (( EUID == 0 )); then
     print -u2 "Run this command as your normal logged-in user, without sudo."
@@ -34,14 +35,24 @@ for index in {1..3}; do
             exit 1
         fi
         /usr/bin/codesign --verify --deep --strict "$installed_app"
-        if [[ -z "$app_team" ]]; then
-            app_team="$(/usr/bin/codesign --display --verbose=2 "$installed_app" 2>&1 | /usr/bin/sed -n 's/^TeamIdentifier=//p')"
-            if [[ ! "$app_team" =~ '^[A-Z0-9]{10}$' ]]; then
-                print -u2 "The installed application is not Apple-signed; nothing was removed."
-                exit 1
+        if [[ -z "$app_requirement" ]]; then
+            app_certificate="$(/usr/libexec/PlistBuddy -c 'Print :AcoupletSigningCertificateSHA1' "$installed_app/Contents/Info.plist" 2>/dev/null || true)"
+            if [[ -n "$app_certificate" ]]; then
+                if [[ ! "$app_certificate" =~ '^[A-Fa-f0-9]{40}$' || "$(/usr/libexec/PlistBuddy -c 'Print :AcoupletDistribution' "$installed_app/Contents/Info.plist")" != development ]]; then
+                    print -u2 "The installed application's private signing identity is invalid; nothing was removed."
+                    exit 1
+                fi
+                app_requirement="certificate leaf = H\"$app_certificate\""
+            else
+                app_team="$(/usr/bin/codesign --display --verbose=2 "$installed_app" 2>&1 | /usr/bin/sed -n 's/^TeamIdentifier=//p')"
+                if [[ ! "$app_team" =~ '^[A-Z0-9]{10}$' ]]; then
+                    print -u2 "The installed application is not Apple-signed; nothing was removed."
+                    exit 1
+                fi
+                app_requirement="anchor apple generic and certificate leaf[subject.OU] = \"$app_team\""
             fi
         fi
-        /usr/bin/codesign --verify --deep --strict --test-requirement="=anchor apple generic and identifier \"$identifiers[$index]\" and certificate leaf[subject.OU] = \"$app_team\"" "$installed_app"
+        /usr/bin/codesign --verify --deep --strict --test-requirement="=identifier \"$identifiers[$index]\" and $app_requirement" "$installed_app"
     fi
     if [[ -e "$plist_path" || -L "$plist_path" ]]; then
         if [[ -L "$plist_path" || "$(/usr/libexec/PlistBuddy -c 'Print :Label' "$plist_path")" != "$label" ||

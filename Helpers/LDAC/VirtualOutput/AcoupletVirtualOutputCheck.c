@@ -876,7 +876,7 @@ static void CheckRevision(void) {
     Get(kObjectID_Device, owner, kAcoupletRevision, kAudioObjectPropertyScopeGlobal, sizeof(revision), &revision);
     SInt32 value = 0;
     assert(revision && CFGetTypeID(revision) == CFNumberGetTypeID());
-    assert(CFNumberGetValue(revision, kCFNumberSInt32Type, &value) && value == kAcoupletDriverRevision && value == 7);
+    assert(CFNumberGetValue(revision, kCFNumberSInt32Type, &value) && value == kAcoupletDriverRevision && value == 8);
     assert((*driver)->SetPropertyData(driver, kObjectID_Device, owner, &property, 0, NULL,
         sizeof(revision), &revision) != noErr);
     CFRelease(revision);

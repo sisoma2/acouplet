@@ -3,9 +3,26 @@ set -eu
 
 ldac_driver=/Library/Audio/Plug-Ins/HAL/AcoupletLDACOutput.driver
 ldac_legacy_driver=/Library/Audio/Plug-Ins/HAL/XM5LDACOutput.driver
-ldac_team='@ACOUPLET_LDAC_SIGNING_TEAM_ID@'
+ldac_certificate='@ACOUPLET_LDAC_SIGNING_CERTIFICATE_SHA1@'
+if [ -n "$ldac_certificate" ]; then
+    if [ "${#ldac_certificate}" != 40 ]; then
+        printf '%s\n' 'This package has an invalid certificate fingerprint. Nothing was changed.' >&2
+        exit 1
+    fi
+    case "$ldac_certificate" in
+        *[!A-Fa-f0-9]*) printf '%s\n' 'This package has an invalid certificate fingerprint. Nothing was changed.' >&2; exit 1 ;;
+    esac
+    ldac_requirement="certificate leaf = H\"$ldac_certificate\""
+else
+    ldac_team='@ACOUPLET_LDAC_SIGNING_TEAM_ID@'
+    case "$ldac_team" in
+        [A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]) ;;
+        *) printf '%s\n' 'This package has no valid signing team. Nothing was changed.' >&2; exit 1 ;;
+    esac
+    ldac_requirement="anchor apple generic and certificate leaf[subject.OU] = \"$ldac_team\""
+fi
 if [ ! -d "$ldac_driver" ] ||
-   [ "$(/usr/libexec/PlistBuddy -c 'Print :AcoupletLDACDriverRevision' "$ldac_driver/Contents/Info.plist" 2>/dev/null || true)" != 7 ]; then
+   [ "$(/usr/libexec/PlistBuddy -c 'Print :AcoupletLDACDriverRevision' "$ldac_driver/Contents/Info.plist" 2>/dev/null || true)" != 8 ]; then
     printf '%s\n' 'The installed driver does not match the required Acouplet LDAC output revision. The previous driver was preserved.' >&2
     exit 1
 fi
@@ -24,7 +41,7 @@ for ldac_driver in "$ldac_driver" "$ldac_legacy_driver"; do
             exit 1
         fi
         /usr/bin/codesign --verify --deep --strict --all-architectures \
-            --test-requirement="=anchor apple generic and certificate leaf[subject.OU] = \"$ldac_team\"" "$ldac_driver"
+            --test-requirement="=identifier \"$ldac_identifier\" and $ldac_requirement" "$ldac_driver"
     fi
 done
 ldac_support='/Library/Application Support/Acouplet'

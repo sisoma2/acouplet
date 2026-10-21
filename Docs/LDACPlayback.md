@@ -2,6 +2,71 @@
 
 # LDAC playback
 
+LDAC driver installation and commands require an authenticated app. Apple-signed
+builds use their signing team; private-certificate development builds pin the
+exact certificate across the app, driver and installer scripts. Ad-hoc builds
+remain unsupported. See [Release automation](Releasing.md) for private signing,
+driver installation and migration between signing identities.
+
+Driver revision 8 adds private certificate authentication. Both signing modes
+report revision 8; verify the app and installed driver's certificate fingerprint
+when qualifying a private release. Revision 7 must be replaced, and a loaded
+revision 7 remains restart-required after revision 8 is installed.
+
+## Reload the driver without restarting the Mac
+
+After installing a replacement LDAC driver, restarting the Core Audio service
+can load it without rebooting macOS. This worked on 2026-10-21 with macOS 26.7.1
+(25G241), private app build 193 and driver revision 8. See the
+[hardware test result](ValidationHistory.md#private-certificate-authentication-and-revision-8).
+The installers do not restart Core Audio automatically.
+
+This briefly interrupts all Mac audio and requires administrator authorization.
+Finish any audio call or recording before continuing. Install the matching app
+and driver first; reloading Core Audio does not install or change their signatures.
+
+Quit Acouplet normally:
+
+```sh
+osascript -e 'tell application id "dev.baglayan.Acouplet" to quit'
+```
+
+Wait for the app and its LDAC owner worker to exit. This command should return no
+matching processes before continuing:
+
+```sh
+pgrep -fl '^/Applications/Acouplet\.app/Contents/MacOS/Acouplet( |$)'
+```
+
+Restart only the Core Audio service with the same command used during the test.
+macOS prompts for administrator authorization and relaunches the service:
+
+```sh
+osascript -e 'do shell script "/usr/bin/killall -TERM coreaudiod" with administrator privileges'
+```
+
+Allow a few seconds for the service to return. Confirm that it has a running
+process, then reopen the installed app and inspect the driver state:
+
+```sh
+pgrep -x coreaudiod
+open /Applications/Acouplet.app
+/Applications/Acouplet.app/Contents/MacOS/Acouplet --ldac-driver-state
+```
+
+The state should be `current`. In **LDAC setup and compatibility**, confirm that
+the bundled, installed and loaded revisions all match the expected new revision
+(8 in the verified test). Enable LDAC if needed, play music and confirm it is
+audible. To inspect stream evidence, run from the repository root:
+
+```sh
+python3 Packaging/ldac-session-stats.py
+```
+
+The test streamed at 96 kHz / 990 kbps and recovered after a normal app stop and
+relaunch. If the loaded revision stays old or the state remains `restartRequired`,
+use the normal Mac restart procedure.
+
 ## LDAC capability and presentation timing
 
 The LDAC settings menu offers **Check LDAC support again**. It clears only the

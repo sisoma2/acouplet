@@ -96,7 +96,8 @@ elif name == 'xcrun':
     team = settings.get('DEVELOPMENT_TEAM') or 'ABCDE12345'
     adhoc = settings['CODE_SIGN_IDENTITY'] == '-'
     for bundle in (app, helper, hud, hud_check, *sparkle_codes, *ldac_codes):
-        metadata = {'apple': not adhoc, 'team': 'not set' if adhoc else team,
+        metadata = {'apple': not adhoc and not settings.get('ACOUPLET_SIGNING_CERTIFICATE_SHA1'), 'team': 'not set' if adhoc or settings.get('ACOUPLET_SIGNING_CERTIFICATE_SHA1') else team,
+                    'certificate': settings.get('ACOUPLET_SIGNING_CERTIFICATE_SHA1', ''),
                     'developer_id': settings['CODE_SIGN_IDENTITY'].startswith('Developer ID Application') or bool(re.fullmatch(r'[0-9A-Fa-f]{40}', settings['CODE_SIGN_IDENTITY'])),
                     'runtime': settings.get('ENABLE_HARDENED_RUNTIME') == 'YES',
                     'debuggable': settings.get('CODE_SIGN_INJECT_BASE_ENTITLEMENTS') != 'NO'}
@@ -108,6 +109,7 @@ elif name == 'xcrun':
         if mode == 'missing-team': metadata['team'] = 'not set'
         if mode == 'missing-runtime-app' and bundle == app: metadata['runtime'] = False
         if mode == 'debuggable-app' and bundle == app: metadata['debuggable'] = True
+        if mode == 'private-wrong-helper' and bundle == helper: metadata['certificate'] = 'B' * 40
         metadata['helper'] = bundle == helper
         metadata['build'] = settings['CURRENT_PROJECT_VERSION']
         if mode == 'wrong-build' and bundle == helper: metadata['build'] = '1'
@@ -148,7 +150,7 @@ elif name == 'xcrun':
             distribution = settings['ACOUPLET_DISTRIBUTION'] if mode != 'wrong-distribution' else ('production' if settings['ACOUPLET_DISTRIBUTION'] == 'development' else 'development')
             feed = 'https://baglayan.dev/updates/appcast.xml' if distribution != 'development' or mode == 'development-upstream-feed' else ''
             (bundle / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleVersion': metadata['build'], 'CFBundleExecutable': 'Acouplet',
-                'AcoupletDistribution': distribution,
+                'AcoupletDistribution': distribution, 'AcoupletSigningCertificateSHA1': settings.get('ACOUPLET_SIGNING_CERTIFICATE_SHA1', ''),
                 'SUFeedURL': feed, 'SUPublicEDKey': 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=',
                 'SUVerifyUpdateBeforeExtraction': True, 'SURequireSignedFeed': True, 'SUSignedFeedFailureExpirationInterval': 0,
                 'SUEnableInstallerLauncherService': False, 'SUEnableDownloaderService': False, 'SUEnableSystemProfiling': False,
@@ -199,6 +201,9 @@ elif name == 'codesign':
     else:
         assert args[0] == '--verify', args
         if mode == 'invalid-signature': sys.exit(1)
+        for arg in args:
+            expected = re.search(r'certificate leaf = H"([A-Fa-f0-9]{40})"', arg)
+            if expected and metadata.get('certificate', '') != expected[1]: sys.exit(1)
         if '--test-requirement==anchor apple generic' in args and not metadata['apple']: sys.exit(1)
         if any('field.1.2.840.113635.100.6.1.13' in arg for arg in args) and not (metadata['apple'] and metadata['developer_id']): sys.exit(1)
 elif name == 'otool':
@@ -291,6 +296,11 @@ def run_check(
         (root / "Helpers/LDAC/VirtualOutput").mkdir(parents=True)
         for filename in ("NullAudio.c", "LICENSE.txt"):
             (root / "Helpers/LDAC/VirtualOutput" / filename).write_text(filename)
+        (root / "Configuration").mkdir()
+        shutil.copy2(
+            packaging.parent / "Configuration/Direct.entitlements",
+            root / "Configuration/Direct.entitlements",
+        )
         package = root / ".build/package/Acouplet"
         package.mkdir(parents=True)
         if mode == "stale-controls":
@@ -330,6 +340,7 @@ def run_check(
             not in (
                 "CODE_SIGN_IDENTITY",
                 "ACOUPLET_INSTALLER_SIGNING_IDENTITY",
+                "ACOUPLET_SIGNING_CERTIFICATE_SHA1",
                 "DEVELOPMENT_TEAM",
                 "CODE_SIGN_STYLE",
                 "SONY_PANE_DEVICES",
@@ -396,6 +407,10 @@ def run_check(
             assert "ACOUPLET_MARKETING_VERSION must contain" in result.stderr, (
                 result.stderr
             )
+        elif mode == "private-invalid":
+            assert not builds and "Private signing requires" in result.stderr, (
+                result.stderr
+            )
         elif signing.get("CODE_SIGN_IDENTITY") == "":
             assert not commands, commands
             assert "CODE_SIGN_IDENTITY is empty" in result.stderr, result.stderr
@@ -442,7 +457,24 @@ def run_check(
             ), settings
             assert settings["CODE_SIGN_STYLE"] == "Manual", settings
             assert "-allowProvisioningUpdates" not in builds[0], builds[0]
-            if succeeds and identity != "-":
+            if succeeds and signing.get("ACOUPLET_SIGNING_CERTIFICATE_SHA1"):
+                assert settings["ACOUPLET_SIGNING_CERTIFICATE_SHA1"] == "A" * 40
+                entitlements = plistlib.loads(
+                    Path(settings["ACOUPLET_APP_ENTITLEMENTS_YES"]).read_bytes()
+                )
+                assert (
+                    entitlements["com.apple.security.cs.disable-library-validation"]
+                    is True
+                )
+                assert (
+                    sum("certificate leaf = H" in str(command) for command in commands)
+                    >= 14
+                )
+            if (
+                succeeds
+                and identity != "-"
+                and not signing.get("ACOUPLET_SIGNING_CERTIFICATE_SHA1")
+            ):
                 checks = [
                     command
                     for command in commands
@@ -841,6 +873,48 @@ check("deferred-device-panes-archive", {}, panes=True)
 check("deferred-controls-local", {}, "embedded-controls", False, local=True)
 check("deferred-controls-archive", {}, "embedded-controls", False)
 check("deferred-controls-stale-build-output", {}, "stale-controls", local=True)
+
+
+private_signing = {
+    "CODE_SIGN_IDENTITY": "A" * 40,
+    "ACOUPLET_SIGNING_CERTIFICATE_SHA1": "A" * 40,
+}
+check("private-certificate", private_signing, local=True)
+check(
+    "private-certificate-rejects-other-helper",
+    private_signing,
+    "private-wrong-helper",
+    succeeds=False,
+    local=True,
+)
+check(
+    "private-certificate-rejects-production",
+    private_signing,
+    "private-invalid",
+    succeeds=False,
+)
+for value in ("invalid", "A" * 39, "A" * 39 + '"'):
+    check(
+        "private-certificate-invalid-" + value,
+        {**private_signing, "ACOUPLET_SIGNING_CERTIFICATE_SHA1": value},
+        "private-invalid",
+        succeeds=False,
+        local=True,
+    )
+check(
+    "private-certificate-rejects-adhoc",
+    {**private_signing, "CODE_SIGN_IDENTITY": "-"},
+    "private-invalid",
+    succeeds=False,
+    local=True,
+)
+check(
+    "private-certificate-rejects-team",
+    {**private_signing, "DEVELOPMENT_TEAM": "ABCDE12345"},
+    "private-invalid",
+    succeeds=False,
+    local=True,
+)
 
 
 def main():

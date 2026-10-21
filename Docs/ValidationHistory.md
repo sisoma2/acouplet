@@ -2,6 +2,37 @@
 
 # Validation history
 
+## Private certificate authentication and revision 8
+
+On 2026-10-21, a privately signed Release with driver revision 8 passed the
+real-process driver authentication check: the pinned signer and Acouplet
+identifier were accepted, while an unrelated identifier, ad-hoc signature and
+different certificate pin were rejected. Eight focused driver-installer XCTest
+cases, all 174 driver-installer fixtures, the LDAC build checks and native HAL
+checks passed. The revision checks distinguish an installed revision 7 from an
+updated revision 8 that still needs a restart to load.
+
+The generated DMG also passed a read-only mounted signature check and matched
+the Release executable after clearing image-copy metadata before compression.
+The app's real signature validator accepted its bundled private driver after
+temporary signing trust was removed from the build machine.
+
+The hardware smoke test passed on macOS 26.7.1 (25G241) with private app build
+193 and driver revision 8. The installed app and driver matched the private
+Release binaries and certificate pin. Installation initially left revision 7
+loaded and correctly reported `restartRequired`. After stopping Acouplet and
+explicitly restarting the Core Audio service, revision 8 loaded without rebooting
+the Mac and the app reported `current`. The installers themselves did not restart
+Core Audio. The exact commands are saved in
+[Reload the driver without restarting the Mac](LDACPlayback.md#reload-the-driver-without-restarting-the-mac).
+
+Two live LDAC sessions negotiated 96 kHz / 990 kbps. The first stopped normally;
+relaunching the installed app started the second. The observed sessions reported
+no aborts, PCM failures or skipped frames, and the user confirmed normal audible
+music playback after relaunch. This qualifies the private authentication and
+startup/recovery smoke test; other sample rates, long-duration stability, RF
+conditions and the full hardware matrix remain separate qualification work.
+
 ## Roadmap validation on macOS 26.7.1
 
 The implementation passed 72 focused XCTest cases covering LDAC support, call

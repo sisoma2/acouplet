@@ -83,6 +83,7 @@ def command(args, **kwargs):
                 script.write_text(
                     (packaging / "LDACOutputUninstaller/postinstall")
                     .read_text()
+                    .replace("@ACOUPLET_LDAC_SIGNING_CERTIFICATE_SHA1@", "")
                     .replace(
                         "@ACOUPLET_LDAC_SIGNING_TEAM_ID@",
                         "OTHER67890"
@@ -117,6 +118,7 @@ def command(args, **kwargs):
                 script.write_text(
                     (packaging / "LDACOutputInstaller" / name)
                     .read_text()
+                    .replace("@ACOUPLET_LDAC_SIGNING_CERTIFICATE_SHA1@", "")
                     .replace(
                         "@ACOUPLET_LDAC_SIGNING_TEAM_ID@",
                         "OTHER67890"

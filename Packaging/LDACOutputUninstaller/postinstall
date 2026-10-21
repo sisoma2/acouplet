@@ -5,14 +5,27 @@ if [ "${3:-}" != / ]; then
     printf '%s\n' 'Remove the audio driver from the current startup volume.' >&2
     exit 1
 fi
-ldac_team='@ACOUPLET_LDAC_SIGNING_TEAM_ID@'
-case "$ldac_team" in
-    [A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]) ;;
-    *)
-        printf '%s\n' 'This removal package has no valid signing team. Nothing was removed.' >&2
+ldac_certificate='@ACOUPLET_LDAC_SIGNING_CERTIFICATE_SHA1@'
+if [ -n "$ldac_certificate" ]; then
+    if [ "${#ldac_certificate}" != 40 ]; then
+        printf '%s\n' 'This package has an invalid certificate fingerprint. Nothing was changed.' >&2
         exit 1
-        ;;
-esac
+    fi
+    case "$ldac_certificate" in
+        *[!A-Fa-f0-9]*) printf '%s\n' 'This package has an invalid certificate fingerprint. Nothing was changed.' >&2; exit 1 ;;
+    esac
+    ldac_requirement="certificate leaf = H\"$ldac_certificate\""
+else
+    ldac_team='@ACOUPLET_LDAC_SIGNING_TEAM_ID@'
+    case "$ldac_team" in
+        [A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]) ;;
+        *)
+            printf '%s\n' 'This removal package has no valid signing team. Nothing was removed.' >&2
+            exit 1
+            ;;
+    esac
+    ldac_requirement="anchor apple generic and certificate leaf[subject.OU] = \"$ldac_team\""
+fi
 require_stopped() {
     if /usr/bin/pgrep -f '/(Contents/MacOS/(Acouplet|XM5 Control|AcoupletAudio)|Contents/Helpers/(LDACSignaling|LDACMediaTransport|SonyAudioConnection|LDACLogObserver))( |$)' >/dev/null; then
         printf '%s\n' 'Stop LDAC and quit Acouplet before removing the audio driver. If it keeps reopening, remove its background service first. Nothing was removed.' >&2
@@ -35,7 +48,7 @@ for ldac_path in /Library/Audio/Plug-Ins/HAL/AcoupletLDACOutput.driver /Library/
             exit 1
         fi
         /usr/bin/codesign --verify --deep --strict --all-architectures \
-            --test-requirement="=anchor apple generic and identifier \"$ldac_identifier\" and certificate leaf[subject.OU] = \"$ldac_team\"" "$ldac_path"
+            --test-requirement="=identifier \"$ldac_identifier\" and $ldac_requirement" "$ldac_path"
     fi
 done
 require_stopped

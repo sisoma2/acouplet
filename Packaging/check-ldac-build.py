@@ -118,7 +118,7 @@ with tempfile.TemporaryDirectory(prefix="acouplet-ldac-build-check-") as directo
     driver = app / "Helpers/AcoupletLDACOutput.driver"
     driver_info = plistlib.loads((driver / "Contents/Info.plist").read_bytes())
     assert driver_info["CFBundleIdentifier"] == "dev.baglayan.Acouplet.LDACOutput"
-    assert driver_info["AcoupletLDACDriverRevision"] == 7
+    assert driver_info["AcoupletLDACDriverRevision"] == 8
     assert (
         driver_info["CFBundleVersion"] == "245"
         and driver_info["CFBundleExecutable"] == "AcoupletVirtualOutput"
@@ -250,6 +250,35 @@ with tempfile.TemporaryDirectory(prefix="acouplet-ldac-build-check-") as directo
             "AcoupletVirtualOutput.c" in line
             for line in log.read_bytes()[len(before) :].decode().splitlines()
         ), team
+    private_environment = {
+        **environment,
+        "ACOUPLET_DISTRIBUTION": "development",
+        "ACOUPLET_SIGNING_CERTIFICATE_SHA1": "A" * 40,
+    }
+    subprocess.run(["/bin/sh", str(script)], env=private_environment, check=True)
+    private_commands = [json.loads(line) for line in log.read_text().splitlines()]
+    assert (
+        '-DACOUPLET_SIGNING_CERTIFICATE_SHA1="' + "A" * 40 + '"'
+        in [command for command in private_commands if command[0] == "clang"][-1]
+    )
+    for private_value in ("short", "G" * 40, "A" * 39 + '"'):
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            check=False,
+            env={
+                **private_environment,
+                "ACOUPLET_SIGNING_CERTIFICATE_SHA1": private_value,
+            },
+            capture_output=True,
+        )
+        assert result.returncode != 0
+    result = subprocess.run(
+        ["/bin/sh", str(script)],
+        check=False,
+        env={**private_environment, "ACOUPLET_DISTRIBUTION": "production"},
+        capture_output=True,
+    )
+    assert result.returncode != 0
     previous_log = log.read_bytes()
     for exclusion in (
         {"ACOUPLET_PUBLIC_APIS_ONLY": "YES"},

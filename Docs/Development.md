@@ -49,6 +49,9 @@ so invoking it through uv exercises the development environment. See
 
 ## Build
 
+For automated Release DMGs without Apple credentials, see
+[Release automation](Releasing.md).
+
 Fetch the build dependency, then open `Acouplet.xcodeproj`:
 
 ```sh
@@ -73,9 +76,11 @@ CODE_SIGN_IDENTITY='Apple Development' DEVELOPMENT_TEAM=YOURTEAMID \
 DEVELOPER_DIR="$(xcode-select -p)" Packaging/package.sh --local
 ```
 
-Certificate signing provides permission continuity between builds and is required
-for LDAC driver authentication. Release and App Store builds use your signing
-settings; the project does not pin an upstream Team ID.
+Apple certificate signing provides permission continuity between builds. LDAC
+also supports a private certificate pinned by fingerprint in development
+distributions; see [Release automation](Releasing.md) for setup and migration.
+Ad-hoc signing cannot authenticate LDAC driver commands. Release and App Store
+builds use your signing settings; the project does not pin an upstream Team ID.
 
 Quit the installed app, then open `Install.command` in
 `.build/local-update/Acouplet/`. See that package's README for removal instructions.

@@ -1,0 +1,192 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version with two or three numeric components
+        required: true
+        type: string
+      build_number:
+        description: Positive build number greater than every previous release
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      ACOUPLET_MARKETING_VERSION: ${{ inputs.version }}
+      ACOUPLET_BUILD_NUMBER: ${{ inputs.build_number }}
+      CODE_SIGN_IDENTITY: '-'
+      DEVELOPMENT_TEAM: ''
+      ACOUPLET_INSTALLER_SIGNING_IDENTITY: ''
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Validate release configuration
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          ACOUPLET_SIGNING_CERTIFICATE_SHA1: ${{ vars.ACOUPLET_SIGNING_CERTIFICATE_SHA1 }}
+        run: |
+          if [[ -z "$BUILD_CERTIFICATE_BASE64" || -z "$P12_PASSWORD" || ! "$ACOUPLET_SIGNING_CERTIFICATE_SHA1" =~ ^[A-Fa-f0-9]{40}$ ]]; then
+            echo '::error::Configure the private signing certificate, password and fingerprint described in Docs/Releasing.md.'
+            exit 1
+          fi
+          if [[ ! "$ACOUPLET_MARKETING_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+            echo '::error::Version must contain two or three numeric components.'
+            exit 1
+          fi
+          if [[ ! "$ACOUPLET_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo '::error::Build number must be a positive integer.'
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$(/usr/bin/xcode-select -p)" >> "$GITHUB_ENV"
+          /usr/bin/xcodebuild -version
+          /usr/bin/xcrun --sdk macosx --show-sdk-version
+
+      - name: Run tests
+        run: |
+          Packaging/fetch-sparkle.sh
+          mkdir -p .build/release
+          if ! /usr/bin/python3 Packaging/check-all.py > .build/release/checks.log 2>&1; then
+            tail -n 60 .build/release/checks.log
+            exit 1
+          fi
+
+      - name: Import private signing certificate
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          ACOUPLET_SIGNING_CERTIFICATE_SHA1: ${{ vars.ACOUPLET_SIGNING_CERTIFICATE_SHA1 }}
+        run: |
+          umask 077
+          keychain="$RUNNER_TEMP/acouplet-private.keychain-db"
+          certificate="$RUNNER_TEMP/acouplet-private.pem"
+          identity="$RUNNER_TEMP/acouplet-private.p12"
+          printf '%s' "$BUILD_CERTIFICATE_BASE64" | /usr/bin/base64 --decode > "$identity"
+          /usr/bin/openssl pkcs12 -in "$identity" -passin env:P12_PASSWORD -clcerts -nokeys -out "$certificate"
+          fingerprint="$(/usr/bin/openssl x509 -in "$certificate" -noout -fingerprint -sha1 | /usr/bin/sed 's/.*=//;s/://g')"
+          expected="$(printf '%s' "$ACOUPLET_SIGNING_CERTIFICATE_SHA1" | /usr/bin/tr 'a-f' 'A-F')"
+          if [[ "$fingerprint" != "$expected" ]]; then
+            echo '::error::The imported certificate does not match the configured fingerprint.'
+            exit 1
+          fi
+          /usr/bin/openssl x509 -in "$certificate" -noout -checkend 0
+          keychain_password="$(/usr/bin/openssl rand -hex 32)"
+          echo "::add-mask::$keychain_password"
+          /usr/bin/security create-keychain -p "$keychain_password" "$keychain"
+          /usr/bin/security set-keychain-settings -lut 21600 "$keychain"
+          /usr/bin/security unlock-keychain -p "$keychain_password" "$keychain"
+          /usr/bin/security import "$identity" -P "$P12_PASSWORD" -k "$keychain" -T /usr/bin/codesign
+          /usr/bin/security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          /usr/bin/security list-keychains -d user -s "$keychain"
+          sudo /usr/bin/security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" "$certificate"
+          echo "CODE_SIGN_IDENTITY=$fingerprint" >> "$GITHUB_ENV"
+          echo "ACOUPLET_SIGNING_CERTIFICATE_SHA1=$fingerprint" >> "$GITHUB_ENV"
+          /bin/rm -f "$identity"
+
+      - name: Build Release with private certificate
+        run: Packaging/package.sh --local
+
+      - name: Verify private driver authentication
+        run: Packaging/check-private-signing.sh
+
+      - name: Create unsigned DMG
+        run: |
+          stage="$PWD/.build/release/payload"
+          mount="$RUNNER_TEMP/acouplet-dmg"
+          writable="$PWD/.build/release/writable.dmg"
+          mkdir -p "$stage" "$mount" dist
+          /usr/bin/ditto .build/local-update/Acouplet/Acouplet.app "$stage/Acouplet.app"
+          /bin/ln -s /Applications "$stage/Applications"
+          /usr/bin/codesign --verify --deep --strict "$stage/Acouplet.app"
+          trap '/usr/bin/hdiutil detach "$mount" >/dev/null 2>&1 || true' EXIT
+          /usr/bin/hdiutil create -volname Acouplet -srcfolder "$stage" -fs HFS+ \
+            -format UDRW "$writable"
+          /usr/bin/hdiutil attach -readwrite -nobrowse -mountpoint "$mount" "$writable"
+          /usr/bin/xattr -cr "$mount/Acouplet.app"
+          /usr/bin/codesign --verify --deep --strict --all-architectures \
+            --test-requirement="=identifier \"dev.baglayan.Acouplet\" and certificate leaf = H\"$ACOUPLET_SIGNING_CERTIFICATE_SHA1\"" \
+            "$mount/Acouplet.app"
+          /usr/bin/hdiutil detach "$mount"
+          /usr/bin/hdiutil convert "$writable" -format UDZO \
+            -o "dist/Acouplet-$ACOUPLET_MARKETING_VERSION.dmg"
+          /usr/bin/hdiutil verify "dist/Acouplet-$ACOUPLET_MARKETING_VERSION.dmg"
+          /usr/bin/hdiutil attach -readonly -nobrowse -mountpoint "$mount" \
+            "dist/Acouplet-$ACOUPLET_MARKETING_VERSION.dmg"
+          /usr/bin/codesign --verify --deep --strict --all-architectures \
+            --test-requirement="=identifier \"dev.baglayan.Acouplet\" and certificate leaf = H\"$ACOUPLET_SIGNING_CERTIFICATE_SHA1\"" \
+            "$mount/Acouplet.app"
+          /usr/bin/cmp "$stage/Acouplet.app/Contents/MacOS/Acouplet" \
+            "$mount/Acouplet.app/Contents/MacOS/Acouplet"
+          /usr/bin/hdiutil detach "$mount"
+          trap - EXIT
+
+      - name: Archive release evidence and calculate checksum
+        run: |
+          evidence="$PWD/.build/release/evidence"
+          mkdir -p "$evidence"
+          /bin/cp '.build/local-update/Acouplet/Local Build Receipt.txt' "$evidence/Build Receipt.txt"
+          /bin/cp .build/release/checks.log .build/package-build.log "$evidence/"
+          /usr/bin/ditto .build/Build/Products/Release/Acouplet.app.dSYM "$evidence/Acouplet.app.dSYM"
+          /usr/bin/ditto '.build/Build/Products/Release/Acouplet Battery Publisher.dSYM' \
+            "$evidence/Acouplet Battery Publisher.dSYM"
+          /usr/bin/tar -czf "dist/Acouplet-$ACOUPLET_MARKETING_VERSION-evidence.tar.gz" \
+            -C "$evidence" .
+          cd dist
+          /usr/bin/shasum -a 256 "Acouplet-$ACOUPLET_MARKETING_VERSION.dmg" > SHA256SUMS.txt
+
+      - name: Upload Release DMG
+        uses: actions/upload-artifact@v6
+        with:
+          name: Acouplet-${{ inputs.version }}-${{ inputs.build_number }}
+          path: |
+            dist/Acouplet-${{ inputs.version }}.dmg
+            dist/Acouplet-${{ inputs.version }}-evidence.tar.gz
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Remove private signing credentials
+        if: always()
+        run: |
+          certificate="$RUNNER_TEMP/acouplet-private.pem"
+          if [[ -f "$certificate" ]]; then
+            sudo /usr/bin/security remove-trusted-cert -d "$certificate" || true
+          fi
+          /bin/rm -f "$RUNNER_TEMP/acouplet-private.p12" "$certificate"
+          keychain="$RUNNER_TEMP/acouplet-private.keychain-db"
+          if [[ -f "$keychain" ]]; then
+            /usr/bin/security delete-keychain "$keychain"
+          fi
+
+      - name: Upload release diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: Acouplet-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .build/package-build.log
+            .build/release/checks.log
+            .build/local-update/Acouplet/Local Build Receipt.txt
+            .build/check-all/Logs/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14

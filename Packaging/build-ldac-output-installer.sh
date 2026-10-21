@@ -18,19 +18,35 @@ fi
 ldac_stage="$(mktemp -d "${TMPDIR:-/tmp}/acouplet-ldac-output-package.XXXXXX")"
 trap 'rm -rf "$ldac_stage"' EXIT HUP INT TERM
 ldac_team="$(/usr/bin/codesign --display --verbose=4 "$ldac_driver" 2>&1 | /usr/bin/sed -n 's/^TeamIdentifier=//p')"
-case "$ldac_team" in
-    [A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]) ;;
-    *)
-        if [ -n "${ACOUPLET_INSTALLER_SIGNING_IDENTITY:-}" ]; then
-            printf '%s\n' 'The driver must have a valid signing team before signed packaging.' >&2
-            exit 1
-        fi
-        ldac_team=''
-        ;;
-esac
+ldac_certificate="${ACOUPLET_SIGNING_CERTIFICATE_SHA1:-}"
+if [ -n "$ldac_certificate" ]; then
+    if [ "${#ldac_certificate}" != 40 ] || [ -n "${ACOUPLET_INSTALLER_SIGNING_IDENTITY:-}" ]; then
+        printf '%s\n' 'Private signing requires a certificate fingerprint and unsigned installer packages.' >&2
+        exit 1
+    fi
+    case "$ldac_certificate" in
+        *[!A-Fa-f0-9]*) printf '%s\n' 'The private signing certificate fingerprint is invalid.' >&2; exit 1 ;;
+    esac
+    /usr/bin/codesign --verify --deep --strict --all-architectures \
+        --test-requirement="=identifier \"dev.baglayan.Acouplet.LDACOutput\" and certificate leaf = H\"$ldac_certificate\"" "$ldac_driver"
+    ldac_team=''
+else
+    case "$ldac_team" in
+        [A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]) ;;
+        *)
+            if [ -n "${ACOUPLET_INSTALLER_SIGNING_IDENTITY:-}" ]; then
+                printf '%s\n' 'The driver must have a valid signing team before signed packaging.' >&2
+                exit 1
+            fi
+            ldac_team=''
+            ;;
+    esac
+fi
 mkdir "$ldac_stage/root" "$ldac_stage/scripts"
 for script in preinstall postinstall; do
-    /usr/bin/sed "s/@ACOUPLET_LDAC_SIGNING_TEAM_ID@/$ldac_team/g" "$ldac_packaging/LDACOutputInstaller/$script" > "$ldac_stage/scripts/$script"
+    /usr/bin/sed -e "s/@ACOUPLET_LDAC_SIGNING_TEAM_ID@/$ldac_team/g" \
+        -e "s/@ACOUPLET_LDAC_SIGNING_CERTIFICATE_SHA1@/$ldac_certificate/g" \
+        "$ldac_packaging/LDACOutputInstaller/$script" > "$ldac_stage/scripts/$script"
     chmod 755 "$ldac_stage/scripts/$script"
 done
 /usr/bin/ditto "$ldac_driver" "$ldac_stage/root/AcoupletLDACOutput.driver"
@@ -47,7 +63,9 @@ else
 fi
 ldac_removal="$(dirname -- "$ldac_package")/Acouplet LDAC Removal.pkg"
 mkdir "$ldac_stage/removal-scripts"
-/usr/bin/sed "s/@ACOUPLET_LDAC_SIGNING_TEAM_ID@/$ldac_team/g" "$ldac_packaging/LDACOutputUninstaller/postinstall" > "$ldac_stage/removal-scripts/postinstall"
+/usr/bin/sed -e "s/@ACOUPLET_LDAC_SIGNING_TEAM_ID@/$ldac_team/g" \
+    -e "s/@ACOUPLET_LDAC_SIGNING_CERTIFICATE_SHA1@/$ldac_certificate/g" \
+    "$ldac_packaging/LDACOutputUninstaller/postinstall" > "$ldac_stage/removal-scripts/postinstall"
 chmod 755 "$ldac_stage/removal-scripts/postinstall"
 if [ -n "${ACOUPLET_INSTALLER_SIGNING_IDENTITY:-}" ]; then
     /usr/bin/pkgbuild --nopayload --scripts "$ldac_stage/removal-scripts" \

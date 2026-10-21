@@ -4,6 +4,8 @@
 <dict>
     <key>AcoupletDistribution</key>
     <string>$(ACOUPLET_DISTRIBUTION)</string>
+    <key>AcoupletSigningCertificateSHA1</key>
+    <string>$(ACOUPLET_SIGNING_CERTIFICATE_SHA1)</string>
     <key>NSAudioCaptureUsageDescription</key>
     <string>Play Mac audio through your headphones using LDAC. Ordinary playback is temporarily muted while LDAC is on and resumes when it stops. Audio is streamed locally and is not recorded to a file.</string>
     <key>SUFeedURL</key>

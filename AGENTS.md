@@ -9,3 +9,7 @@ After finishing edits that modify Swift or other app code, build a signed Releas
 ## Documentation
 
 Project documentation lives in [Docs](Docs/README.md). Start with that index for development, testing, LDAC behavior and research. Add or update documentation there when project behavior or workflows change.
+
+## Project memory
+
+On 2026-10-21, the private-certificate Release passed live LDAC playback with driver revision 8 on macOS 26.7.1 (25G241) without rebooting the Mac. After installing the matching app and driver, quit Acouplet normally and wait for its owner worker to exit, then run `osascript -e 'do shell script "/usr/bin/killall -TERM coreaudiod" with administrator privileges'`. Wait for Core Audio to return, reopen `/Applications/Acouplet.app`, and verify `--ldac-driver-state` reports `current` and bundled/installed/loaded revisions match. This interrupts all audio and requires administrator authorization; coordinate it with the user. The test streamed at 96 kHz / 990 kbps, recovered after app relaunch, and the user confirmed normal audible playback. See [the saved commands](Docs/LDACPlayback.md#reload-the-driver-without-restarting-the-mac). Keep this as a manual procedure; installers do not restart Core Audio automatically.

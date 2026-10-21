@@ -47,9 +47,12 @@ elif name == 'codesign':
         print('TeamIdentifier=' + signature['team'], file=sys.stderr)
     else:
         assert args[:4] == ['--verify', '--deep', '--strict', '--all-architectures'], args
-        assert args[4].startswith('--test-requirement==anchor apple generic'), args
+        assert args[4].startswith('--test-requirement='), args
         expected = re.search(r'subject\.OU\] = "([A-Z0-9]{10})"', args[4])
-        sys.exit(0 if signature['valid'] and (not expected or signature['team'] == expected[1]) else 23)
+        certificate = re.search(r'certificate leaf = H"([A-Fa-f0-9]{40})"', args[4])
+        identity = re.search(r'identifier "([^"]+)"', args[4])
+        info = plistlib.loads((bundle / 'Contents/Info.plist').read_bytes())
+        sys.exit(0 if signature['valid'] and (not expected or signature['team'] == expected[1]) and (not certificate or signature.get('certificate') == certificate[1]) and (not identity or info['CFBundleIdentifier'] == identity[1]) else 23)
 elif name == 'pgrep':
     process = os.environ.get('ACOUPLET_OUTPUT_INSTALL_CHECK_PROCESS', '')
     if process:
@@ -104,14 +107,19 @@ def make_bundle(path, legacy=False, state="owned"):
                 "CFBundleExecutable": "unrelated"
                 if state == "executable-foreign"
                 else executable,
-                "AcoupletLDACDriverRevision": 6 if state == "old-revision" else 7,
+                "AcoupletLDACDriverRevision": 7 if state == "old-revision" else 8,
             }
         )
     )
     (path / "signature.json").write_text(
         json.dumps(
             {
-                "team": "ZZZZZ99999" if state == "wrong-team" else team,
+                "team": "not set"
+                if state in ("private", "wrong-certificate")
+                else "ZZZZZ99999"
+                if state == "wrong-team"
+                else team,
+                "certificate": "B" * 40 if state == "wrong-certificate" else "A" * 40,
                 "valid": state != "bad-signature",
             }
         )
@@ -161,6 +169,9 @@ def make_app(root, legacy=False, state="owned"):
         else "dev.baglayan.Acouplet"
     )
     value["CFBundleExecutable"] = "XM5 Control" if legacy else "Acouplet"
+    if state in ("private", "wrong-certificate"):
+        value["AcoupletSigningCertificateSHA1"] = "A" * 40
+        value["AcoupletDistribution"] = "development"
     info.write_bytes(plistlib.dumps(value))
     if state == "missing":
         shutil.rmtree(path)
@@ -170,9 +181,10 @@ def make_app(root, legacy=False, state="owned"):
         )
 
 
-def run_script(root, name, environment, volume="/", signing_team=team):
+def run_script(root, name, environment, volume="/", signing_team=team, certificate=""):
     source = (packaging / name).read_text()
     source = source.replace("@ACOUPLET_LDAC_SIGNING_TEAM_ID@", signing_team)
+    source = source.replace("@ACOUPLET_LDAC_SIGNING_CERTIFICATE_SHA1@", certificate)
     source = source.replace("/usr/bin/sudo /bin/sh", "/bin/sh")
     source = source.replace(installed_path, str(root / "HAL/AcoupletLDACOutput.driver"))
     source = source.replace(legacy_path, str(root / "HAL/XM5LDACOutput.driver"))
@@ -263,6 +275,64 @@ for legacy in (False, True):
             check_preinstall,
             legacy,
             state,
+        )
+
+
+def check_private_certificate(script, certificate, state):
+    with tempfile.TemporaryDirectory(
+        prefix="acouplet-private-driver-check-"
+    ) as directory:
+        root = Path(directory)
+        environment = prepare(root)
+        driver = root / "HAL/AcoupletLDACOutput.driver"
+        make_bundle(driver, state=state)
+        if script.endswith(".command"):
+            make_app(root, state="private")
+            info_path = root / "Acouplet.app/Contents/Info.plist"
+            info = plistlib.loads(info_path.read_bytes())
+            info["AcoupletSigningCertificateSHA1"] = certificate
+            info_path.write_bytes(plistlib.dumps(info))
+        result = run_script(
+            root, script, environment, signing_team="", certificate=certificate
+        )
+        succeeds = certificate == "A" * 40 and state == "private"
+        assert (result.returncode == 0) == succeeds, (
+            script,
+            certificate,
+            state,
+            result.stderr,
+        )
+        if not succeeds:
+            assert driver.is_dir()
+            assert not any(
+                command[0] in ("rm", "pkgutil") for command in commands(root)
+            )
+        assert (root / "HAL/Unrelated.driver/keep").read_text() == "preserve"
+
+
+for private_script in (
+    "LDACOutputInstaller/preinstall",
+    "LDACOutputInstaller/postinstall",
+    "LDACOutputUninstaller/postinstall",
+    "Uninstall LDAC Output.command",
+):
+    for private_certificate, private_state in (
+        ("A" * 40, "private"),
+        ("A" * 40, "wrong-certificate"),
+        ("invalid", "private"),
+        ("A" * 39 + '"', "private"),
+    ):
+        checks.add(
+            "private/"
+            + private_script
+            + "/"
+            + private_certificate
+            + "/"
+            + private_state,
+            check_private_certificate,
+            private_script,
+            private_certificate,
+            private_state,
         )
 
 

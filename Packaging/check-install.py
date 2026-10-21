@@ -51,8 +51,14 @@ elif name == 'codesign':
     if args[0] == '--display': print('TeamIdentifier=' + team, file=sys.stderr)
     for argument in args:
         if argument.startswith('--test-requirement='):
-            assert 'anchor apple generic' in argument
-            if re.search(r'subject.OU] = "([^"]+)"', argument)[1] != team: sys.exit(21)
+            certificate = re.search(r'certificate leaf = H"([A-Fa-f0-9]{40})"', argument)
+            if certificate:
+                actual = (target / 'certificate').read_text() if (target / 'certificate').exists() else ''
+                if actual != certificate[1]: sys.exit(21)
+            else:
+                assert 'anchor apple generic' in argument
+                if team == 'not set': sys.exit(21)
+                if re.search(r'subject.OU] = "([^"]+)"', argument)[1] != team: sys.exit(21)
             expected_id = re.search(r'identifier "([^"]+)"', argument)
             if expected_id and expected_id[1] != plistlib.loads((target / 'Contents/Info.plist').read_bytes())['CFBundleIdentifier']: sys.exit(21)
     if mode == 'legacy-bad-signature' and 'XM5 Control Native.app' in args[-1]: sys.exit(21)
@@ -427,6 +433,50 @@ def run(root, mode, name="Install.command", arguments=()):
         capture_output=True,
         timeout=60,
     )
+
+
+def check_private_install(scenario):
+    with tempfile.TemporaryDirectory(prefix="acouplet-private-install-") as directory:
+        root = Path(directory)
+        fixture(root, "success")
+        for parent in ("package", "Applications"):
+            app = root / parent / "Acouplet.app"
+            info_path = app / "Contents/Info.plist"
+            info = plistlib.loads(info_path.read_bytes())
+            info["AcoupletDistribution"] = "development"
+            info["AcoupletSigningCertificateSHA1"] = "A" * 40
+            if scenario == "production" and parent == "package":
+                info["AcoupletDistribution"] = "production"
+            info_path.write_bytes(plistlib.dumps(info))
+            (app / "certificate").write_text(
+                "B" * 40
+                if scenario == "other-certificate" and parent == "Applications"
+                else "A" * 40
+            )
+            (app / "team").write_text("not set")
+        for legacy in ("XM5 Control Native.app", "XM5 Control.app"):
+            (root / "Applications" / legacy / "certificate").write_text("A" * 40)
+        result = run(
+            root,
+            "success",
+            name="Uninstall Service.command"
+            if scenario == "remove-service"
+            else "Install.command",
+        )
+        assert (result.returncode == 0) == (scenario in ("update", "remove-service")), (
+            result.stderr
+        )
+        if scenario == "remove-service":
+            assert not (
+                root / "LaunchAgents/dev.baglayan.Acouplet.agent.plist"
+            ).exists()
+        assert (root / "Applications/Acouplet.app/version").read_text() == (
+            "new" if scenario == "update" else "old"
+        )
+
+
+for private_scenario in ("update", "other-certificate", "production", "remove-service"):
+    checks.add("private/" + private_scenario, check_private_install, private_scenario)
 
 
 def check_migration(scenario, mode, arguments, successful):

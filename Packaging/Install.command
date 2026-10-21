@@ -107,17 +107,26 @@ if [[ -e "$installed_controls" || -L "$installed_controls" ]] &&
 fi
 /usr/bin/codesign --verify --deep --strict "$source_app"
 app_team="$(/usr/bin/codesign --display --verbose=2 "$source_app" 2>&1 | /usr/bin/sed -n 's/^TeamIdentifier=//p')"
-if [[ ! "$app_team" =~ '^[A-Z0-9]{10}$' ]]; then
+app_certificate="$(/usr/libexec/PlistBuddy -c 'Print :AcoupletSigningCertificateSHA1' "$source_app/Contents/Info.plist" 2>/dev/null || true)"
+if [[ -n "$app_certificate" ]]; then
+    if [[ ! "$app_certificate" =~ '^[A-Fa-f0-9]{40}$' || "$(/usr/libexec/PlistBuddy -c 'Print :AcoupletDistribution' "$source_app/Contents/Info.plist")" != development ]]; then
+        print -u2 "The package's private signing identity is invalid; nothing was replaced."
+        exit 1
+    fi
+    app_requirement="certificate leaf = H\"$app_certificate\""
+elif [[ "$app_team" =~ '^[A-Z0-9]{10}$' ]]; then
+    app_requirement="anchor apple generic and certificate leaf[subject.OU] = \"$app_team\""
+else
     print -u2 "This package requires an Apple-signed application; nothing was replaced."
     exit 1
 fi
+/usr/bin/codesign --verify --deep --strict --test-requirement="=$app_requirement and identifier \"dev.baglayan.Acouplet\"" "$source_app"
 verify_existing_bundle() {
-    local bundle="$1" identifier="${2:-}" team="$app_team" requirement
+    local bundle="$1" identifier="${2:-}" requirement="$app_requirement"
     if [[ -n "$replace_team" ]] &&
        [[ "$(/usr/bin/codesign --display --verbose=2 "$bundle" 2>&1 | /usr/bin/sed -n 's/^TeamIdentifier=//p')" == "$replace_team" ]]; then
-        team="$replace_team"
+        requirement="anchor apple generic and certificate leaf[subject.OU] = \"$replace_team\""
     fi
-    requirement="anchor apple generic and certificate leaf[subject.OU] = \"$team\""
     if [[ -n "$identifier" ]]; then requirement+=" and identifier \"$identifier\""; fi
     if ! /usr/bin/codesign --verify --deep --strict --test-requirement="=$requirement" "$bundle"; then
         print -u2 -r -- "The existing bundle's signature or signing team does not match: $bundle"
@@ -422,7 +431,7 @@ if [[ -d "$installed_app" ]]; then
 fi
 mv "$staged_app" "$installed_app"
 new_app_installed=true
-/usr/bin/codesign --verify --deep --strict --test-requirement="=anchor apple generic and identifier \"dev.baglayan.Acouplet\" and certificate leaf[subject.OU] = \"$app_team\"" "$installed_app"
+/usr/bin/codesign --verify --deep --strict --test-requirement="=identifier \"dev.baglayan.Acouplet\" and $app_requirement" "$installed_app"
 
 mkdir -p "${plist_path:h}"
 # ProcessType Interactive: without it launchd starts the service as a daemon-type job and clamps the

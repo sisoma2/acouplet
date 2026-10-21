@@ -17,7 +17,7 @@
 #endif
 
 enum { kAcoupletLease = 'xmls', kAcoupletModel = 'xmnm', kAcoupletPriority = 'xmpr', kAcoupletRevision = 'xmvr', kAcoupletLatency = 'xmlt' };
-static const SInt32 kAcoupletDriverRevision = 7;
+static const SInt32 kAcoupletDriverRevision = 8;
 static UInt32 gPipelineLatencyFrames;
 static UInt32 gNotifiedLatencyFrames;
 static UInt64 gLeaseDeadline;
@@ -97,7 +97,11 @@ static Boolean AcoupletClientAuthorized(pid_t client) {
     static dispatch_once_t once;
     static SecRequirementRef requirement;
     dispatch_once(&once, ^{
+#ifdef ACOUPLET_SIGNING_CERTIFICATE_SHA1
+        SecRequirementCreateWithString(CFSTR("identifier \"dev.baglayan.Acouplet\" and certificate leaf = H\"" ACOUPLET_SIGNING_CERTIFICATE_SHA1 "\""),
+#else
         SecRequirementCreateWithString(CFSTR("anchor apple generic and identifier \"dev.baglayan.Acouplet\" and certificate leaf[subject.OU] = \"" ACOUPLET_SIGNING_TEAM "\""),
+#endif
             kSecCSDefaultFlags, &requirement);
     });
     if (!requirement) return false;

@@ -5,14 +5,27 @@ if [ "${3:-}" != / ]; then
     printf '%s\n' 'Install this audio driver on the current startup volume.' >&2
     exit 1
 fi
-ldac_team='@ACOUPLET_LDAC_SIGNING_TEAM_ID@'
-case "$ldac_team" in
-    [A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]) ;;
-    *)
-        printf '%s\n' 'This development package has no valid signing team. Install a signed Acouplet LDAC output package instead. Nothing was changed.' >&2
+ldac_certificate='@ACOUPLET_LDAC_SIGNING_CERTIFICATE_SHA1@'
+if [ -n "$ldac_certificate" ]; then
+    if [ "${#ldac_certificate}" != 40 ]; then
+        printf '%s\n' 'This package has an invalid certificate fingerprint. Nothing was changed.' >&2
         exit 1
-        ;;
-esac
+    fi
+    case "$ldac_certificate" in
+        *[!A-Fa-f0-9]*) printf '%s\n' 'This package has an invalid certificate fingerprint. Nothing was changed.' >&2; exit 1 ;;
+    esac
+    ldac_requirement="certificate leaf = H\"$ldac_certificate\""
+else
+    ldac_team='@ACOUPLET_LDAC_SIGNING_TEAM_ID@'
+    case "$ldac_team" in
+        [A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]) ;;
+        *)
+            printf '%s\n' 'This development package has no valid signing team. Install a signed Acouplet LDAC output package instead. Nothing was changed.' >&2
+            exit 1
+            ;;
+    esac
+    ldac_requirement="anchor apple generic and certificate leaf[subject.OU] = \"$ldac_team\""
+fi
 for ldac_driver in /Library/Audio/Plug-Ins/HAL/AcoupletLDACOutput.driver /Library/Audio/Plug-Ins/HAL/XM5LDACOutput.driver; do
     case "$ldac_driver" in
         */AcoupletLDACOutput.driver) ldac_identifier=dev.baglayan.Acouplet.LDACOutput; ldac_executable=AcoupletVirtualOutput ;;
@@ -28,6 +41,6 @@ for ldac_driver in /Library/Audio/Plug-Ins/HAL/AcoupletLDACOutput.driver /Librar
             exit 1
         fi
         /usr/bin/codesign --verify --deep --strict --all-architectures \
-            --test-requirement="=anchor apple generic and certificate leaf[subject.OU] = \"$ldac_team\"" "$ldac_driver"
+            --test-requirement="=identifier \"$ldac_identifier\" and $ldac_requirement" "$ldac_driver"
     fi
 done

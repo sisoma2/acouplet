@@ -6,7 +6,26 @@ import XCTest
 #if !ACOUPLET_PUBLIC_APIS_ONLY
 @MainActor
 final class LDACDriverInstallerTests: XCTestCase {
+    func testPrivateCertificateRequirementIsLimitedToDevelopmentBuilds() throws {
+        let certificate = String(repeating: "A", count: 40)
+        XCTAssertEqual(try LDACDriverInstaller.signerRequirement(team: nil, certificate: certificate, development: true),
+                       "certificate leaf = H\"\(certificate)\"")
+        XCTAssertThrowsError(try LDACDriverInstaller.signerRequirement(team: nil, certificate: certificate, development: false))
+        for invalid in ["short", String(repeating: "A", count: 39), String(repeating: "A", count: 39) + "\"", String(repeating: "G", count: 40)] {
+            XCTAssertThrowsError(try LDACDriverInstaller.signerRequirement(team: nil, certificate: invalid, development: true))
+        }
+    }
+
+    func testAppleTeamRequirementRemainsAvailableAndAdHocIsRejected() throws {
+        XCTAssertEqual(try LDACDriverInstaller.signerRequirement(team: "ABCDE12345", certificate: nil, development: true),
+                       "anchor apple generic and certificate leaf[subject.OU] = \"ABCDE12345\"")
+        XCTAssertThrowsError(try LDACDriverInstaller.signerRequirement(team: nil, certificate: nil, development: true))
+    }
+
     func testInstallationDoesNotClaimLoadedDriverIsUpdated() {
+        XCTAssertEqual(LDACDriverInstaller.state(required: 8, installed: 7, loaded: 7), .outdated)
+        XCTAssertEqual(LDACDriverInstaller.state(required: 8, installed: 8, loaded: 7), .restartRequired)
+        XCTAssertEqual(LDACDriverInstaller.state(required: 8, installed: 8, loaded: 8), .current)
         XCTAssertEqual(LDACDriverInstaller.state(required: 1, installed: nil, loaded: nil), .missing)
         XCTAssertEqual(LDACDriverInstaller.state(required: 1, installed: nil, loaded: 1), .missing)
         XCTAssertEqual(LDACDriverInstaller.state(required: 1, installed: 0, loaded: 0), .outdated)

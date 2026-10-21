@@ -69,13 +69,26 @@ if [ "${CODE_SIGNING_ALLOWED:-NO}" != NO ]; then
     /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" --options runtime --timestamp=none "$ldac_audio"
 fi
 ldac_team="${DEVELOPMENT_TEAM:-5743Y47SC7}"
-case "$ldac_team" in
-    [ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789]) ;;
-    *)
-        printf '%s\n' 'DEVELOPMENT_TEAM must be a 10-character Apple team ID to build the LDAC output driver.' >&2
+ldac_certificate="${ACOUPLET_SIGNING_CERTIFICATE_SHA1:-}"
+ldac_requirement="-DACOUPLET_SIGNING_TEAM=\"$ldac_team\""
+if [ -n "$ldac_certificate" ]; then
+    if [ "${#ldac_certificate}" != 40 ] || [ "${ACOUPLET_DISTRIBUTION:-}" != development ] || [ -n "${DEVELOPMENT_TEAM:-}" ]; then
+        printf '%s\n' 'A private signing certificate requires a 40-character fingerprint, development distribution and no Apple team.' >&2
         exit 1
-        ;;
-esac
+    fi
+    case "$ldac_certificate" in
+        *[!A-Fa-f0-9]*) printf '%s\n' 'The private signing certificate fingerprint is invalid.' >&2; exit 1 ;;
+    esac
+    ldac_requirement="-DACOUPLET_SIGNING_CERTIFICATE_SHA1=\"$ldac_certificate\""
+else
+    case "$ldac_team" in
+        [ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789]) ;;
+        *)
+            printf '%s\n' 'DEVELOPMENT_TEAM must be a 10-character Apple team ID to build the LDAC output driver.' >&2
+            exit 1
+            ;;
+    esac
+fi
 ldac_driver="$ldac_helpers/AcoupletLDACOutput.driver"
 mkdir -p "$ldac_driver/Contents/MacOS" "$ldac_driver/Contents/Resources"
 /bin/cp "$ldac_source/VirtualOutput/Info.plist" "$ldac_driver/Contents/Info.plist"
@@ -85,7 +98,7 @@ mkdir -p "$ldac_driver/Contents/MacOS" "$ldac_driver/Contents/Resources"
 /bin/cp "$ldac_source/VirtualOutput/LICENSE.txt" "$ldac_driver/Contents/Resources/LICENSE.txt"
 /bin/cp "$ldac_source/VirtualOutput/Resources/Headphones.png" "$ldac_source/VirtualOutput/Resources/Earbuds.png" "$ldac_source/VirtualOutput/Resources/Speaker.png" "$ldac_driver/Contents/Resources/"
 cached_clang $ldac_arch_flags -isysroot "$ldac_sdk" "-mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET:-15.4}" -std=gnu11 -O2 -fblocks -Werror -bundle \
-    "-DACOUPLET_SIGNING_TEAM=\"$ldac_team\"" -framework CoreAudio -framework CoreFoundation -framework Security "$ldac_source/VirtualOutput/AcoupletVirtualOutput.c" \
+    "$ldac_requirement" -framework CoreAudio -framework CoreFoundation -framework Security "$ldac_source/VirtualOutput/AcoupletVirtualOutput.c" \
     -o "$ldac_driver/Contents/MacOS/AcoupletVirtualOutput"
 if [ "${CODE_SIGNING_ALLOWED:-NO}" != NO ]; then
     ldac_timestamp=--timestamp=none

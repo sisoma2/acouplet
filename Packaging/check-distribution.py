@@ -174,7 +174,11 @@ def inspect_installer(app, team, removal=False):
                         "postinstall": (
                             "file",
                             hashlib.sha256(
-                                script.read_bytes().replace(
+                                script.read_bytes()
+                                .replace(
+                                    b"@ACOUPLET_LDAC_SIGNING_CERTIFICATE_SHA1@", b""
+                                )
+                                .replace(
                                     b"@ACOUPLET_LDAC_SIGNING_TEAM_ID@", team.encode()
                                 )
                             ).hexdigest(),
@@ -236,6 +240,7 @@ def inspect_installer(app, team, removal=False):
                             (scripts / name)
                             .read_bytes()
                             .replace(b"@ACOUPLET_LDAC_SIGNING_TEAM_ID@", team.encode())
+                            .replace(b"@ACOUPLET_LDAC_SIGNING_CERTIFICATE_SHA1@", b"")
                         ).hexdigest(),
                         0o755,
                     )

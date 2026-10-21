@@ -39,6 +39,17 @@ if [[ "$signing_identity" == - ]]; then signing_team=; fi
 signing_settings=("CODE_SIGN_IDENTITY=$signing_identity" "DEVELOPMENT_TEAM=$signing_team" CODE_SIGN_STYLE=Manual CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO ENABLE_HARDENED_RUNTIME=YES)
 
 mkdir -p "$repo_root/.build"
+private_certificate="${ACOUPLET_SIGNING_CERTIFICATE_SHA1:-}"
+if [[ -n "$private_certificate" ]]; then
+    if [[ "$local_update" != true || ! "$private_certificate" =~ '^[A-Fa-f0-9]{40}$' || "$signing_identity" == - || -n "$signing_team" || -n "${ACOUPLET_INSTALLER_SIGNING_IDENTITY:-}" ]]; then
+        print -u2 "Private signing requires --local, a certificate identity and fingerprint, no Apple team, and unsigned installer packages."
+        exit 1
+    fi
+    private_entitlements="$repo_root/.build/private-signing.entitlements"
+    cp "$repo_root/Configuration/Direct.entitlements" "$private_entitlements"
+    /usr/libexec/PlistBuddy -c 'Add :com.apple.security.cs.disable-library-validation bool true' "$private_entitlements"
+    signing_settings+=("ACOUPLET_SIGNING_CERTIFICATE_SHA1=$private_certificate" "ACOUPLET_APP_ENTITLEMENTS_YES=$private_entitlements")
+fi
 if (( ${+ACOUPLET_BUILD_NUMBER} )); then
     if [[ ! "$ACOUPLET_BUILD_NUMBER" =~ '^[1-9][0-9]*$' ]]; then
         print -u2 "ACOUPLET_BUILD_NUMBER must be a positive integer. The previous package was kept."
@@ -98,6 +109,10 @@ fi
 actual_distribution="$(/usr/libexec/PlistBuddy -c 'Print :AcoupletDistribution' "$build_app/Contents/Info.plist" 2>/dev/null || true)"
 if [[ "$actual_distribution" != "$distribution" ]]; then
     print -u2 "The signed app must declare the requested $distribution distribution. The previous package was kept."
+    exit 1
+fi
+if [[ -n "$private_certificate" ]] && [[ "$(/usr/libexec/PlistBuddy -c 'Print :AcoupletSigningCertificateSHA1' "$build_app/Contents/Info.plist")" != "$private_certificate" ]]; then
+    print -u2 "The app must declare the requested private signing certificate. The previous package was kept."
     exit 1
 fi
 if [[ -e "$build_app/Contents/PlugIns/Acouplet Controls.appex" ]]; then
@@ -167,7 +182,9 @@ for signed_bundle in "$build_app" "$helper" "$hud" "$hud_check" "$sparkle/Versio
         print -u2 "Production packages require Developer ID Application signatures. Use --local for development signing. The previous package was kept."
         exit 1
     fi
-    if [[ "$signing_identity" != - ]]; then
+    if [[ -n "$private_certificate" ]]; then
+        /usr/bin/codesign --verify --strict --all-architectures --test-requirement="=certificate leaf = H\"$private_certificate\"" "$signed_bundle"
+    elif [[ "$signing_identity" != - ]]; then
         if ! /usr/bin/codesign --verify --strict --test-requirement='=anchor apple generic' "$signed_bundle"; then
             print -u2 "The requested Apple certificate signature is missing or invalid. The previous package was kept."
             exit 1
@@ -204,6 +221,7 @@ if [[ "$local_update" == true ]]; then receipt="$package_dir/Local Build Receipt
     print "Prepared UTC: $(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)"
     print -r -- "$source_provenance"
     print -r -- "Signing identity: $signing_identity"
+    print -r -- "Private signing certificate SHA1: ${private_certificate:-none}"
     print -r -- "Build number: $build_number"
     print -r -- "Distribution: $actual_distribution"
     print "Configuration: Release"
