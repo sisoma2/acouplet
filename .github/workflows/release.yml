@@ -80,8 +80,8 @@ jobs:
           /usr/bin/python3 Packaging/check-prepare-updates.py
           /usr/bin/python3 Packaging/check-ldac-qualification.py
 
-      - name: Fetch XCTest dependency
-        if: matrix.suite == 'xctest'
+      - name: Fetch Sparkle dependency
+        if: matrix.suite == 'xctest' || matrix.suite == 'packaging'
         run: Packaging/fetch-sparkle.sh
 
       - name: Run tests

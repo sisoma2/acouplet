@@ -286,6 +286,11 @@ and mutation suite. The split keeps the slow controller compiler fixtures from
 holding the other suites' shared worker budget. The default local runner still
 runs the full suite.
 
+The `xctest` and `packaging` jobs each fetch Sparkle into their own runner's
+checkout. XCTest needs the framework, and the packaging update-feed fixtures
+execute Sparkle's `generate_appcast` tool. The native fixture jobs do not need
+this dependency.
+
 Each job uploads `Acouplet-test-results-SUITE-RUN_ID`, including its summary,
 individual check logs and, for `xctest`, the XCTest `.xcresult` bundle, even when
 tests fail. Rerunning a job replaces only that suite's artifact. A failing suite
