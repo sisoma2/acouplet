@@ -225,13 +225,20 @@ signing secrets. After tests pass, the build job creates a password-protected
 temporary keychain and trusts the certificate for code signing. Import uses
 noninteractive sudo and has a three-minute step timeout. Immediately after the
 DMG's final signature verification, cleanup deletes the exported `.p12` identity,
-removes administrative certificate trust while the temporary keychain is still
-available, then deletes the keychain even if trust removal fails. Each
+resets the certificate's administrative code-signing trust to `unspecified`,
+then deletes the temporary keychain even if the trust reset fails. Each
 Security command has a 20-second timeout, with a two-minute limit on the whole
 cleanup step. Cleanup runs as root so its timeout handler can kill a stalled
 Security process. Either Security command failing fails the cleanup step after
-removing private credential files. A failed trust removal retains only the public
+removing private credential files. A failed trust reset retains only the public
 `.pem` so cleanup can retry; successful cleanup removes it.
+The reset uses `security add-trusted-cert -d -r unspecified -p codeSign` to replace
+the temporary `trustRoot` grant. It avoids the
+[hosted-runner hang in `remove-trusted-cert`](https://github.com/actions/runner-images/issues/12116),
+which also reproduced on the Xcode 27 runner even before keychain deletion.
+An `unspecified` entry grants no explicit trust; its public settings record remains
+on the disposable runner until GitHub destroys that VM. This cleanup is for
+disposable CI runners, not for removing certificates from a development Mac.
 Cleanup uses `if: always()` so it also runs when an earlier step fails or the run
 is cancelled. It finishes within its time limits even when cancellation keeps
 that step running. Users

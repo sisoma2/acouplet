@@ -22,6 +22,16 @@ def check_cleanup(failure):
         unrelated = directory / "keep"
         unrelated.write_text("preserved")
         commands = []
+        trust_command = [
+            "/usr/bin/security",
+            "add-trusted-cert",
+            "-d",
+            "-r",
+            "unspecified",
+            "-p",
+            "codeSign",
+            str(certificate),
+        ]
 
         def run(command, **options):
             assert not identity.exists()
@@ -54,7 +64,7 @@ def check_cleanup(failure):
             else:
                 assert failure is None
         assert commands == [
-            ["/usr/bin/security", "remove-trusted-cert", "-d", str(certificate)],
+            trust_command,
             ["/usr/bin/security", "delete-keychain", str(keychain)],
         ]
         assert not any(path.exists() for path in (identity, keychain))
@@ -74,7 +84,7 @@ def check_cleanup(failure):
             cleanup(directory)
         if trust_failed:
             run.assert_called_once_with(
-                ["/usr/bin/security", "remove-trusted-cert", "-d", str(certificate)],
+                trust_command,
                 check=True,
                 stdin=subprocess.DEVNULL,
                 timeout=20,
@@ -100,4 +110,4 @@ with tempfile.TemporaryDirectory(prefix="acouplet-signing-cleanup-") as temporar
     )
     assert "Private signing credentials removed." in result.stdout
 
-print("Signing cleanup order, bounded Security commands, failures and retries: passed")
+print("Signing trust reset, bounded cleanup, failures and retries: passed")
