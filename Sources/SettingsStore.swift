@@ -84,18 +84,9 @@ final class SettingsStore: ObservableObject {
     #endif
     @Published private(set) var launchAtLogin: Bool
     @Published private(set) var launchAtLoginError: String?
-    @Published private(set) var backgroundServiceStatus: SMAppService.Status = .notRegistered
     @Published var backgroundServiceMigrationError: String?
     var retryBackgroundServiceMigration: (() -> Void)?
     var restartApp: (() -> Void)?
-    /// Whether the app is installed with its LaunchAgent, read from the plist's real state rather than from
-    /// how this copy was started (decision D9). Settings then shows the service instead of Launch at login.
-    var hasBackgroundService: Bool {
-        backgroundServiceStatus == .enabled || backgroundServiceStatus == .requiresApproval
-    }
-    var isBackgroundServiceProcess: Bool {
-        CommandLine.arguments.contains("--background-service")
-    }
     @Published var globalShortcutEnabled: Bool {
         didSet { defaults.set(globalShortcutEnabled, forKey: Keys.globalShortcutEnabled) }
     }
@@ -300,39 +291,28 @@ final class SettingsStore: ObservableObject {
         isLoadingEqualizerDraft = false
     }
 
-    /// Reads the LaunchAgent's and the login item's state in the background and publishes them on the main
-    /// actor. Each read is a synchronous XPC call of about 15 ms, and Settings asks again every time it
-    /// appears or becomes active.
     func refreshLaunchStatus() {
-        guard managesLaunchService, !isRefreshingLaunchStatus, let plist = Self.backgroundServicePlist else { return }
+        guard managesLaunchService, !isRefreshingLaunchStatus else { return }
         isRefreshingLaunchStatus = true
         Task.detached(priority: .utility) { [weak self] in
-            let background = SMAppService.statusForLegacyPlist(at: plist)
             let launchesAtLogin = SMAppService.mainApp.status == .enabled
-            await self?.applyLaunchStatus(background: background, launchAtLogin: launchesAtLogin)
+            await self?.applyLaunchStatus(launchAtLogin: launchesAtLogin)
         }
     }
 
-    func applyLaunchStatus(background: SMAppService.Status, launchAtLogin: Bool) {
+    func applyLaunchStatus(launchAtLogin: Bool) {
         isRefreshingLaunchStatus = false
-        if backgroundServiceStatus != background { backgroundServiceStatus = background }
         if self.launchAtLogin != launchAtLogin { self.launchAtLogin = launchAtLogin }
-    }
-
-    private static var backgroundServicePlist: URL? {
-        guard let user = getpwuid(getuid()) else { return nil }
-        let home = String(cString: user.pointee.pw_dir)
-        return URL(fileURLWithPath: home).appending(path: "Library/LaunchAgents/dev.baglayan.Acouplet.agent.plist")
     }
 
     func enableLaunchAtLoginByDefault() {
         #if !ACOUPLET_PUBLIC_APIS_ONLY
-        guard !isBackgroundServiceProcess, !defaults.bool(forKey: Keys.launchAtLoginDefaultApplied) else { return }
-        // This runs once per installation, so it may wait for the service's state instead of the background read.
-        if managesLaunchService, let plist = Self.backgroundServicePlist {
-            backgroundServiceStatus = SMAppService.statusForLegacyPlist(at: plist)
+        if let enabled = defaults.object(forKey: LegacyBackgroundService.launchAtLoginPreferenceKey) as? Bool {
+            setLaunchAtLogin(enabled)
+            if launchAtLoginError == nil { defaults.removeObject(forKey: LegacyBackgroundService.launchAtLoginPreferenceKey) }
+            return
         }
-        guard !hasBackgroundService else { return }
+        guard !defaults.bool(forKey: Keys.launchAtLoginDefaultApplied) else { return }
         defaults.set(true, forKey: Keys.launchAtLoginDefaultApplied)
         if !managesLaunchService || SMAppService.mainApp.status == .notRegistered {
             setLaunchAtLogin(true)
@@ -340,15 +320,19 @@ final class SettingsStore: ObservableObject {
         #endif
     }
 
-    /// Runs the installer's `--unregister-login-item` or `--register-login-item` command and returns its exit
-    /// status, or returns nil for any other launch.
-    ///
-    /// `AcoupletMain` calls this before `NSApplication` exists, so these short-lived processes never register
-    /// with LaunchServices and a background service starting at the same time cannot take them for a running
-    /// copy of the app. Unregistering prints `login-item: removed` when a registration existed, which tells
-    /// the installer to give it back if the installation is rolled back.
     static func runLoginItemCommand(_ arguments: [String], defaults: UserDefaults = .standard,
                                     service: any LoginItemService = SMAppService.mainApp) -> Int32? {
+        #if !ACOUPLET_PUBLIC_APIS_ONLY
+        if arguments.count == 2, arguments[1] == "--migrate-background-service-preferences" {
+            do {
+                try LegacyBackgroundService.preserveLaunchAtLogin(defaults: defaults)
+                return EXIT_SUCCESS
+            } catch {
+                FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
+                return EXIT_FAILURE
+            }
+        }
+        #endif
         guard arguments.count == 2, ["--unregister-login-item", "--register-login-item"].contains(arguments[1]) else {
             return nil
         }
@@ -371,6 +355,11 @@ final class SettingsStore: ObservableObject {
 
     func setLaunchAtLogin(_ enabled: Bool) {
         defaults.set(true, forKey: Keys.launchAtLoginDefaultApplied)
+        #if !ACOUPLET_PUBLIC_APIS_ONLY
+        defer {
+            if launchAtLoginError == nil { defaults.removeObject(forKey: LegacyBackgroundService.launchAtLoginPreferenceKey) }
+        }
+        #endif
         guard managesLaunchService else {
             launchAtLogin = enabled
             return
@@ -456,9 +445,8 @@ extension SMAppService: LoginItemService {}
 enum LegacyBackgroundService {
     static let label = "dev.baglayan.Acouplet.agent"
     static let migrationLabel = "dev.baglayan.Acouplet.agent.migration"
-    static let policyKey = "ACOUPLET_SERVICE_POLICY"
-    static let policy = "successful-exit-v1"
-    static let attemptKey = "migration.backgroundService.successfulExitV1"
+    static let attemptKey = "migration.backgroundService.normalAppV1"
+    static let launchAtLoginPreferenceKey = "migration.backgroundService.launchAtLogin"
     static let executablePath = "/Applications/Acouplet.app/Contents/MacOS/Acouplet"
 
     static var domain: String { "gui/\(getuid())" }
@@ -468,42 +456,35 @@ enum LegacyBackgroundService {
 
     static func configuration(from data: Data, executablePath: String) throws -> [String: Any] {
         let decoded = try PropertyListSerialization.propertyList(from: data, format: nil)
-        guard var plist = decoded as? [String: Any], plist["Label"] as? String == label,
+        guard let plist = decoded as? [String: Any], plist["Label"] as? String == label,
               plist["ProgramArguments"] as? [String] == [executablePath, "--background-service"],
               plist["Program"] == nil,
               plist["EnvironmentVariables"] == nil || plist["EnvironmentVariables"] is [String: String] else {
             throw failure(1)
         }
-        var environment = plist["EnvironmentVariables"] as? [String: String] ?? [:]
-        environment[policyKey] = policy
-        plist["EnvironmentVariables"] = environment
-        plist["KeepAlive"] = ["SuccessfulExit": false]
-        // Without a ProcessType launchd clamps the service and its LDAC helpers to the utility QoS.
-        plist["ProcessType"] = "Interactive"
         return plist
+    }
+
+    static func preserveLaunchAtLogin(defaults: UserDefaults = .standard) throws {
+        _ = try configuration(from: ownedPlistData(), executablePath: executablePath)
+        let enabled = SMAppService.statusForLegacyPlist(at: plistURL) == .enabled || SMAppService.mainApp.status == .enabled
+        defaults.set(enabled, forKey: launchAtLoginPreferenceKey)
     }
 
     #if !DEBUG
     static func needsMigration(defaults: UserDefaults = .standard) -> Bool {
-        let environment = ProcessInfo.processInfo.environment
         guard Bundle.main.bundleIdentifier == "dev.baglayan.Acouplet",
-              Bundle.main.executableURL?.path == executablePath,
-              CommandLine.arguments.contains("--background-service"),
-              environment["XPC_SERVICE_NAME"] == label || CommandLine.arguments.contains("--service-migration-recovery") else { return false }
-        if !CommandLine.arguments.contains("--service-migration-recovery"), environment[policyKey] == policy {
+              Bundle.main.executableURL?.path == executablePath else { return false }
+        if !FileManager.default.fileExists(atPath: plistURL.path) {
             defaults.removeObject(forKey: attemptKey)
             return false
         }
         return true
     }
 
-    /// Runs `prepare` on a background queue and calls `completion` on the main actor with its error, so the
-    /// main thread does not wait on launchd (G10). Returns false, and never calls `completion`, when there is
-    /// nothing to migrate. A successful startup migration does not return: launchd replaces this process.
     static func prepareInBackground(defaults: UserDefaults = .standard,
                                     completion: @escaping @MainActor @Sendable ((any Error)?) -> Void) -> Bool {
         guard needsMigration(defaults: defaults) else { return false }
-        // UserDefaults is thread-safe, though the SDK does not mark it Sendable.
         nonisolated(unsafe) let defaults = defaults
         DispatchQueue.global(qos: .userInitiated).async {
             let result: (any Error)?
@@ -520,11 +501,10 @@ enum LegacyBackgroundService {
 
     static func prepare(defaults: UserDefaults = .standard) throws {
         guard needsMigration(defaults: defaults) else { return }
-        let recovering = CommandLine.arguments.contains("--service-migration-recovery")
         guard !defaults.bool(forKey: attemptKey) else { throw failure(2) }
-        let contents = try configuration(from: ownedPlistData(), executablePath: executablePath)
-        let data = try PropertyListSerialization.data(fromPropertyList: contents, format: .xml, options: 0)
-        try data.write(to: plistURL, options: .atomic)
+        _ = try configuration(from: ownedPlistData(), executablePath: executablePath)
+        let managed = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == label
+        let launchesAtLogin = SMAppService.statusForLegacyPlist(at: plistURL) == .enabled || SMAppService.mainApp.status == .enabled
         let token = UUID().uuidString
         let directory = migrationDirectory(token: token)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
@@ -550,7 +530,8 @@ enum LegacyBackgroundService {
             "Label": migrationLabel, "ProgramArguments": [executablePath, "--migrate-background-service"],
             "RunAtLoad": true, "LaunchOnlyOnce": true,
             "EnvironmentVariables": ["ACOUPLET_MIGRATION_TOKEN": token,
-                                     "ACOUPLET_MIGRATION_RECOVERY": recovering ? "1" : "0",
+                                     "ACOUPLET_MIGRATION_MANAGED": managed ? "1" : "0",
+                                     "ACOUPLET_MIGRATION_LAUNCH_AT_LOGIN": launchesAtLogin ? "1" : "0",
                                      "ACOUPLET_MIGRATION_PARENT": String(ProcessInfo.processInfo.processIdentifier)],
         ]
         let migrationData = try PropertyListSerialization.data(fromPropertyList: migration, format: .xml, options: 0)
@@ -559,14 +540,16 @@ enum LegacyBackgroundService {
         defaults.set(true, forKey: attemptKey)
         try launchctl(["bootstrap", domain, migrationURL.path])
         guard completion.wait(timeout: .now() + 15) == .success else { throw failure(5) }
-        guard ready.wait(timeout: .now()) == .success, recovering else { throw failure(5) }
+        guard ready.wait(timeout: .now()) == .success else { throw failure(5) }
+        defaults.removeObject(forKey: attemptKey)
     }
 
     static func runMigration() throws {
+        let environment = ProcessInfo.processInfo.environment
         guard Bundle.main.bundleIdentifier == "dev.baglayan.Acouplet",
               Bundle.main.executableURL?.path == executablePath,
-              ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == migrationLabel,
-              let token = ProcessInfo.processInfo.environment["ACOUPLET_MIGRATION_TOKEN"],
+              environment["XPC_SERVICE_NAME"] == migrationLabel,
+              let token = environment["ACOUPLET_MIGRATION_TOKEN"],
               UUID(uuidString: token)?.uuidString == token else { throw failure(6) }
         let directory = migrationDirectory(token: token)
         let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
@@ -577,41 +560,45 @@ enum LegacyBackgroundService {
         guard descriptor >= 0 else { throw failure(8) }
         defer { close(descriptor) }
         signal(SIGPIPE, SIG_IGN)
+        let managed = environment["ACOUPLET_MIGRATION_MANAGED"] == "1"
+        let exited = DispatchSemaphore(value: 0)
+        var parent: DispatchSourceProcess?
+        if managed {
+            guard let rawPID = environment["ACOUPLET_MIGRATION_PARENT"],
+                  let parentPID = Int32(rawPID), parentPID > 0, parentPID != getpid() else { throw failure(13) }
+            parent = DispatchSource.makeProcessSource(identifier: parentPID, eventMask: .exit, queue: .global())
+            parent?.setEventHandler { exited.signal() }
+            parent?.resume()
+        }
+        defer { parent?.cancel() }
         var oldJobRemoved = false
         do {
             try FileManager.default.removeItem(at: directory)
-            let data = try ownedPlistData()
-            let expected = try configuration(from: data, executablePath: executablePath)
-            let actual = try PropertyListSerialization.propertyList(from: data, format: nil) as? NSDictionary
-            guard actual == expected as NSDictionary else { throw failure(9) }
-            if ProcessInfo.processInfo.environment["ACOUPLET_MIGRATION_RECOVERY"] == "1" {
-                guard let rawPID = ProcessInfo.processInfo.environment["ACOUPLET_MIGRATION_PARENT"],
-                      let parentPID = Int32(rawPID), parentPID > 0 else { throw failure(13) }
-                let exited = DispatchSemaphore(value: 0)
-                let parent = DispatchSource.makeProcessSource(identifier: parentPID, eventMask: .exit, queue: .global())
-                parent.setEventHandler { exited.signal() }
-                parent.resume()
-                defer { parent.cancel() }
-                var result: UInt8 = 0
-                guard write(descriptor, &result, 1) == 1,
-                      exited.wait(timeout: .now() + 10) == .success else { throw failure(14) }
-                oldJobRemoved = true
-                try launchctl(["bootstrap", domain, plistURL.path])
+            _ = try configuration(from: ownedPlistData(), executablePath: executablePath)
+            try retire(plistURL: plistURL, domain: domain, label: label) { oldJobRemoved = true }
+            UserDefaults.standard.set(environment["ACOUPLET_MIGRATION_LAUNCH_AT_LOGIN"] == "1",
+                                      forKey: launchAtLoginPreferenceKey)
+            if managed {
+                guard exited.wait(timeout: .now() + 10) == .success else { throw failure(14) }
+                try command("/usr/bin/open", ["-n", "/Applications/Acouplet.app"])
             } else {
-                try reload(plistURL: plistURL, domain: domain, label: label) { oldJobRemoved = true }
+                var result: UInt8 = 0
+                guard write(descriptor, &result, 1) == 1 else { throw failure(15) }
             }
         } catch {
             NSLog("Background service migration failed: %@", error.localizedDescription)
             var result: UInt8 = 1
             let notified = write(descriptor, &result, 1) == 1
-            if oldJobRemoved {
+            if managed && oldJobRemoved {
                 try command("/usr/bin/open", ["-n", "/Applications/Acouplet.app", "--args",
-                                              "--background-service", "--service-migration-recovery"])
+                                              "--service-migration-recovery"])
             } else if !notified {
                 throw error
             }
         }
     }
+
+    #endif
 
     private static func ownedPlistData() throws -> Data {
         let attributes = try FileManager.default.attributesOfItem(atPath: plistURL.path)
@@ -620,6 +607,7 @@ enum LegacyBackgroundService {
         return try Data(contentsOf: plistURL)
     }
 
+    #if !DEBUG
     private static func migrationDirectory(token: String) -> URL {
         FileManager.default.temporaryDirectory.appending(path: "\(migrationLabel).\(token)")
     }
@@ -634,10 +622,12 @@ enum LegacyBackgroundService {
     }
     #endif
 
-    static func reload(plistURL: URL, domain: String, label: String, didBootout: () -> Void = {}) throws {
-        try launchctl(["bootout", "\(domain)/\(label)"])
-        didBootout()
-        try launchctl(["bootstrap", domain, plistURL.path])
+    static func retire(plistURL: URL, domain: String, label: String, didBootout: () -> Void = {}) throws {
+        if (try? launchctl(["print", "\(domain)/\(label)"], quiet: true)) != nil {
+            try launchctl(["bootout", "\(domain)/\(label)"])
+            didBootout()
+        }
+        try FileManager.default.removeItem(at: plistURL)
     }
 
     static func launchctl(_ arguments: [String], quiet: Bool = false) throws {

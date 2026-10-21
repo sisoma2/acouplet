@@ -91,9 +91,12 @@ Do not rebuild while installation is running.
 After editing Swift or other app code, run these commands from the repository
 root to test the updated app in `/Applications`. Skip this Release build,
 installation and launch workflow when no Swift or other app code changes.
-The build uses the installed app's signing team and an existing Apple Development
-certificate from that team. This preserves the installed app's identity and
-settings, including LDAC driver authentication.
+For an Apple-signed installation, the build uses the installed app's signing team
+and an existing Apple Development certificate from that team. For a private-signed
+installation, use the same certificate and pin as described in
+[Local builds and validation](Releasing.md#local-builds-and-validation). Both paths
+must preserve the installed app's signer for LDAC authentication and permission
+continuity.
 
 ```sh
 CODE_SIGN_IDENTITY='Apple Development' \
@@ -113,10 +116,12 @@ osascript \
 open /Applications/Acouplet.app
 ```
 
-The installer quits the installed app, stops its background service, replaces
-the app, and checks that the installed binaries match the new Release build.
-It preserves whether the background service was running. Use the installer
-for replacement so these steps finish before the new version starts.
+The installer quits the installed app, removes its legacy background service if
+present, replaces the app, and checks that the installed binaries match the new
+Release build. It reopens a previously running app normally and keeps a stopped
+app stopped. Existing startup preferences migrate to **Launch at login** in
+Acouplet Settings. Use the installer for replacement so these steps finish before
+the new version starts.
 
 When updating an app that supports LDAC update handoff, the installer requests
 one Bluetooth disconnect and skips the intermediate ordinary-audio reconnection.
@@ -124,7 +129,7 @@ The replacement explicitly reconnects the previously active headset with its
 session settings, then claims the handoff when starting LDAC. A separate recovery worker
 restores ordinary Bluetooth audio if no replacement claims it within 60 seconds
 after the old app exits. Sparkle uses the same handoff when relaunching immediately.
-Normal Quit, shutdown and updates that leave the background service stopped keep
+Normal Quit, shutdown and updates that leave the app stopped keep
 ordinary-audio restoration. The first installation of this change still uses the
 previous app's shutdown behavior.
 
@@ -139,9 +144,9 @@ cmp .build/Build/Products/Release/Acouplet.app/Contents/MacOS/Acouplet \
 ```
 
 `cmp` exits successfully without output when the executables match. There
-should be one app process under `/Applications`, optionally with `--background-service`,
-and no Debug copy. An additional `--ldac-owner` worker is expected during LDAC
-playback. The build and install receipts are saved under `.build/local-update/`.
+should be one app process under `/Applications` with no `--background-service`
+argument and no Debug copy. An additional `--ldac-owner` worker is expected during
+LDAC playback. The build and install receipts are saved under `.build/local-update/`.
 
 ## Artwork and build options
 

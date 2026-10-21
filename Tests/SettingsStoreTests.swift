@@ -245,7 +245,7 @@ final class SettingsStoreTests: XCTestCase {
     }
 
     #if !ACOUPLET_PUBLIC_APIS_ONLY
-    func testLegacyBackgroundServiceMigrationReplacesUnconditionalAndConditionalPolicies() throws {
+    func testLegacyBackgroundServiceMigrationValidatesWithoutRewritingPolicies() throws {
         for keepAlive: Any in [true, ["SuccessfulExit": false]] {
             let old: [String: Any] = ["Label": LegacyBackgroundService.label,
                                      "ProgramArguments": [LegacyBackgroundService.executablePath, "--background-service"],
@@ -254,12 +254,7 @@ final class SettingsStoreTests: XCTestCase {
             let data = try PropertyListSerialization.data(fromPropertyList: old, format: .xml, options: 0)
             let migrated = try LegacyBackgroundService.configuration(from: data,
                                                                      executablePath: LegacyBackgroundService.executablePath)
-            XCTAssertEqual(migrated["KeepAlive"] as? [String: Bool], ["SuccessfulExit": false])
-            XCTAssertEqual(migrated["EnvironmentVariables"] as? [String: String],
-                           [LegacyBackgroundService.policyKey: LegacyBackgroundService.policy, "EXISTING_SETTING": "retained"])
-            XCTAssertEqual(migrated["StandardErrorPath"] as? String, "/tmp/acouplet-fixture.log")
-            XCTAssertEqual(migrated["ProgramArguments"] as? [String],
-                           [LegacyBackgroundService.executablePath, "--background-service"])
+            XCTAssertEqual(migrated as NSDictionary, old as NSDictionary)
         }
     }
 
@@ -430,26 +425,50 @@ final class SettingsStoreTests: XCTestCase {
     #endif
 
     @MainActor
-    func testBackgroundServiceModeFollowsThePlistStateNotTheLaunchArguments() throws {
+    func testLaunchAtLoginStatusUpdatesWithoutBackgroundServiceState() throws {
         let suiteName = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let settings = SettingsStore(defaults: defaults)
-        XCTAssertFalse(settings.isBackgroundServiceProcess)
-        XCTAssertFalse(settings.hasBackgroundService)
         XCTAssertFalse(settings.launchAtLogin)
-
-        settings.applyLaunchStatus(background: .enabled, launchAtLogin: false)
-        XCTAssertTrue(settings.hasBackgroundService, "A copy started without --background-service still sees the installed service")
-        settings.applyLaunchStatus(background: .requiresApproval, launchAtLogin: false)
-        XCTAssertTrue(settings.hasBackgroundService, "A service turned off in Login Items is still the startup mode")
-        settings.applyLaunchStatus(background: .notRegistered, launchAtLogin: true)
-        XCTAssertFalse(settings.hasBackgroundService)
+        settings.applyLaunchStatus(launchAtLogin: true)
         XCTAssertTrue(settings.launchAtLogin)
-        settings.applyLaunchStatus(background: .notFound, launchAtLogin: false)
-        XCTAssertFalse(settings.hasBackgroundService)
+        settings.applyLaunchStatus(launchAtLogin: false)
         XCTAssertFalse(settings.launchAtLogin)
     }
+
+    #if !ACOUPLET_PUBLIC_APIS_ONLY
+    @MainActor
+    func testLegacyServiceLoginPreferenceMigratesOnceAndRespectsLaterOptOut() throws {
+        for enabled in [true, false] {
+            let suiteName = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+            defaults.set(true, forKey: "preferences.launchAtLoginDefaultApplied")
+            defaults.set(enabled, forKey: LegacyBackgroundService.launchAtLoginPreferenceKey)
+            let settings = SettingsStore(defaults: defaults)
+            settings.enableLaunchAtLoginByDefault()
+            XCTAssertEqual(settings.launchAtLogin, enabled)
+            XCTAssertNil(defaults.object(forKey: LegacyBackgroundService.launchAtLoginPreferenceKey))
+            settings.setLaunchAtLogin(false)
+            settings.enableLaunchAtLoginByDefault()
+            XCTAssertFalse(settings.launchAtLogin)
+        }
+    }
+
+    @MainActor
+    func testExplicitLoginChoiceReplacesPendingLegacyMigration() throws {
+        let suiteName = "dev.baglayan.Acouplet.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: LegacyBackgroundService.launchAtLoginPreferenceKey)
+        let settings = SettingsStore(defaults: defaults)
+        settings.setLaunchAtLogin(false)
+        settings.enableLaunchAtLoginByDefault()
+        XCTAssertFalse(settings.launchAtLogin)
+        XCTAssertNil(defaults.object(forKey: LegacyBackgroundService.launchAtLoginPreferenceKey))
+    }
+    #endif
 
     @MainActor
     func testReopeningDoesNotRequestSettings() {

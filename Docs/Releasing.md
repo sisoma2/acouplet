@@ -115,7 +115,9 @@ shasum -a 256 -c SHA256SUMS.txt
 ```
 
 Quit Acouplet before replacing an existing copy. Open the DMG and drag Acouplet
-to Applications. Because the app and its LDAC
+to Applications. On first launch, existing installations retire the old background
+service and preserve its startup preference as **Launch at login**. The app runs
+normally in the menu bar. Because the app and its LDAC
 packages are not notarized, macOS may block them. If you trust the build, use
 **System Settings > Privacy & Security > Open Anyway** after trying to open the
 app or package. Enable LDAC from the app, authorize the driver installation,

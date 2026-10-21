@@ -1,5 +1,4 @@
 import AppKit
-import ServiceManagement
 import SwiftUI
 
 struct MenuBarView: View {
@@ -622,12 +621,8 @@ struct MenuBarView: View {
                 Button("About Acouplet", action: showAbout)
                 .accessibilityIdentifier("menu.about")
                 Divider()
-                if settings.isBackgroundServiceProcess {
-                    Button("Background Service…") { SMAppService.openSystemSettingsLoginItems() }
-                } else {
-                    Button("Quit Acouplet") { NSApp.terminate(nil) }
-                        .keyboardShortcut("q")
-                }
+                Button("Quit Acouplet") { NSApp.terminate(nil) }
+                    .keyboardShortcut("q")
             } label: {
                 Image(systemName: "ellipsis")
                     .frame(width: 24, height: 24)

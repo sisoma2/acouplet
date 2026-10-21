@@ -227,18 +227,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if isSystemTerminating {
             retriesBackgroundServiceMigration = false
-        } else if backgroundServiceMigrationError != nil, !retriesBackgroundServiceMigration {
-            let alert = NSAlert()
-            alert.messageText = Self.backgroundServiceMigrationMessage
-            alert.informativeText = String(localized: "Acouplet may reopen until its startup settings are updated.")
-            alert.addButton(withTitle: String(localized: "Retry"))
-            alert.addButton(withTitle: String(localized: "Cancel"))
-            guard alert.runModal() == .alertFirstButtonReturn else {
-                isSystemTerminating = false
-                restartsAfterTermination = false
-                return .terminateCancel
-            }
-            retriesBackgroundServiceMigration = true
         }
         #endif
         if environment.devices.prepareEarbudFindingForTermination(completion: { [weak self] in
@@ -323,23 +311,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if !DEBUG && !ACOUPLET_PUBLIC_APIS_ONLY
         if retriesBackgroundServiceMigration {
             retriesBackgroundServiceMigration = false
-            environment.devices.systemWillSleep()
-            environment.noiseModeHUD.dismiss()
             environment.settings.defaults.removeObject(forKey: LegacyBackgroundService.attemptKey)
-            do {
-                try LegacyBackgroundService.prepare(defaults: environment.settings.defaults)
-            } catch {
-                NSLog("Background service migration failed: %@", error.localizedDescription)
-                environment.settings.backgroundServiceMigrationError = Self.backgroundServiceMigrationMessage
-                environment.devices.resetEarbudFindingTermination()
-                environment.devices.systemDidWake()
-                environment.devices.cancelTermination()
-                environment.settings.selectedSettingsPane = "general"
-                showSettings()
-                isSystemTerminating = false
-                restartsAfterTermination = false
-                return .terminateCancel
-            }
+            restartsAfterTermination = true
         }
         #endif
         return .terminateNow
@@ -390,13 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if restartsAfterTermination { relaunch() }
     }
 
-    /// Opens the app again after this copy has finished terminating (G8).
-    ///
-    /// The background service exits with a failure status, which its KeepAlive (`SuccessfulExit = false`)
-    /// turns into a relaunch by launchd. A copy of its own asks `open` to start a new copy once this
-    /// process has exited, so the new one does not find this one still running and defer to it.
     private func relaunch() {
-        if environment.settings.isBackgroundServiceProcess { exit(EX_TEMPFAIL) }
         let reopen = Process()
         reopen.executableURL = URL(fileURLWithPath: "/bin/sh")
         reopen.arguments = ["-c", "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep 0.2; done; exec /usr/bin/open -n \"$2\"",

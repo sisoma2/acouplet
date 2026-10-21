@@ -2,6 +2,26 @@
 
 # Validation history
 
+## Normal app startup
+
+On 2026-10-21, 34 focused Settings XCTest cases, 107 app installation/removal
+fixtures and 93 packaging fixtures passed. The native legacy-service migration
+check used disposable LaunchAgents to exercise normal and service-managed startup,
+startup preference preservation, failure/retry handling and ownership validation.
+Ruff lint and formatting checks passed.
+
+Signed Release build 195 was installed over private-certificate build 193 on
+macOS 26.7.1 (25G241), retaining the same private certificate and loaded LDAC driver
+revision 8. The installed executable matched the Release build. The old
+`dev.baglayan.Acouplet.agent` job and plist were absent, and the app ran from
+`/Applications/Acouplet.app` without `--background-service`.
+
+LDAC streamed at 96 kHz / 990 kbps. Normal Quit stopped the app and its owner
+worker, and the app remained stopped during five seconds of observation. Opening
+the installed app started a new LDAC session, and the user confirmed normal
+audible playback after reopening. The driver reported `current`;
+neither a Mac reboot nor a Core Audio restart was needed for this update.
+
 ## Private certificate authentication and revision 8
 
 On 2026-10-21, a privately signed Release with driver revision 8 passed the

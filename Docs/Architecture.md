@@ -49,6 +49,28 @@ charging-case views.
 contains noise modes, listening presets and ambient controls. Its content keeps
 the existing sibling layout and accessibility identifiers.
 
+## App startup
+
+Acouplet runs as a normal menu-bar app. **Launch at login** uses
+`SMAppService.mainApp`; Quit stops the app and LDAC playback, and a crash does not
+automatically restart the app. The audio driver and LDAC owner worker do not
+require the main app to be a LaunchAgent.
+
+The local installer retires the existing `dev.baglayan.Acouplet.agent` job and
+preserves its startup preference before removing its plist. Running updates
+reopen the app through LaunchServices; stopped apps remain stopped.
+
+DMG and other app replacements also retire the old job on first launch.
+`LegacyBackgroundService` validates the owned configuration and uses a temporary
+one-shot migration job so it can unload an app that launchd started. A normal
+launch resumes after retirement; a launch managed by the old job is replaced by
+a normal launch after its process exits. Migration runs away from the main thread
+and retains retry handling for failures. It does not create a permanent job.
+
+The migrated login preference is applied once through Settings, including an
+existing opt-out. Subsequent changes to **Launch at login** remain the user's
+choice.
+
 ## LDAC driver operations
 
 `LDACController` coordinates playback and checks that playback is stopped before

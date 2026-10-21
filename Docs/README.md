@@ -10,7 +10,7 @@ For installation and everyday use, start with the [project README](../README.md)
 | --- | --- |
 | [Development](Development.md) | Python tooling and Ruff, Xcode requirements, builds, signed local installation, artwork and build options. |
 | [Release automation](Releasing.md) | Private certificate setup, LDAC-enabled Release DMGs and GitHub Actions artifacts without Apple membership. |
-| [Source boundaries](Architecture.md) | Feature state, Settings and menu views, LDAC driver operations and their validation. |
+| [Source boundaries](Architecture.md) | Feature state, Settings and menu views, normal app startup, legacy service migration and LDAC driver operations. |
 | [Testing](Testing.md) | Unit tests, offline fixtures, isolated GUI tests, build reuse and logs. |
 | [Headphone controls](HeadphoneControls.md) | Noise-mode recovery, confirmation and audible feedback. |
 | [LDAC playback](LDACPlayback.md) | Driver reload without a Mac restart, capability discovery, latency, device profiles, call policies, application routing and health reports. |

@@ -142,7 +142,17 @@ Noise-control contrast checks crop each button from the panel screenshot already
 captured for that state, preserving all mode, appearance, selection and readability checks
 without requesting separate screenshots for each button.
 
-Native HUD presentation and the launch service check run separately.
+Native HUD presentation runs separately. To exercise legacy startup migration
+with disposable LaunchAgents, without opening the app or using Bluetooth, run:
+
+```sh
+python3 Packaging/check-service-migration.py
+```
+
+This checks normal and service-managed startup, login preference preservation,
+failure/retry handling and removal of the old job. It does not modify the installed
+Acouplet service or login item.
+
 Bluetooth, audio and connection recovery still need testing with real hardware.
 
 Packaging, app installation, LDAC driver installation, and direct-release

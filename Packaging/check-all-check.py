@@ -133,7 +133,6 @@ with tempfile.TemporaryDirectory(prefix="acouplet-check-all-check-") as director
     assert not any(
         Path(word).name
         in (
-            "check-service.sh",
             "NativeHUDCheck",
             "install",
             "direct.sh",

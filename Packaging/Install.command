@@ -255,28 +255,17 @@ done
 controls_unregistered=false
 update_started=false
 new_app_installed=false
-plist_written=false
+plist_removed=false
 service_was_loaded=false
-service_should_start=true
+app_should_start=true
 install_complete=false
 update_request="$HOME/Library/Caches/dev.baglayan.Acouplet/ldac-update-request"
 update_request_written=false
-login_item_removed=false
-if [[ -e "$plist_path" ]]; then
-    service_should_start=false
-elif [[ -e "$HOME/Library/LaunchAgents/$legacy_labels[1].plist" ]]; then
-    service_should_start=false
-    if /bin/launchctl print "$domain/$legacy_labels[1]" >/dev/null 2>&1; then service_should_start=true; fi
-fi
+if [[ -d "$installed_app" ]]; then app_should_start=false; fi
 
 restore_installation() {
     if /bin/launchctl print "$domain/$label" >/dev/null 2>&1; then
         /bin/launchctl bootout "$domain/$label" || return 1
-    fi
-    # The new app removed the login item before its service started; give it back while that app is
-    # still in place, because older builds cannot register it from the command line.
-    if [[ "$login_item_removed" == true ]] && ! "$installed_executable" --register-login-item >/dev/null; then
-        print -u2 "The previous login item could not be restored. Turn on Launch at login in Acouplet Settings if you used it."
     fi
     if [[ -d "$backup_app" ]]; then
         if [[ -e "$installed_app" ]]; then
@@ -286,9 +275,9 @@ restore_installation() {
     elif [[ "$new_app_installed" == true ]]; then
         rm -rf "$installed_app" || return 1
     fi
-    if [[ "$plist_written" == true && -e "$backup_plist" ]]; then
+    if [[ "$plist_removed" == true && -e "$backup_plist" ]]; then
         mv -f "$backup_plist" "$plist_path" || return 1
-    elif [[ "$plist_written" == true ]]; then
+    elif [[ "$plist_removed" == true ]]; then
         rm -f "$plist_path" || return 1
     fi
     if [[ "$controls_unregistered" == true ]]; then
@@ -341,12 +330,17 @@ if [[ "$verify_local_update" == true ]]; then
 fi
 if [[ -e "$plist_path" ]]; then
     cp -p "$plist_path" "$backup_plist"
+    if ! "$staged_app/Contents/MacOS/Acouplet" --migrate-background-service-preferences; then
+        print -u2 "The previous startup preference could not be preserved."
+        exit 1
+    fi
 fi
 
 quit_patterns=("$process_pattern" "$legacy_patterns[@]")
 quit_identifiers=(dev.baglayan.Acouplet "$legacy_identifiers[@]")
 update_pids="$(running_pids "$process_pattern")"
-if [[ -n "$update_pids" ]] && { [[ "$service_should_start" == true ]] || /bin/launchctl print "$domain/$label" >/dev/null 2>&1; }; then
+if [[ -n "$update_pids" ]]; then
+    app_should_start=true
     mkdir -p "${update_request:h}"
     (umask 077; print -r -- "$$ $(/bin/date +%s) ${(j: :)${(f)update_pids}}" > "$update_request")
     update_request_written=true
@@ -354,6 +348,7 @@ fi
 for index in {1..3}; do
     original_pids="$(running_pids "$quit_patterns[$index]")"
     if [[ -n "$original_pids" ]]; then
+        app_should_start=true
         if ! /usr/bin/osascript - "$quit_identifiers[$index]" <<'APPLESCRIPT'
 on run arguments
     with timeout of 30 seconds
@@ -389,7 +384,6 @@ done
 update_started=true
 if /bin/launchctl print "$domain/$label" >/dev/null 2>&1; then
     service_was_loaded=true
-    service_should_start=true
     /bin/launchctl bootout "$domain/$label"
 fi
 for legacy_label in "$legacy_labels[@]"; do
@@ -433,80 +427,11 @@ mv "$staged_app" "$installed_app"
 new_app_installed=true
 /usr/bin/codesign --verify --deep --strict --test-requirement="=identifier \"dev.baglayan.Acouplet\" and $app_requirement" "$installed_app"
 
-mkdir -p "${plist_path:h}"
-# ProcessType Interactive: without it launchd starts the service as a daemon-type job and clamps the
-# whole process tree, LDAC helpers included, to the utility QoS (priority 20). An existing plist
-# without it differs from this one, so an update rewrites it and restarts the service.
-plist_content="$(cat <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>dev.baglayan.Acouplet.agent</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/Applications/Acouplet.app/Contents/MacOS/Acouplet</string>
-        <string>--background-service</string>
-    </array>
-    <key>AssociatedBundleIdentifiers</key>
-    <array>
-        <string>dev.baglayan.Acouplet</string>
-    </array>
-    <key>LimitLoadToSessionType</key>
-    <string>Aqua</string>
-    <key>ProcessType</key>
-    <string>Interactive</string>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>ACOUPLET_SERVICE_POLICY</key>
-        <string>successful-exit-v1</string>
-    </dict>
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
-</dict>
-</plist>
-PLIST
-)"
-expected_configuration="$(print -r -- "$plist_content" | /usr/bin/plutil -convert json -r -o - -)"
-if [[ ! -e "$plist_path" ]] ||
-   ! existing_configuration="$(/usr/bin/plutil -convert json -r -o - "$plist_path" 2>/dev/null)" ||
-   [[ "$existing_configuration" != "$expected_configuration" ]]; then
-    plist_written=true
-    print -r -- "$plist_content" > "$plist_path"
-    chmod 644 "$plist_path"
-    /usr/bin/plutil -lint "$plist_path"
+if [[ -e "$plist_path" ]]; then
+    plist_removed=true
+    rm -f "$plist_path"
 fi
-if [[ "$service_should_start" == true ]]; then
-    # Remove the login item before the service starts. A copy of the app that is still running when
-    # the service checks for duplicates makes the service quit, and a clean exit is not relaunched.
-    if ! login_item_result="$("$installed_executable" --unregister-login-item)"; then
-        print -u2 "The previous login-item registration could not be removed."
-        exit 1
-    fi
-    if [[ "$login_item_result" == *"login-item: removed"* ]]; then login_item_removed=true; fi
-    /bin/launchctl bootstrap "$domain" "$plist_path"
-    for attempt in {1..20}; do
-        service_state="$(/bin/launchctl print "$domain/$label")"
-        if [[ "$service_state" == *"state = running"* ]]; then
-            install_complete=true
-            break
-        fi
-        sleep 0.25
-    done
-else
-    install_complete=true
-fi
-if [[ "$install_complete" == false ]]; then
-    print -u2 "The replacement background service has not started."
-    print -u2 "Check System Settings > General > Login Items & Extensions for Acouplet."
-    exit 1
-fi
+install_complete=true
 
 for index in {1..2}; do
     legacy_app="$legacy_apps[$index]"
@@ -580,30 +505,28 @@ if [[ "$verify_local_update" == true ]]; then
         print "Control Center gallery: deferred; extension excluded"
         print "Device preference panes installed: ${#source_panes}"
         print "Release/staged/installed identity and strict signature verification: passed"
-        print -r -- "Background service requested by existing installer policy: $service_should_start"
+        print -r -- "Normal app launch requested: $app_should_start"
     } > "$receipt"
     print -r -- "Install receipt: $receipt"
 fi
-agent_pid=""
-if [[ "$service_should_start" == true ]]; then
-    # Report the service only if it is still running now, and start it once more if it has quit.
+if [[ "$app_should_start" == true ]]; then
+    /usr/bin/open "$installed_app"
+    app_pids=""
     for attempt in {1..20}; do
-        agent_pid="$(/bin/launchctl print "$domain/$label" 2>/dev/null | /usr/bin/awk '$1 == "pid" && $2 == "=" { print $3; exit }' || true)"
-        [[ -z "$agent_pid" ]] || break
-        if (( attempt == 1 )); then /bin/launchctl kickstart "$domain/$label" >/dev/null 2>&1 || true; fi
+        app_pids="$(running_pids "$process_pattern")"
+        [[ -z "$app_pids" ]] || break
         sleep 0.25
     done
-    if [[ -z "$agent_pid" ]]; then
-        print -u2 "Acouplet is installed, but its background service is not running. Open Acouplet from Applications to start it."
+    if [[ -z "$app_pids" ]]; then
+        print -u2 "Acouplet is installed but did not finish launching. Open it from Applications."
         exit 1
     fi
-    print "Acouplet is installed and running in the background (process $agent_pid)."
-    print "Its menu-bar icon appears when a supported Sony device is connected. Open Settings from the menu-bar menu."
+    print -r -- "Acouplet is installed and running (process ${(j:, :)${(f)app_pids}})."
 else
-    print "Acouplet is updated. Its previously stopped background service remains stopped."
-    print "Its menu-bar icon appears when a supported Sony device is connected."
+    print "Acouplet is updated and remains stopped. Open it from Applications when needed."
 fi
-print "Background access is managed in System Settings > General > Login Items & Extensions."
+print "Its menu-bar icon appears when a supported Sony device is connected."
+print "Manage Launch at login in Acouplet Settings."
 if [[ -f "$installed_app/Contents/Resources/Acouplet LDAC Output.pkg" ]]; then
     # The app compares its bundled driver with the installed and loaded ones; only it can read the loaded revision.
     driver_state="$("$installed_executable" --ldac-driver-state 2>/dev/null || true)"

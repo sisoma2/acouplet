@@ -25,8 +25,6 @@ enum AcoupletMain {
             exit(status)
         }
         #if !DEBUG && !ACOUPLET_PUBLIC_APIS_ONLY
-        // The helper that launchd starts to reload the LaunchAgent runs here, before NSApplication exists, so it
-        // never registers as a running copy of the app (G10).
         if CommandLine.arguments.contains("--migrate-background-service") {
             do {
                 try LegacyBackgroundService.runMigration()
@@ -34,9 +32,6 @@ enum AcoupletMain {
                 NSLog("Background service migration failed: %@", error.localizedDescription)
                 exit(EXIT_FAILURE)
             }
-            exit(EXIT_SUCCESS)
-        }
-        if handOffPlainLaunchToService() {
             exit(EXIT_SUCCESS)
         }
         #endif
@@ -51,17 +46,6 @@ enum AcoupletMain {
         return NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
             .contains { $0.processIdentifier != getpid() && $0.activationPolicy != .prohibited }
     }
-
-    #if !DEBUG && !ACOUPLET_PUBLIC_APIS_ONLY
-    private static func handOffPlainLaunchToService(arguments: [String] = CommandLine.arguments) -> Bool {
-        typealias Service = LegacyBackgroundService
-        let target = "\(Service.domain)/\(Service.label)"
-        guard arguments.count == 1, Bundle.main.bundleIdentifier == "dev.baglayan.Acouplet",
-              Bundle.main.executableURL?.path == Service.executablePath,
-              (try? Service.launchctl(["print", target], quiet: true)) != nil else { return false }
-        return (try? Service.launchctl(["kickstart", target], quiet: true)) != nil
-    }
-    #endif
 
     #if !ACOUPLET_PUBLIC_APIS_ONLY
     static func ldacDriverStateKeyword(_ state: LDACDriverInstaller.State) -> String {

@@ -1,5 +1,4 @@
 import AppKit
-import ServiceManagement
 import SwiftUI
 
 struct GeneralSettingsView: View {
@@ -46,22 +45,13 @@ struct GeneralSettingsView: View {
             }
             Section("Connection") {
                 Toggle("Reconnect automatically", isOn: $settings.reconnectAutomatically)
-                if settings.hasBackgroundService {
-                    LabeledContent("Background access") {
-                        Text(settings.backgroundServiceStatus == .enabled ? String(localized: "Allowed") : String(localized: "Not enabled")).foregroundStyle(.primary)
-                    }
-                    Button("Login Items…") { SMAppService.openSystemSettingsLoginItems() }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(Color.accentColor)
-                } else {
-                    Toggle(
-                        "Launch at login",
-                        isOn: Binding(
-                            get: { settings.launchAtLogin },
-                            set: { settings.setLaunchAtLogin($0) }
-                        )
+                Toggle(
+                    "Launch at login",
+                    isOn: Binding(
+                        get: { settings.launchAtLogin },
+                        set: { settings.setLaunchAtLogin($0) }
                     )
-                }
+                )
                 if let error = settings.backgroundServiceMigrationError ?? settings.launchAtLoginError {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)

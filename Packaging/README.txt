@@ -8,11 +8,12 @@ Install or update
 2. Keep the extracted package together and open Install.command without sudo.
 3. Open Acouplet from Applications.
 
-The installer preserves settings and adds a login service that restarts the app
-if it crashes. A normal quit leaves it stopped until you open it or log in again.
-Manage background access in System Settings > General > Login
-Items & Extensions. If installation fails, keep any recovery files named in
-the error.
+The installer preserves settings and runs Acouplet as a normal menu-bar app.
+Updates retire the old background service and preserve its startup preference.
+Manage Launch at login in Acouplet Settings. Quit stops the app and LDAC playback;
+the app does not automatically restart after a crash. A stopped app stays stopped
+after an update until you open it. If installation fails, keep any recovery files
+named in the error.
 
 When switching from an upstream app to a build signed by your own team, check
 the installed app's TeamIdentifier with codesign -dv --verbose=2, then run
