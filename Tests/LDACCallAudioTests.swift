@@ -192,6 +192,68 @@ final class LDACCallAudioTests: XCTestCase {
         XCTAssertEqual(hardware.output, "usb-output")
     }
 
+    func testHeadsetOutputIsSelectedAfterMicrophoneChangesTheOutputRoute() {
+        let hardware = Hardware()
+        hardware.output = "usb-output"
+        hardware.outputAfterInputSelection = "built-in-output"
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        XCTAssertEqual(hardware.selections, ["headset-input", "headset-output"])
+        XCTAssertEqual(hardware.output, "headset-output")
+        XCTAssertTrue(audio.finishCall())
+        XCTAssertEqual(hardware.output, "usb-output")
+    }
+
+    func testHeadsetOutputIsSelectedEvenWhenMicrophoneSelectionFails() {
+        let hardware = Hardware()
+        hardware.rejectInputWrites = true
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        XCTAssertEqual(hardware.output, "headset-output")
+        XCTAssertNotNil(audio.issue)
+        hardware.rejectInputWrites = false
+        hardware.outputAfterInputSelection = "built-in-output"
+        audio.routeForCall()
+        XCTAssertEqual(hardware.input, "headset-input")
+        XCTAssertEqual(hardware.output, "headset-output")
+        XCTAssertNil(audio.issue)
+    }
+
+    func testBluetoothProfileChangeSelectsNewHeadsetOutputAndRestoresOriginal() {
+        let hardware = Hardware()
+        hardware.active = true
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        hardware.headsetOutput = "headset-call-output"
+        hardware.output = "built-in-output"
+        audio.refresh()
+        XCTAssertEqual(hardware.output, "headset-call-output")
+        XCTAssertTrue(audio.finishCall())
+        XCTAssertEqual(hardware.output, "built-in-output")
+    }
+
+    func testHeadsetReconnectionRetriesRoutingAndPreservesOriginalDefaults() {
+        let hardware = Hardware()
+        hardware.active = true
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        hardware.available = false
+        hardware.input = "fallback-input"
+        hardware.output = "fallback-output"
+        audio.refresh()
+        hardware.available = true
+        audio.refresh()
+        XCTAssertEqual(hardware.input, "headset-input")
+        XCTAssertEqual(hardware.output, "headset-output")
+        XCTAssertTrue(audio.finishCall())
+        XCTAssertEqual(hardware.input, "built-in-input")
+        XCTAssertEqual(hardware.output, "built-in-output")
+    }
+
     func testExistingHeadsetDefaultsAreNotChangedOrRestored() {
         let hardware = Hardware()
         hardware.input = "headset-input"
@@ -449,8 +511,11 @@ final class LDACCallAudioTests: XCTestCase {
         var available = true
         var unreadable = false
         var rejectWrites = false
+        var rejectInputWrites = false
         var input = "built-in-input"
         var output = "built-in-output"
+        var headsetOutput = "headset-output"
+        var outputAfterInputSelection: String?
         var time: TimeInterval = 0
         var selections: [String] = []
 
@@ -459,10 +524,11 @@ final class LDACCallAudioTests: XCTestCase {
                 if self.unreadable { throw Failure() }
                 return self.active
             }, defaultInputUID: { self.input }, headsetInputUID: { _ in self.available ? "headset-input" : nil }, selectInput: {
-                if self.rejectWrites { throw Failure() }
+                if self.rejectWrites || self.rejectInputWrites { throw Failure() }
                 self.input = $0
                 self.selections.append($0)
-            }, defaultOutputUID: { self.output }, headsetOutputUID: { _ in self.available ? "headset-output" : nil }, selectOutput: {
+                if $0 == "headset-input", let output = self.outputAfterInputSelection { self.output = output }
+            }, defaultOutputUID: { self.output }, headsetOutputUID: { _ in self.available ? self.headsetOutput : nil }, selectOutput: {
                 if self.rejectWrites { throw Failure() }
                 self.output = $0
                 self.selections.append($0)

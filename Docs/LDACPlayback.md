@@ -154,11 +154,17 @@ readiness, not audible resilience. Neither a smaller sender reserve nor a manual
 offset removes receiver buffering.
 
 The default microphone policy restores normal headset call audio for microphone
-activity. Separate microphone mode selects a chosen built-in or USB input and keeps
-LDAC only when that input is appropriate; headset microphone use still requires
-handoff. Manual mode exposes explicit pause/resume controls while preserving headset
+activity, automatically selecting the same headset for both microphone input and
+audio output when its Bluetooth devices return. The output is selected after the
+microphone so activating the call profile does not leave audio on another output.
+Routing retries when the headset devices disappear or change during reconnection.
+After the call, the previous devices are restored before LDAC resumes; manual input
+and output changes made during the call are preserved while the headset devices
+remain available. Separate microphone mode selects a chosen built-in or USB input
+and keeps LDAC only when that input is appropriate; headset microphone use still
+requires handoff. Manual mode exposes explicit pause/resume controls while preserving headset
 handoff if a headset input is used. The menu identifies the process and microphone
-currently in use. Input changes made by the user are preserved during restoration.
+currently in use.
 Qualify microphone availability, app restarts and echo cancellation in actual call
 applications before relying on separate-microphone mode. LDAC provides no microphone
 return channel.

@@ -2,6 +2,26 @@
 
 # Validation history
 
+## Bluetooth headset discovery during calls
+
+On 2026-10-21, a Zoom test with WH-1000XM5 headphones on macOS 26.7.1
+detected microphone activity and restored ordinary Bluetooth, but left the Mac
+speakers selected. A read-only probe using the production headset lookup
+reproduced missing input and output results despite both devices being alive,
+eligible and reporting the expected Bluetooth transport and channel counts.
+
+The optional generic transport read inferred `Optional<UInt32>` and requested
+five bytes for Core Audio's four-byte transport property. The size check rejected
+every device. Specifying a concrete `UInt32` initial value without an optional
+binding type annotation fixed the read; the production lookup then found both
+real headset endpoints. A native check using the production call-routing class
+then selected the real headset input and output and restored both previous
+defaults afterward, without recording audio. All 33 focused call-routing and
+Core Audio XCTest cases passed. Signed Release build 200 was installed with the
+existing private certificate, its executable matched the Release build, and the
+LDAC driver reported `current`. The user then confirmed that the automatic headset
+handoff worked in Zoom.
+
 ## Normal app startup
 
 On 2026-10-21, 34 focused Settings XCTest cases, 107 app installation/removal

@@ -47,10 +47,10 @@ final class LDACCallAudio: ObservableObject {
     private var idleSince: TimeInterval?
     private var hasObservedActivity = false
     private var wantsHeadsetInput = false
-    private var inputSelected = false
+    private var routedInputUID: String?
     private var savedInputUID: String?
     private var selectedInputUID: String?
-    private var outputSelected = false
+    private var routedOutputUID: String?
     private var savedOutputUID: String?
     private var selectedOutputUID: String?
 
@@ -90,10 +90,10 @@ final class LDACCallAudio: ObservableObject {
         manualHandoffRequested = false
         microphoneActivities = []
         wantsHeadsetInput = false
-        inputSelected = false
+        routedInputUID = nil
         savedInputUID = nil
         selectedInputUID = nil
-        outputSelected = false
+        routedOutputUID = nil
         savedOutputUID = nil
         selectedOutputUID = nil
         idleSince = nil
@@ -169,8 +169,10 @@ final class LDACCallAudio: ObservableObject {
 
     func routeForCall() {
         wantsHeadsetInput = true
-        do { try selectHeadsetAudio() }
-        catch {
+        do {
+            try selectHeadsetAudio()
+            setIssue(nil)
+        } catch {
             setIssue(String(localized: "Headset call audio could not be selected. Select the headset in Sound settings."))
         }
     }
@@ -187,10 +189,10 @@ final class LDACCallAudio: ObservableObject {
                 try access.selectOutput(savedOutputUID)
             }
             wantsHeadsetInput = false
-            inputSelected = false
+            routedInputUID = nil
             savedInputUID = nil
             selectedInputUID = nil
-            outputSelected = false
+            routedOutputUID = nil
             savedOutputUID = nil
             selectedOutputUID = nil
             setIssue(nil)
@@ -207,23 +209,38 @@ final class LDACCallAudio: ObservableObject {
 
     private func selectHeadsetAudio() throws {
         guard let address else { return }
-        if !outputSelected, let uid = try access.headsetOutputUID(address) {
-            let previous = try access.defaultOutputUID()
-            if previous != uid {
-                try access.selectOutput(uid)
-                savedOutputUID = previous
+        let previousOutput = try access.defaultOutputUID()
+        var inputError: Error?
+        do {
+            if try selectHeadsetInput(address: address) { routedOutputUID = nil }
+        } catch { inputError = error }
+        if let uid = try access.headsetOutputUID(address) {
+            if routedOutputUID != uid {
+                if try access.defaultOutputUID() != uid {
+                    try access.selectOutput(uid)
+                    if selectedOutputUID == nil { savedOutputUID = previousOutput }
+                }
                 selectedOutputUID = uid
+                routedOutputUID = uid
             }
-            outputSelected = true
+        } else { routedOutputUID = nil }
+        if let inputError { throw inputError }
+    }
+
+    private func selectHeadsetInput(address: String) throws -> Bool {
+        guard let uid = try access.headsetInputUID(address) else {
+            routedInputUID = nil
+            return false
         }
-        guard !inputSelected, let uid = try access.headsetInputUID(address) else { return }
+        guard routedInputUID != uid else { return false }
         let previous = try access.defaultInputUID()
         if previous != uid {
             try access.selectInput(uid)
-            savedInputUID = previous
-            selectedInputUID = uid
+            if selectedInputUID == nil { savedInputUID = previous }
         }
-        inputSelected = true
+        selectedInputUID = uid
+        routedInputUID = uid
+        return previous != uid
     }
 }
 
@@ -339,7 +356,7 @@ enum LDACCallHardware {
     static func headsetUID(address: String, scope: AudioObjectPropertyScope) throws -> String? {
         for device in try objects(system, selector: kAudioHardwarePropertyDevices) {
             guard let uid = try? string(device, selector: kAudioDevicePropertyDeviceUID),
-                  let transport: UInt32 = try? read(device, selector: kAudioDevicePropertyTransportType, initial: 0),
+                  let transport = try? read(device, selector: kAudioDevicePropertyTransportType, initial: UInt32(0)),
                   LDACNativeOutput.canTransferControls(uid: uid, transport: transport, address: address),
                   (try? hasChannels(device, scope: scope)) == true else { continue }
             return uid
