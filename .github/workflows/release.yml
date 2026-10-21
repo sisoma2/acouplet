@@ -203,10 +203,10 @@ jobs:
       - name: Upload Release DMG
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: Acouplet-${{ env.ACOUPLET_MARKETING_VERSION }}-${{ env.ACOUPLET_BUILD_NUMBER }}
+          name: Acouplet-${{ steps.configuration.outputs.version }}-${{ steps.configuration.outputs.build_number }}
           path: |
-            dist/Acouplet-${{ env.ACOUPLET_MARKETING_VERSION }}.dmg
-            dist/Acouplet-${{ env.ACOUPLET_MARKETING_VERSION }}-evidence.tar.gz
+            dist/Acouplet-${{ steps.configuration.outputs.version }}.dmg
+            dist/Acouplet-${{ steps.configuration.outputs.version }}-evidence.tar.gz
             dist/SHA256SUMS.txt
           if-no-files-found: error
           compression-level: 0
