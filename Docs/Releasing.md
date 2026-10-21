@@ -116,6 +116,8 @@ follow `uv.lock`, and tests run through `uv run --locked`. The job also runs
 Ruff lint and formatting checks, plus the update-preparation and LDAC
 qualification checks with `/usr/bin/python3` to retain Python 3.9 compatibility
 for packaging scripts that use the system interpreter.
+The test checkout includes the tagged commit and its parent because the source
+provenance fixtures exercise changes to both the Git index and `HEAD`.
 
 The test and build jobs grant `GITHUB_TOKEN` only `contents: read` and disable
 checkout credential persistence. A separate publishing job grants
