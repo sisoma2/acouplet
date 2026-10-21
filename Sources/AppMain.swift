@@ -159,18 +159,18 @@ private struct AppAboutView: View {
                 .frame(width: 64, height: 64)
                 .accessibilityHidden(true)
             Text("Acouplet").font(.title2.bold())
-            if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
-                Text("Version \(version)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("about.version")
+            HStack(spacing: 12) {
+                if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+                    Text("Version \(version)")
+                        .accessibilityIdentifier("about.version")
+                }
+                if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+                    Text("Build \(build)")
+                        .accessibilityIdentifier("about.build")
+                }
             }
-            if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
-                Text("Build \(build)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("about.build")
-            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
             Text("Copyright © 2026 Meriç Bağlayan")
                 .font(.caption)
                 .foregroundStyle(.secondary)

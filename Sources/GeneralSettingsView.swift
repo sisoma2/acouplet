@@ -175,7 +175,7 @@ struct GeneralSettingsView: View {
             #endif
         }
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 2) {
+            HStack(spacing: 12) {
                 if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
                     Text("Version \(version)")
                         .accessibilityIdentifier("settings.version")

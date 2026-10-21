@@ -360,7 +360,7 @@ Actions artifacts and are retained for 14 days.
 
 ## Local builds and validation
 
-Settings and About show the release version and build number on separate lines.
+Settings and About show the release version and build number side by side on one line.
 GitHub builds take the version from the pushed tag without its leading `v`.
 Local packages default to the latest version tag reachable from `HEAD`, so a
 build after `v0.31.0` displays `Version 0.31.0` while its build number increases
