@@ -109,7 +109,7 @@ replace every reference to that action with the full 40-character commit SHA,
 and update this table. Keep the repository's SHA requirement enabled.
 The test and build jobs grant `GITHUB_TOKEN` only `contents: read` and disable
 checkout credential persistence. A separate publishing job grants
-`contents: write` to create the release and its tag using the
+`contents: write` to create the release for the pushed tag using the
 [GitHub CLI](https://cli.github.com/manual/gh_release_create) and the automatic
 `GITHUB_TOKEN`. It downloads the build artifact without checking out or running
 repository code and has no signing secrets. No personal access token is needed.
@@ -207,29 +207,40 @@ your certificate.
 
 ## Generate and download a Release
 
-Commit and push the workflow and intended source changes. The workflow must be
-present on the repository's default branch for **Run workflow** to appear.
-Open **Actions > Release > Run workflow**, select the branch to build, and enter:
+Commit and push the workflow and intended source changes before creating the
+release tag. The workflow runs automatically when a new tag with the form
+`vMAJOR.MINOR` or `vMAJOR.MINOR.PATCH` is pushed, such as `v0.31` or `v0.31.0`.
+It removes the leading `v` to obtain the app version. Branch pushes, tag updates
+and tag deletions do not start release builds. There are no manual version or
+build-number inputs.
 
-| Input | Value |
-| --- | --- |
-| `version` | Marketing version with two or three numeric components, such as `0.31.0`. |
-| `build_number` | Positive integer greater than every previously distributed build number. |
-
-Build numbers are explicit because a fresh runner cannot read the local build
-counter or an installed app. Use a new number for each new build and a new
-version for each published release.
-
-The publishing job creates the tag `vVERSION` at the exact commit built by the
-run and publishes `Acouplet VERSION` as the latest release. An existing tag is
-accepted only when it resolves to that same commit. Existing releases are not
-overwritten; rerunning an already published version fails at release creation.
-
-To build a tag with the GitHub CLI, provide it with `--ref`:
+Create and push a tag at the commit you want to release:
 
 ```sh
-gh workflow run release.yml --ref YOUR_TAG -f version=0.31.0 -f build_number=123
+git tag -a v0.31.0 -m 'Acouplet 0.31.0'
+git push origin v0.31.0
 ```
+
+The tagged commit must contain this workflow. Each tag has its own concurrency
+group, so pushing another release tag does not cancel a pending release for a
+different version. To retry a failed run, use **Re-run jobs** in GitHub Actions.
+
+The workflow generates the build number as `195 + github.run_number`. The
+offset preserves continuity with the existing build 195: workflow run 1 uses
+build 196, run 2 uses build 197, and so on. GitHub's
+[workflow run number](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#github-context)
+increases with each new run and remains unchanged on retries. The build job
+passes its generated number to the publishing job so the package, artifact name
+and release notes agree. No build-number input or repository variable is needed.
+Use a new version for each published release. If builds from another source
+overtake this numbering range, increase the offset before publishing further
+releases.
+
+The publishing job uses the pushed tag `vVERSION` and publishes
+`Acouplet VERSION` as the latest release. It requires the tag to exist and resolve
+to the exact commit built by the run. A missing or moved tag fails publication.
+Existing releases are not overwritten; rerunning an already published version
+fails at release creation.
 
 The workflow runs three jobs in sequence: **Tests**, **Build Release** and
 **Publish GitHub Release**. The test job runs the unit and offline fixture suite

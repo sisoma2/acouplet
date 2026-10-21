@@ -1,35 +1,28 @@
 name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: Version with two or three numeric components
-        required: true
-        type: string
-      build_number:
-        description: Positive build number greater than every previous release
-        required: true
-        type: string
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
   contents: read
 
 concurrency:
-  group: release
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   tests:
     name: Tests
+    if: github.event.created && !github.event.deleted
     runs-on: xcode-27
     timeout-minutes: 90
     defaults:
       run:
         shell: bash
     env:
-      ACOUPLET_MARKETING_VERSION: ${{ inputs.version }}
-      ACOUPLET_BUILD_NUMBER: ${{ inputs.build_number }}
       CODE_SIGN_IDENTITY: '-'
       DEVELOPMENT_TEAM: ''
       ACOUPLET_INSTALLER_SIGNING_IDENTITY: ''
@@ -70,12 +63,13 @@ jobs:
     needs: tests
     runs-on: xcode-27
     timeout-minutes: 90
+    outputs:
+      version: ${{ steps.configuration.outputs.version }}
+      build_number: ${{ steps.configuration.outputs.build_number }}
     defaults:
       run:
         shell: bash
     env:
-      ACOUPLET_MARKETING_VERSION: ${{ inputs.version }}
-      ACOUPLET_BUILD_NUMBER: ${{ inputs.build_number }}
       CODE_SIGN_IDENTITY: '-'
       DEVELOPMENT_TEAM: ''
       ACOUPLET_INSTALLER_SIGNING_IDENTITY: ''
@@ -86,6 +80,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate release configuration
+        id: configuration
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
@@ -95,14 +90,16 @@ jobs:
             echo '::error::Configure the private signing certificate, password and fingerprint described in Docs/Releasing.md.'
             exit 1
           fi
-          if [[ ! "$ACOUPLET_MARKETING_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
-            echo '::error::Version must contain two or three numeric components.'
+          if [[ "$GITHUB_REF_TYPE" != tag || ! "$GITHUB_REF_NAME" =~ ^v[0-9]+(\.[0-9]+){1,2}$ ]]; then
+            echo '::error::Release tags must start with v followed by two or three numeric components.'
             exit 1
           fi
-          if [[ ! "$ACOUPLET_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
-            echo '::error::Build number must be a positive integer.'
-            exit 1
-          fi
+          version="${GITHUB_REF_NAME#v}"
+          build_number="$((195 + GITHUB_RUN_NUMBER))"
+          echo "ACOUPLET_MARKETING_VERSION=$version" >> "$GITHUB_ENV"
+          echo "ACOUPLET_BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
           echo "DEVELOPER_DIR=$(/usr/bin/xcode-select -p)" >> "$GITHUB_ENV"
           /usr/bin/xcodebuild -version
           /usr/bin/xcrun --sdk macosx --show-sdk-version
@@ -206,10 +203,10 @@ jobs:
       - name: Upload Release DMG
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: Acouplet-${{ inputs.version }}-${{ inputs.build_number }}
+          name: Acouplet-${{ env.ACOUPLET_MARKETING_VERSION }}-${{ env.ACOUPLET_BUILD_NUMBER }}
           path: |
-            dist/Acouplet-${{ inputs.version }}.dmg
-            dist/Acouplet-${{ inputs.version }}-evidence.tar.gz
+            dist/Acouplet-${{ env.ACOUPLET_MARKETING_VERSION }}.dmg
+            dist/Acouplet-${{ env.ACOUPLET_MARKETING_VERSION }}-evidence.tar.gz
             dist/SHA256SUMS.txt
           if-no-files-found: error
           compression-level: 0
@@ -238,14 +235,14 @@ jobs:
       run:
         shell: bash
     env:
-      ACOUPLET_MARKETING_VERSION: ${{ inputs.version }}
-      ACOUPLET_BUILD_NUMBER: ${{ inputs.build_number }}
+      ACOUPLET_MARKETING_VERSION: ${{ needs.release.outputs.version }}
+      ACOUPLET_BUILD_NUMBER: ${{ needs.release.outputs.build_number }}
       GH_REPO: ${{ github.repository }}
     steps:
       - name: Download verified Release files
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
         with:
-          name: Acouplet-${{ inputs.version }}-${{ inputs.build_number }}
+          name: Acouplet-${{ env.ACOUPLET_MARKETING_VERSION }}-${{ env.ACOUPLET_BUILD_NUMBER }}
           path: dist
 
       - name: Verify downloaded DMG checksum
@@ -257,14 +254,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="v$ACOUPLET_MARKETING_VERSION"
-          existing_tag="$(gh api --paginate "repos/$GH_REPO/git/matching-refs/tags/$tag" \
-            --jq ".[] | select(.ref == \"refs/tags/$tag\") | .ref")"
-          if [[ -n "$existing_tag" ]]; then
-            tag_commit="$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha)"
-            if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
-              echo "::error::Tag $tag does not point to the commit built by this run."
-              exit 1
-            fi
+          tag_commit="$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha)"
+          if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+            echo "::error::Tag $tag does not point to the commit built by this run."
+            exit 1
           fi
           notes="$RUNNER_TEMP/acouplet-release-notes.md"
           cat > "$notes" <<EOF
@@ -285,7 +278,7 @@ jobs:
             "dist/Acouplet-$ACOUPLET_MARKETING_VERSION.dmg" \
             dist/SHA256SUMS.txt \
             --repo "$GH_REPO" \
-            --target "$GITHUB_SHA" \
+            --verify-tag \
             --title "Acouplet $ACOUPLET_MARKETING_VERSION" \
             --notes-file "$notes" \
             --latest)"
