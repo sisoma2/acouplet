@@ -45,6 +45,26 @@ overwrite existing files, and `.build/` is ignored by Git.
 
 ## Configure GitHub Actions
 
+Under **Settings > Actions > General**, the workflow supports allowing repository
+owner actions plus selected external actions, with **Allow actions created by
+GitHub** and **Require actions to be pinned to a full-length commit SHA** enabled.
+It uses only `actions/checkout` and `actions/upload-artifact`, so Marketplace
+verified creators and additional allowed-action patterns are unnecessary.
+
+All three action references are pinned to full commit SHAs resolved from the
+official repositories' `v6` tags:
+
+| Action | Pinned commit |
+| --- | --- |
+| `actions/checkout` | `d23441a48e516b6c34aea4fa41551a30e30af803` |
+| `actions/upload-artifact` | `b7c566a772e6b6bfb58ed0dc250532a479d7789f` |
+
+When updating an action, verify the release's commit in its official repository,
+replace every reference to that action with the full 40-character commit SHA,
+and update this table. Keep the repository's SHA requirement enabled.
+The workflow grants `GITHUB_TOKEN` only `contents: read` and disables checkout
+credential persistence.
+
 Under **Settings > Secrets and variables > Actions**, add these repository
 secrets:
 
