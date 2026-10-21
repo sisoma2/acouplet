@@ -198,9 +198,12 @@ The workflow uses GitHub's
 [Xcode 27 runner](https://github.blog/changelog/2026-10-15-xcode-27-runner-image-generally-available/).
 The test and build jobs run on separate disposable runners. The test job has no
 signing secrets. After tests pass, the build job creates a password-protected
-temporary keychain and trusts the certificate for code signing. Cleanup removes
-the trust entry, keychain and credential files. Users installing the app do not
-need your private key or a system-wide trust entry for your certificate.
+temporary keychain and trusts the certificate for code signing. Immediately
+after the DMG's final signature verification, cleanup removes the trust entry,
+keychain and credential files, before evidence archiving and artifact uploads.
+Cleanup uses `if: always()` so it also runs when an earlier step fails. Users
+installing the app do not need your private key or a system-wide trust entry for
+your certificate.
 
 ## Generate and download a Release
 
@@ -232,13 +235,12 @@ The workflow runs three jobs in sequence: **Tests**, **Build Release** and
 **Publish GitHub Release**. The test job runs the unit and offline fixture suite
 and uploads `Acouplet-test-results-RUN_ID`, including its summary and
 individual check logs, even when tests fail. A failed test job prevents the build
-and publishing jobs from running. Test results use a stable name within each
-workflow run so rerunning a failed build can download the earlier passing
-results. Rerunning tests replaces that run's test-results artifact.
+and publishing jobs from running. Rerunning tests replaces that run's
+test-results artifact. Test logs remain in that separate Actions artifact;
+the build job does not download them or include them in the release evidence.
 
-The build job downloads the passing test results for the release evidence,
-builds a Release with `Packaging/package.sh --local`, and exercises the driver's
-real certificate checks with signed test processes. It verifies that the expected
+The build job builds a Release with `Packaging/package.sh --local` and exercises
+the driver's real certificate checks with signed test processes. It verifies that the expected
 signer is accepted and that an unrelated app identifier, an ad-hoc signature and a
 certificate outside the configured pin are rejected. It then creates and
 verifies a compressed DMG without Finder automation. It clears extended
@@ -246,14 +248,17 @@ attributes from the app inside a writable image before compression, then verifie
 the final mounted app's certificate and executable. This prevents Finder metadata
 introduced during image creation from invalidating the strict signature check.
 
-A successful build uploads the `Acouplet-VERSION-BUILD` Actions artifact. The
-publishing job downloads it, rechecks the DMG checksum and creates a GitHub
-Release with these downloadable assets:
+A successful build uploads the `Acouplet-VERSION-BUILD` Actions artifact with
+the DMG, checksum and `Acouplet-VERSION-evidence.tar.gz`. The evidence archive
+contains the build receipt, build log and debugging symbols. It is retained
+only in the Actions artifact for debugging and is not attached to the GitHub
+Release.
+
+The publishing job downloads the build artifact, rechecks the DMG checksum and
+creates a GitHub Release with these downloadable assets:
 
 - `Acouplet-VERSION.dmg`, containing Acouplet and a shortcut to Applications.
 - `SHA256SUMS.txt`, a checksum using the DMG's downloadable filename.
-- `Acouplet-VERSION-evidence.tar.gz`, the build receipt, test and build logs,
-  and debugging symbols.
 
 Open the repository's **Releases** page and download the DMG and `SHA256SUMS.txt`
 into the same directory, then verify the DMG there:
@@ -289,9 +294,9 @@ verify it on the versions you distribute to.
 These builds use the development distribution, which disables the production
 Sparkle update feed. Publishing a GitHub Release does not publish a Sparkle
 update feed. Release assets remain available beyond the Actions artifact
-retention periods. The build artifact is retained for 30 days; test results and
-release diagnostics remain separate Actions artifacts and are retained for 14
-days.
+retention periods. The build artifact, including the evidence archive, is
+retained for 30 days; test results and release diagnostics remain separate
+Actions artifacts and are retained for 14 days.
 
 ## Local builds and validation
 
