@@ -360,6 +360,14 @@ Actions artifacts and are retained for 14 days.
 
 ## Local builds and validation
 
+Settings and About show the release version and build number on separate lines.
+GitHub builds take the version from the pushed tag without its leading `v`.
+Local packages default to the latest version tag reachable from `HEAD`, so a
+build after `v0.31.0` displays `Version 0.31.0` while its build number increases
+independently. `ACOUPLET_MARKETING_VERSION` can explicitly select a version,
+including when building a source checkout without tags. Without that override,
+packaging requires a reachable tag and rejects invalid version formats.
+
 Import the `.p12` into a local keychain and explicitly trust its public
 certificate for code signing on the build machine. Set its fingerprint as both
 the signing identity and pin, leaving the Apple team and installer identity empty:

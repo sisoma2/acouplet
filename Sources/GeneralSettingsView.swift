@@ -175,14 +175,20 @@ struct GeneralSettingsView: View {
             #endif
         }
         .safeAreaInset(edge: .bottom) {
-            if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
-                Text("Version \(version)")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.bottom, 8)
-                    .accessibilityIdentifier("settings.version")
+            VStack(spacing: 2) {
+                if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+                    Text("Version \(version)")
+                        .accessibilityIdentifier("settings.version")
+                }
+                if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+                    Text("Build \(build)")
+                        .accessibilityIdentifier("settings.build")
+                }
             }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 8)
         }
     }
 

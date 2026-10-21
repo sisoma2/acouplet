@@ -244,6 +244,42 @@ def run_check(
 ):
     with tempfile.TemporaryDirectory(prefix="acouplet-package-check-") as directory:
         root = Path(directory).resolve()
+        git_environment = dict(
+            os.environ,
+            GIT_AUTHOR_NAME="Package check",
+            GIT_AUTHOR_EMAIL="package-check@example.invalid",
+            GIT_COMMITTER_NAME="Package check",
+            GIT_COMMITTER_EMAIL="package-check@example.invalid",
+        )
+        git_commands = [
+            ["init", "--quiet"],
+            ["commit", "--quiet", "--allow-empty", "-m", "Initial version"],
+        ]
+        if mode != "no-version-tag":
+            git_commands.extend(
+                [
+                    ["tag", "v0.30"],
+                    ["commit", "--quiet", "--allow-empty", "-m", "Release"],
+                    ["tag", "v0.31.0"],
+                    ["commit", "--quiet", "--allow-empty", "-m", "Local changes"],
+                ]
+            )
+        for arguments in git_commands:
+            subprocess.run(
+                [
+                    "/usr/bin/git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "tag.gpgsign=false",
+                    *arguments,
+                ],
+                env=git_environment,
+                check=True,
+                capture_output=True,
+            )
         scripts = root / "Packaging"
         scripts.mkdir()
         stubs = root / "stubs"
@@ -407,6 +443,12 @@ def run_check(
             assert "ACOUPLET_MARKETING_VERSION must contain" in result.stderr, (
                 result.stderr
             )
+        elif mode == "no-version-tag" and not signing.get("ACOUPLET_MARKETING_VERSION"):
+            assert not commands, commands
+            assert "No version tag is reachable from HEAD" in result.stderr, (
+                result.stderr
+            )
+            assert not (root / ".build/package-build-number").exists()
         elif mode == "private-invalid":
             assert not builds and "Private signing requires" in result.stderr, (
                 result.stderr
@@ -427,7 +469,7 @@ def run_check(
             )
             assert settings["CURRENT_PROJECT_VERSION"] == str(expected_build), settings
             assert settings["MARKETING_VERSION"] == signing.get(
-                "ACOUPLET_MARKETING_VERSION", "0." + str(expected_build)
+                "ACOUPLET_MARKETING_VERSION", "0.31.0"
             ), settings
             assert settings["ACOUPLET_DISTRIBUTION"] == (
                 "development" if local else "production"
@@ -823,6 +865,14 @@ for failure in (
 ):
     check(failure, {"CODE_SIGN_IDENTITY": "Developer ID Application"}, failure, False)
 check("counter-restored-from-installed", {}, "counter-restore", local=True)
+check("version-from-nearest-release-tag", {}, local=True)
+check("missing-version-tag-keeps-package", {}, "no-version-tag", False, local=True)
+check(
+    "explicit-version-without-tags",
+    {"ACOUPLET_MARKETING_VERSION": "0.32"},
+    "no-version-tag",
+    local=True,
+)
 check("counter-keeps-larger-persisted-build", {}, "counter-persisted", local=True)
 check(
     "patch-version-with-increasing-build",

@@ -165,6 +165,12 @@ private struct AppAboutView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("about.version")
             }
+            if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+                Text("Build \(build)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("about.build")
+            }
             Text("Copyright © 2026 Meriç Bağlayan")
                 .font(.caption)
                 .foregroundStyle(.secondary)

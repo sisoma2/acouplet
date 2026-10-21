@@ -953,6 +953,23 @@
         }
       }
     },
+    "Build %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Derleme %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Build %@"
+          }
+        }
+      }
+    },
     "Bundled driver": {
       "extractionState": "manual",
       "localizations": {

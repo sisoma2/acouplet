@@ -77,7 +77,14 @@ else
     fi
     build_number=$(( previous_build + 1 ))
 fi
-marketing_version="${ACOUPLET_MARKETING_VERSION:-0.$build_number}"
+marketing_version="${ACOUPLET_MARKETING_VERSION:-}"
+if [[ -z "$marketing_version" ]]; then
+    if ! version_tag="$(/usr/bin/git -C "$repo_root" describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null)"; then
+        print -u2 "No version tag is reachable from HEAD. Fetch release tags or set ACOUPLET_MARKETING_VERSION. The previous package was kept."
+        exit 1
+    fi
+    marketing_version="${version_tag#v}"
+fi
 if [[ ! "$marketing_version" =~ '^[0-9]+(\.[0-9]+){1,2}$' ]]; then
     print -u2 "ACOUPLET_MARKETING_VERSION must contain two or three numeric components. The previous package was kept."
     exit 1
@@ -222,6 +229,7 @@ if [[ "$local_update" == true ]]; then receipt="$package_dir/Local Build Receipt
     print -r -- "$source_provenance"
     print -r -- "Signing identity: $signing_identity"
     print -r -- "Private signing certificate SHA1: ${private_certificate:-none}"
+    print -r -- "Version: $marketing_version"
     print -r -- "Build number: $build_number"
     print -r -- "Distribution: $actual_distribution"
     print "Configuration: Release"
