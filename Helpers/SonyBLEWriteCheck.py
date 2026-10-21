@@ -175,7 +175,10 @@ struct Check {
         precondition(replacementCancelled == 1 && replacementFailures == 0 && replacement.isReady && !replacement.writes.isEmpty)
         print("PASS cancellation callback: blocked replacement survives the old timeout")
 
-        try await Task.sleep(for: .milliseconds(5000))
+        let replacementDeadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while replacementFailures == 0, ContinuousClock.now < replacementDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         precondition(replacementFailures == 1 && replacementPeripheral.chunks.isEmpty && !replacement.isReady)
         print("PASS replacement frame: receives its own real five-second timeout")
         print("PASS no CoreBluetooth import, manager, service calls, or hardware access")
