@@ -153,6 +153,7 @@ jobs:
           /usr/bin/xcrun --sdk macosx --show-sdk-version
 
       - name: Import private signing certificate
+        timeout-minutes: 3
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
@@ -179,7 +180,7 @@ jobs:
           /usr/bin/security import "$identity" -P "$P12_PASSWORD" -k "$keychain" -T /usr/bin/codesign
           /usr/bin/security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
           /usr/bin/security list-keychains -d user -s "$keychain"
-          sudo /usr/bin/security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" "$certificate"
+          sudo -n /usr/bin/security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" "$certificate"
           echo "CODE_SIGN_IDENTITY=$fingerprint" >> "$GITHUB_ENV"
           echo "ACOUPLET_SIGNING_CERTIFICATE_SHA1=$fingerprint" >> "$GITHUB_ENV"
           /bin/rm -f "$identity"
@@ -223,16 +224,9 @@ jobs:
 
       - name: Remove private signing credentials
         if: always()
+        timeout-minutes: 2
         run: |
-          certificate="$RUNNER_TEMP/acouplet-private.pem"
-          if [[ -f "$certificate" ]]; then
-            sudo /usr/bin/security remove-trusted-cert -d "$certificate" || true
-          fi
-          /bin/rm -f "$RUNNER_TEMP/acouplet-private.p12" "$certificate"
-          keychain="$RUNNER_TEMP/acouplet-private.keychain-db"
-          if [[ -f "$keychain" ]]; then
-            /usr/bin/security delete-keychain "$keychain"
-          fi
+          sudo -n /usr/bin/python3 Packaging/cleanup-private-signing.py "$RUNNER_TEMP"
 
       - name: Archive release evidence and calculate checksum
         run: |

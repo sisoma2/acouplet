@@ -210,12 +210,30 @@ The workflow uses GitHub's
 [Xcode 27 runner](https://github.blog/changelog/2026-10-15-xcode-27-runner-image-generally-available/).
 The test and build jobs run on separate disposable runners. The test jobs have no
 signing secrets. After tests pass, the build job creates a password-protected
-temporary keychain and trusts the certificate for code signing. Immediately
-after the DMG's final signature verification, cleanup removes the trust entry,
-keychain and credential files, before evidence archiving and artifact uploads.
-Cleanup uses `if: always()` so it also runs when an earlier step fails. Users
+temporary keychain and trusts the certificate for code signing. Import uses
+noninteractive sudo and has a three-minute step timeout. Immediately after the
+DMG's final signature verification, cleanup deletes the exported identity and
+temporary keychain before removing the public certificate's trust entry. Each
+Security command has a 20-second timeout, with a two-minute limit on the whole
+cleanup step. Cleanup runs as root so its timeout handler can kill a stalled
+Security process. Failure to delete the keychain through Security fails the
+release after removing credential files; a failed or timed-out trust removal
+reports a warning and leaves only public trust data on the disposable runner.
+Cleanup uses `if: always()` so it also runs when an earlier step fails or the run
+is cancelled. It finishes within its time limits even when cancellation keeps
+that step running. Users
 installing the app do not need your private key or a system-wide trust entry for
 your certificate.
+
+If an older run hangs in **Remove private signing credentials**, its unbounded
+`security remove-trusted-cert -d` call can prevent subsequent credential deletion
+and artifact uploads. Normal cancellation can leave an `always()` step running.
+Try `gh run cancel RUN_ID --repo sisoma2/acouplet --force`. If GitHub reports the
+run completed while its job still shows in progress, the API cannot cancel it
+again; check that the run is marked cancelled and no release was published before
+recreating an unpublished tag. Job logs may remain unavailable until the runner
+exits. The step name alone does not establish whether sudo, trust removal or
+keychain deletion was blocked.
 
 ## Generate and download a Release
 

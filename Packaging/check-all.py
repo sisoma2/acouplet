@@ -19,6 +19,7 @@ python_checks = (
     "Packaging/check-update-feed.py",
     "Packaging/check-prepare-updates.py",
     "Packaging/check-release-source.py",
+    "Packaging/check-private-signing-cleanup.py",
     "Packaging/check-ldac-packing.py",
     "Packaging/check-ldac-build.py",
     "Packaging/check-build-cache.py",
