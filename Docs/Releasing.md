@@ -95,14 +95,14 @@ It uses only `actions/checkout`, `actions/upload-artifact` and
 `actions/download-artifact`, so Marketplace verified creators and additional
 allowed-action patterns are unnecessary.
 
-All action references are pinned to full commit SHAs resolved from the
-official repositories' `v6` tags:
+All action references are pinned to full commit SHAs verified in the
+official repositories:
 
-| Action | Pinned commit |
-| --- | --- |
-| `actions/checkout` | `d23441a48e516b6c34aea4fa41551a30e30af803` |
-| `actions/upload-artifact` | `b7c566a772e6b6bfb58ed0dc250532a479d7789f` |
-| `actions/download-artifact` | `018cc2cf5baa6db3ef3c5f8a56943fffe632ef53` |
+| Action | Release ref | Pinned commit |
+| --- | --- | --- |
+| `actions/checkout` | `v6` | `d23441a48e516b6c34aea4fa41551a30e30af803` |
+| `actions/upload-artifact` | `v6` | `b7c566a772e6b6bfb58ed0dc250532a479d7789f` |
+| `actions/download-artifact` | `v8.0.2` | `9000827ccba6bdab643e8b6fd33ac0654aef8333` |
 
 When updating an action, verify the release's commit in its official repository,
 replace every reference to that action with the full 40-character commit SHA,
@@ -125,6 +125,18 @@ checkout credential persistence. A separate publishing job grants
 [GitHub CLI](https://cli.github.com/manual/gh_release_create) and the automatic
 `GITHUB_TOKEN`. It downloads the build artifact without checking out or running
 repository code and has no signing secrets. No personal access token is needed.
+The publishing job uses `ubuntu-26.04` explicitly to avoid automatic operating
+system migrations through `ubuntu-latest`. The download action declares Node.js 24.
+
+The build job clears extended attributes from the staged app and verifies its
+signature before copying it into a writable APFS image made with
+`diskutil image create blank`. The image reserves 256 MB beyond the staged payload
+for filesystem metadata and free space. The job clears extended attributes and
+verifies the copied app again before ejecting the writable image, then
+compresses it to UDZO with `diskutil image create from`.
+It checks the image checksum with `hdiutil verify`,
+mounts it read-only with `diskutil image attach`, verifies the mounted app's
+certificate and executable, and ejects it with `diskutil eject`.
 
 Under **Settings > Secrets and variables > Actions**, add these repository
 secrets:
@@ -212,13 +224,14 @@ The test and build jobs run on separate disposable runners. The test jobs have n
 signing secrets. After tests pass, the build job creates a password-protected
 temporary keychain and trusts the certificate for code signing. Import uses
 noninteractive sudo and has a three-minute step timeout. Immediately after the
-DMG's final signature verification, cleanup deletes the exported identity and
-temporary keychain before removing the public certificate's trust entry. Each
+DMG's final signature verification, cleanup deletes the exported `.p12` identity,
+removes administrative certificate trust while the temporary keychain is still
+available, then deletes the keychain even if trust removal fails. Each
 Security command has a 20-second timeout, with a two-minute limit on the whole
 cleanup step. Cleanup runs as root so its timeout handler can kill a stalled
-Security process. Failure to delete the keychain through Security fails the
-release after removing credential files; a failed or timed-out trust removal
-reports a warning and leaves only public trust data on the disposable runner.
+Security process. Either Security command failing fails the cleanup step after
+removing private credential files. A failed trust removal retains only the public
+`.pem` so cleanup can retry; successful cleanup removes it.
 Cleanup uses `if: always()` so it also runs when an earlier step fails or the run
 is cancelled. It finishes within its time limits even when cancellation keeps
 that step running. Users

@@ -27,17 +27,20 @@ def cleanup(directory):
     certificate = directory / "acouplet-private.pem"
     identity.unlink(missing_ok=True)
     keychain_removed = True
+    trust_removed = True
     try:
+        if certificate.exists():
+            trust_removed = run_security("remove-trusted-cert", "-d", str(certificate))
+    finally:
         if keychain.exists():
             keychain_removed = run_security("delete-keychain", str(keychain))
             keychain.unlink(missing_ok=True)
-        if certificate.exists():
-            run_security("remove-trusted-cert", "-d", str(certificate))
-    finally:
-        certificate.unlink(missing_ok=True)
-    if not keychain_removed:
+        if trust_removed:
+            certificate.unlink(missing_ok=True)
+    if not keychain_removed or not trust_removed:
         raise RuntimeError(
-            "Credential files removed, but Security keychain deletion failed."
+            "Credential files removed, but Security cleanup failed. "
+            "Any remaining public certificate is retained for a trust-removal retry."
         )
     print("Private signing credentials removed.", flush=True)
 

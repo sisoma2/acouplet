@@ -32,11 +32,12 @@ def check_cleanup(failure):
             }
             commands.append(command)
             if command[1] == "delete-keychain":
+                assert certificate.exists()
                 if failure == "keychain-timeout":
                     raise subprocess.TimeoutExpired(command, 20)
                 keychain.unlink()
             else:
-                assert not keychain.exists()
+                assert keychain.exists()
                 assert certificate.exists()
                 if failure == "trust-timeout":
                     raise subprocess.TimeoutExpired(command, 20)
@@ -49,16 +50,38 @@ def check_cleanup(failure):
             try:
                 cleanup(directory)
             except RuntimeError:
-                assert failure == "keychain-timeout"
+                assert failure is not None
             else:
-                assert failure != "keychain-timeout"
+                assert failure is None
         assert commands == [
-            ["/usr/bin/security", "delete-keychain", str(keychain)],
             ["/usr/bin/security", "remove-trusted-cert", "-d", str(certificate)],
+            ["/usr/bin/security", "delete-keychain", str(keychain)],
         ]
-        assert not any(path.exists() for path in (identity, keychain, certificate))
+        assert not any(path.exists() for path in (identity, keychain))
+        trust_failed = failure in ("trust-timeout", "trust-denied")
+        assert certificate.exists() == trust_failed
         assert unrelated.read_text() == "preserved"
         assert ("::warning::" in output.getvalue()) == (failure is not None)
+        assert ("Private signing credentials removed." in output.getvalue()) == (
+            failure is None
+        )
+        with (
+            patch(
+                "subprocess.run", return_value=subprocess.CompletedProcess([], 0)
+            ) as run,
+            redirect_stdout(StringIO()),
+        ):
+            cleanup(directory)
+        if trust_failed:
+            run.assert_called_once_with(
+                ["/usr/bin/security", "remove-trusted-cert", "-d", str(certificate)],
+                check=True,
+                stdin=subprocess.DEVNULL,
+                timeout=20,
+            )
+        else:
+            run.assert_not_called()
+        assert not certificate.exists()
         with patch("subprocess.run") as run, redirect_stdout(StringIO()):
             cleanup(directory)
         run.assert_not_called()

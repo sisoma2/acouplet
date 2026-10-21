@@ -199,27 +199,32 @@ jobs:
           mkdir -p "$stage" "$mount" dist
           /usr/bin/ditto .build/local-update/Acouplet/Acouplet.app "$stage/Acouplet.app"
           /bin/ln -s /Applications "$stage/Applications"
-          /usr/bin/codesign --verify --deep --strict "$stage/Acouplet.app"
-          trap '/usr/bin/hdiutil detach "$mount" >/dev/null 2>&1 || true' EXIT
-          /usr/bin/hdiutil create -volname Acouplet -srcfolder "$stage" -fs HFS+ \
-            -format UDRW "$writable"
-          /usr/bin/hdiutil attach -readwrite -nobrowse -mountpoint "$mount" "$writable"
+          /usr/bin/xattr -cr "$stage/Acouplet.app"
+          /usr/bin/codesign --verify --deep --strict --all-architectures \
+            --test-requirement="=identifier \"dev.baglayan.Acouplet\" and certificate leaf = H\"$ACOUPLET_SIGNING_CERTIFICATE_SHA1\"" \
+            "$stage/Acouplet.app"
+          size_mb="$(( $(/usr/bin/du -sm "$stage" | /usr/bin/awk '{print $1}') + 256 ))"
+          /usr/sbin/diskutil image create blank --volumeName Acouplet --fs APFS \
+            --format RAW --size "${size_mb}M" "$writable"
+          trap '/usr/sbin/diskutil eject "$mount" >/dev/null 2>&1 || true' EXIT
+          /usr/sbin/diskutil image attach --mountOptions nobrowse --mountPoint "$mount" "$writable"
+          /usr/bin/ditto "$stage" "$mount"
           /usr/bin/xattr -cr "$mount/Acouplet.app"
           /usr/bin/codesign --verify --deep --strict --all-architectures \
             --test-requirement="=identifier \"dev.baglayan.Acouplet\" and certificate leaf = H\"$ACOUPLET_SIGNING_CERTIFICATE_SHA1\"" \
             "$mount/Acouplet.app"
-          /usr/bin/hdiutil detach "$mount"
-          /usr/bin/hdiutil convert "$writable" -format UDZO \
-            -o "dist/Acouplet-$ACOUPLET_MARKETING_VERSION.dmg"
+          /usr/sbin/diskutil eject "$mount"
+          /usr/sbin/diskutil image create from --format UDZO \
+            "$writable" "dist/Acouplet-$ACOUPLET_MARKETING_VERSION.dmg"
           /usr/bin/hdiutil verify "dist/Acouplet-$ACOUPLET_MARKETING_VERSION.dmg"
-          /usr/bin/hdiutil attach -readonly -nobrowse -mountpoint "$mount" \
+          /usr/sbin/diskutil image attach --readOnly --mountOptions nobrowse --mountPoint "$mount" \
             "dist/Acouplet-$ACOUPLET_MARKETING_VERSION.dmg"
           /usr/bin/codesign --verify --deep --strict --all-architectures \
             --test-requirement="=identifier \"dev.baglayan.Acouplet\" and certificate leaf = H\"$ACOUPLET_SIGNING_CERTIFICATE_SHA1\"" \
             "$mount/Acouplet.app"
           /usr/bin/cmp "$stage/Acouplet.app/Contents/MacOS/Acouplet" \
             "$mount/Acouplet.app/Contents/MacOS/Acouplet"
-          /usr/bin/hdiutil detach "$mount"
+          /usr/sbin/diskutil eject "$mount"
           trap - EXIT
 
       - name: Remove private signing credentials
@@ -269,7 +274,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: write
@@ -282,7 +287,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       - name: Download verified Release files
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: Acouplet-${{ env.ACOUPLET_MARKETING_VERSION }}-${{ env.ACOUPLET_BUILD_NUMBER }}
           path: dist
