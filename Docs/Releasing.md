@@ -107,6 +107,16 @@ official repositories' `v6` tags:
 When updating an action, verify the release's commit in its official repository,
 replace every reference to that action with the full 40-character commit SHA,
 and update this table. Keep the repository's SHA requirement enabled.
+
+The test job installs uv 0.13.4 using the official release's standalone installer,
+verifying its pinned SHA-256 before execution. This needs no additional allowed
+Actions. When updating uv, update both the release URL and installer checksum
+in the workflow. Python follows `.python-version` (currently 3.15), dependencies
+follow `uv.lock`, and tests run through `uv run --locked`. The job also runs
+Ruff lint and formatting checks, plus the update-preparation and LDAC
+qualification checks with `/usr/bin/python3` to retain Python 3.9 compatibility
+for packaging scripts that use the system interpreter.
+
 The test and build jobs grant `GITHUB_TOKEN` only `contents: read` and disable
 checkout credential persistence. A separate publishing job grants
 `contents: write` to create the release for the pushed tag using the
@@ -224,6 +234,13 @@ git push origin v0.31.0
 The tagged commit must contain this workflow. Each tag has its own concurrency
 group, so pushing another release tag does not cancel a pending release for a
 different version. To retry a failed run, use **Re-run jobs** in GitHub Actions.
+
+Rerunning a job uses its original commit. If a fix changes the source or workflow,
+create a new version tag at the fixed commit, or reuse an unpublished version by
+deleting and recreating its tag at that commit. Confirm that the old run has
+finished and no GitHub Release exists for the tag before reusing it. A force-push
+that only moves an existing tag does not trigger this workflow. Keep published
+release tags unchanged.
 
 The workflow generates the build number as `195 + github.run_number`. The
 offset preserves continuity with the existing build 195: workflow run 1 uses

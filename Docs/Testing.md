@@ -24,6 +24,11 @@ Python interpreter, use `uv run --locked python Packaging/check-all.py` and the
 same selection flags documented below. Direct `python3` commands remain supported
 for environments without uv, including the isolated GUI-test VM.
 
+The Release workflow installs pinned uv, syncs the locked Python 3.15 environment,
+and runs Ruff and the full suite through uv. It also runs update-preparation and
+LDAC qualification checks with the system Python to catch compatibility issues
+in packaging tools that support Python 3.9.
+
 ## Tests
 
 ```sh

@@ -38,11 +38,38 @@ jobs:
           /usr/bin/xcodebuild -version
           /usr/bin/xcrun --sdk macosx --show-sdk-version
 
+      - name: Install uv
+        env:
+          UV_UNMANAGED_INSTALL: ${{ runner.temp }}/uv
+        run: |
+          installer="$RUNNER_TEMP/uv-installer.sh"
+          /usr/bin/curl --fail --location --proto '=https' --tlsv1.2 --output "$installer" \
+            https://github.com/astral-sh/uv/releases/download/0.13.4/uv-installer.sh
+          printf '%s  %s\n' 1f5390d273b0158bd5eaa3527ae049f3667baa881abb1e7c883dd637d84432f9 "$installer" | /usr/bin/shasum -a 256 -c -
+          /bin/sh "$installer"
+          echo "$UV_UNMANAGED_INSTALL" >> "$GITHUB_PATH"
+
+      - name: Set up Python
+        run: |
+          uv python install
+          uv sync --locked
+          uv run --locked python --version
+
+      - name: Check Python style
+        run: |
+          uv run --locked ruff check .
+          uv run --locked ruff format --check .
+
+      - name: Check system Python compatibility
+        run: |
+          /usr/bin/python3 Packaging/check-prepare-updates.py
+          /usr/bin/python3 Packaging/check-ldac-qualification.py
+
       - name: Run tests
         run: |
           Packaging/fetch-sparkle.sh
           mkdir -p .build/check-all/Logs
-          if ! /usr/bin/python3 Packaging/check-all.py > .build/check-all/Logs/checks.log 2>&1; then
+          if ! uv run --locked python Packaging/check-all.py > .build/check-all/Logs/checks.log 2>&1; then
             tail -n 60 .build/check-all/Logs/checks.log
             exit 1
           fi
