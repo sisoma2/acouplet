@@ -346,6 +346,9 @@ with tempfile.TemporaryDirectory(prefix="acouplet-check-all-check-") as director
         ["--ui-vm", "base"],
         ["--fixtures-only", "--ui-vm", "base"],
         ["--only-testing", "UnknownTests"],
+        ["--xctest-only", "--exclude", "Helpers/*"],
+        ["--ui-only", "--exclude", "Packaging/*"],
+        ["--fixtures-only", "--filter", "Helpers/*", "--exclude", "Helpers/*"],
     ):
         with (
             patch(
@@ -462,6 +465,34 @@ with tempfile.TemporaryDirectory(prefix="acouplet-check-all-check-") as director
     ):
         main(["--list", "--filter", "*check-direct.py"])
     assert output.getvalue().splitlines() == ["Packaging/check-direct.py"]
+
+    selection = [
+        "--fixtures-only",
+        "--exclude",
+        "Helpers/*",
+        "--exclude",
+        "Packaging/check-[!rs]*",
+    ]
+    output = StringIO()
+    with redirect_stdout(output):
+        main(["--list", *selection])
+    selected = output.getvalue().splitlines()
+    assert set(selected) == {
+        "Packaging/check-release-source.py",
+        "Packaging/check-runner-check.py",
+        "Packaging/check-sparkle.py",
+        "Packaging/check-stubs-check.py",
+    }
+    commands.clear()
+    with (
+        patch.dict(main.__globals__, repo=repo),
+        patch("subprocess.run", side_effect=run),
+        patch("subprocess.check_output", side_effect=summary),
+    ):
+        main(selection)
+    assert {command[1] for command in commands} == {
+        str(repo / path) for path in selected
+    }
 
     cached = repo / "cached"
     objects = (

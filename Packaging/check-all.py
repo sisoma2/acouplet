@@ -126,6 +126,12 @@ def main(arguments=None):
         "--filter", default="*", help="Select independent checks by filename wildcard."
     )
     parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="Exclude independent checks by filename wildcard; repeat to exclude more.",
+    )
+    parser.add_argument(
         "--only-testing",
         action="append",
         default=[],
@@ -177,9 +183,11 @@ def main(arguments=None):
     )
     if options.ui_vm and (not wants_ui or options.fixtures_only):
         parser.error("--ui-vm requires GUI tests")
-    if (options.xctest_only or options.ui_only) and options.filter != "*":
+    if (options.xctest_only or options.ui_only) and (
+        options.filter != "*" or options.exclude
+    ):
         parser.error(
-            "--filter selects independent checks; use --only-testing for XCTest"
+            "--filter and --exclude select independent checks; use --only-testing for XCTest"
         )
     independent = [
         *python_checks,
@@ -188,13 +196,20 @@ def main(arguments=None):
         "Helpers/NativeHUD/BannerLifetimeCheck.swift",
         "Helpers/LDAC/LDACSessionDiagnosticsCheck.swift",
     ]
-    if not any(fnmatch.fnmatchcase(path, options.filter) for path in independent):
+    if not any(
+        fnmatch.fnmatchcase(path, options.filter)
+        and not any(fnmatch.fnmatchcase(path, pattern) for pattern in options.exclude)
+        for path in independent
+    ):
         parser.error("No independent checks match " + options.filter)
+    selection = ["--filter", options.filter]
+    for pattern in options.exclude:
+        selection.extend(["--exclude", pattern])
     if options.list:
         listing = CheckCases("Independent local checks")
         for path in independent:
             listing.add(path, lambda: None)
-        listing.main(["--list", "--filter", options.filter])
+        listing.main(["--list", *selection])
         return
     if wants_ui:
         if options.ui_vm:
@@ -273,7 +288,7 @@ def main(arguments=None):
         checks.add(
             check, standalone, source, check, directory, log_directory, environment
         )
-    checks.main(["--jobs", str(options.jobs), "--filter", options.filter])
+    checks.main(["--jobs", str(options.jobs), *selection])
     print("\nAll selected local checks passed.", flush=True)
 
 

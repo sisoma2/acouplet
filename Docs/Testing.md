@@ -24,10 +24,13 @@ Python interpreter, use `uv run --locked python Packaging/check-all.py` and the
 same selection flags documented below. Direct `python3` commands remain supported
 for environments without uv, including the isolated GUI-test VM.
 
-The Release workflow installs pinned uv, syncs the locked Python 3.15 environment,
-and runs Ruff and the full suite through uv. It also runs update-preparation and
-LDAC qualification checks with the system Python to catch compatibility issues
-in packaging tools that support Python 3.9.
+The Release workflow runs four concurrent jobs on separate Xcode runners:
+XCTest and bundle checks, packaging fixtures, native fixtures, and controller-volume
+baseline and mutation fixtures. Each job retains the runner's CPU-based worker
+budget. The packaging job also runs Ruff and the update-preparation and LDAC
+qualification checks with the system Python to catch Python 3.9 compatibility
+issues. All four jobs must pass before the Release build starts. Each job installs
+pinned uv and syncs the locked Python 3.15 environment.
 
 ## Tests
 
@@ -89,11 +92,16 @@ Run just the fixtures, select matching scripts, or focus XCTest on a class:
 ```sh
 python3 Packaging/check-all.py --fixtures-only
 python3 Packaging/check-all.py --fixtures-only --filter '*LDAC*'
+python3 Packaging/check-all.py --fixtures-only --filter 'Helpers/*' --exclude '*LDACControllerVolumeCheck.py'
 python3 Packaging/check-all.py --xctest-only --only-testing AcoupletTests/LDACCallAudioTests
 python3 Packaging/check-all.py --ui-only --ui-vm acouplet-ui-base
 python3 Packaging/check-all.py --include-ui --ui-vm acouplet-ui-base
 python3 Packaging/check-all.py --list
 ```
+
+`--exclude` removes independent checks matching a filename wildcard and can be
+repeated. It applies to both execution and `--list`; an empty selection fails.
+It does not select XCTest cases; use `--only-testing` for those.
 
 `--ui-only` runs the GUI suite, including the screenshot galleries. GUI automation
 requires an isolated macOS VM. On macOS 26.7.1, disabling XCTest automation has

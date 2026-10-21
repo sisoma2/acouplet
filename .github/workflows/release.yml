@@ -15,10 +15,22 @@ concurrency:
 
 jobs:
   tests:
-    name: Tests
+    name: Tests (${{ matrix.suite }})
     if: github.event.created && !github.event.deleted
     runs-on: xcode-27
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: xctest
+            arguments: --xctest-only
+          - suite: packaging
+            arguments: --fixtures-only --filter 'Packaging/*'
+          - suite: native
+            arguments: --fixtures-only --filter 'Helpers/*' --exclude 'Helpers/LDAC/LDACControllerVolumeCheck.py'
+          - suite: controller-volume
+            arguments: --fixtures-only --filter 'Helpers/LDAC/LDACControllerVolumeCheck.py'
     defaults:
       run:
         shell: bash
@@ -57,29 +69,35 @@ jobs:
           uv run --locked python --version
 
       - name: Check Python style
+        if: matrix.suite == 'packaging'
         run: |
           uv run --locked ruff check .
           uv run --locked ruff format --check .
 
       - name: Check system Python compatibility
+        if: matrix.suite == 'packaging'
         run: |
           /usr/bin/python3 Packaging/check-prepare-updates.py
           /usr/bin/python3 Packaging/check-ldac-qualification.py
 
+      - name: Fetch XCTest dependency
+        if: matrix.suite == 'xctest'
+        run: Packaging/fetch-sparkle.sh
+
       - name: Run tests
         run: |
-          Packaging/fetch-sparkle.sh
           mkdir -p .build/check-all/Logs
-          if ! uv run --locked python Packaging/check-all.py > .build/check-all/Logs/checks.log 2>&1; then
+          if ! uv run --locked python Packaging/check-all.py ${{ matrix.arguments }} > .build/check-all/Logs/checks.log 2>&1; then
             tail -n 60 .build/check-all/Logs/checks.log
             exit 1
           fi
+          tail -n 60 .build/check-all/Logs/checks.log
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: Acouplet-test-results-${{ github.run_id }}
+          name: Acouplet-test-results-${{ matrix.suite }}-${{ github.run_id }}
           path: |
             .build/check-all/Logs/
             .build/check-all/Results/

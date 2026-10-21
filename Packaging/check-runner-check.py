@@ -38,6 +38,26 @@ assert output.getvalue().splitlines() == [
 ]
 assert len(completed) == 2
 
+excluded = CheckCases("Excluded checks never execute")
+executed = []
+for name in ("keep", "skip-first", "skip-second"):
+    excluded.add(name, executed.append, name)
+with redirect_stdout(StringIO()):
+    excluded.main(["--exclude", "skip-f*", "--exclude", "*-second"])
+assert executed == ["keep"]
+output = StringIO()
+with redirect_stdout(output):
+    excluded.main(["--list", "--exclude", "skip-*"])
+assert output.getvalue().splitlines() == executed
+with redirect_stderr(StringIO()), redirect_stdout(StringIO()):
+    try:
+        excluded.main(["--filter", "skip-*", "--exclude", "skip-*"])
+    except SystemExit as error:
+        assert error.code == 2
+    else:
+        raise AssertionError("Empty selection after exclusions was accepted")
+assert executed == ["keep"]
+
 try:
     checks.add("excluded", lambda: None)
 except ValueError:

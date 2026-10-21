@@ -41,6 +41,12 @@ class CheckCases:
             help="Run case names matching this shell wildcard (default: all cases).",
         )
         parser.add_argument(
+            "--exclude",
+            action="append",
+            default=[],
+            help="Exclude matching case names; repeat to exclude more wildcards.",
+        )
+        parser.add_argument(
             "--list",
             action="store_true",
             help="List matching cases without running them.",
@@ -52,6 +58,9 @@ class CheckCases:
             name: operation
             for name, operation in self.cases.items()
             if fnmatch.fnmatchcase(name, options.filter)
+            and not any(
+                fnmatch.fnmatchcase(name, pattern) for pattern in options.exclude
+            )
         }
         if not selected:
             parser.error("No checks match " + options.filter)

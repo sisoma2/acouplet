@@ -108,11 +108,11 @@ When updating an action, verify the release's commit in its official repository,
 replace every reference to that action with the full 40-character commit SHA,
 and update this table. Keep the repository's SHA requirement enabled.
 
-The test job installs uv 0.13.4 using the official release's standalone installer,
+Each test job installs uv 0.13.4 using the official release's standalone installer,
 verifying its pinned SHA-256 before execution. This needs no additional allowed
 Actions. When updating uv, update both the release URL and installer checksum
 in the workflow. Python follows `.python-version` (currently 3.15), dependencies
-follow `uv.lock`, and tests run through `uv run --locked`. The job also runs
+follow `uv.lock`, and tests run through `uv run --locked`. The packaging job also runs
 Ruff lint and formatting checks, plus the update-preparation and LDAC
 qualification checks with `/usr/bin/python3` to retain Python 3.9 compatibility
 for packaging scripts that use the system interpreter.
@@ -208,7 +208,7 @@ build job generates its temporary keychain password.
 
 The workflow uses GitHub's
 [Xcode 27 runner](https://github.blog/changelog/2026-10-15-xcode-27-runner-image-generally-available/).
-The test and build jobs run on separate disposable runners. The test job has no
+The test and build jobs run on separate disposable runners. The test jobs have no
 signing secrets. After tests pass, the build job creates a password-protected
 temporary keychain and trusts the certificate for code signing. Immediately
 after the DMG's final signature verification, cleanup removes the trust entry,
@@ -261,14 +261,20 @@ to the exact commit built by the run. A missing or moved tag fails publication.
 Existing releases are not overwritten; rerunning an already published version
 fails at release creation.
 
-The workflow runs three jobs in sequence: **Tests**, **Build Release** and
-**Publish GitHub Release**. The test job runs the unit and offline fixture suite
-and uploads `Acouplet-test-results-RUN_ID`, including its summary,
-individual check logs and the XCTest `.xcresult` bundle, even when tests fail.
-A failed test job prevents the build and publishing jobs from running.
-Rerunning tests replaces that run's
-test-results artifact. Test logs remain in that separate Actions artifact;
-the build job does not download them or include them in the release evidence.
+The workflow starts four concurrent **Tests** jobs: `xctest` runs the unit suite
+and bundle checks, `packaging` runs packaging fixtures, `native` runs helper
+fixtures except controller-volume, and `controller-volume` runs that baseline
+and mutation suite. The split keeps the slow controller compiler fixtures from
+holding the other suites' shared worker budget. The default local runner still
+runs the full suite.
+
+Each job uploads `Acouplet-test-results-SUITE-RUN_ID`, including its summary,
+individual check logs and, for `xctest`, the XCTest `.xcresult` bundle, even when
+tests fail. Rerunning a job replaces only that suite's artifact. A failing suite
+does not cancel the other test jobs, so their diagnostic results remain available.
+**Build Release** waits for every test job to pass; **Publish GitHub Release**
+waits for the build. Test logs remain in separate Actions artifacts; the build
+job does not download them or include them in the release evidence.
 
 The build job builds a Release with `Packaging/package.sh --local` and exercises
 the driver's real certificate checks with signed test processes. It verifies that the expected
