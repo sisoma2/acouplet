@@ -149,6 +149,14 @@ Normal Quit, shutdown and updates that leave the app stopped keep
 ordinary-audio restoration. The first installation of this change still uses the
 previous app's shutdown behavior.
 
+The direct app requests Pause from the current macOS media player before quitting
+or restarting, including update relaunches. A separate `--media-playback-watch`
+worker watches the app process and requests Pause if it crashes, receives a
+termination signal or is force-quit. Normal shutdown disarms the worker after
+requesting Pause, so it does not pause playback again after the replacement starts.
+Acouplet does not resume playback automatically. Players and browser videos must
+support macOS media controls to respond; the public API build omits this integration.
+
 Confirm that the running app is under `/Applications` and that its executable
 matches the freshly compiled Release build:
 
@@ -161,8 +169,9 @@ cmp .build/Build/Products/Release/Acouplet.app/Contents/MacOS/Acouplet \
 
 `cmp` exits successfully without output when the executables match. There
 should be one app process under `/Applications` with no `--background-service`
-argument and no Debug copy. An additional `--ldac-owner` worker is expected during
-LDAC playback. The build and install receipts are saved under `.build/local-update/`.
+argument and no Debug copy. A `--media-playback-watch` worker is expected while
+the direct app is running, and an additional `--ldac-owner` worker is expected
+during LDAC playback. The build and install receipts are saved under `.build/local-update/`.
 
 ## Artwork and build options
 

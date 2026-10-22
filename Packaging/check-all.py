@@ -36,6 +36,7 @@ python_checks = (
     "Packaging/check-app-store.py",
     "Packaging/check-preference-panes.py",
     "Helpers/SonyBLEWriteCheck.py",
+    "Helpers/MediaPlaybackLifetimeCheck.py",
     "Helpers/LDAC/LDACControllerCleanupCheck.py",
     "Helpers/LDAC/LDACControllerVolumeCheck.py",
     "Helpers/LDAC/LDACNativeOutputRestoreCheck.py",

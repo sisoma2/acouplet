@@ -6,6 +6,11 @@ import SwiftUI
 enum AcoupletMain {
     static func main() {
         #if !ACOUPLET_PUBLIC_APIS_ONLY
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--media-playback-watch",
+           let parent = pid_t(CommandLine.arguments[2]) {
+            MacMediaPlaybackExitWorker.run(parent: parent)
+            return
+        }
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--ldac-update-recovery",
            let id = UUID(uuidString: CommandLine.arguments[2]) {
             do { try LDACUpdateHandoff().recover(id: id) }
@@ -38,6 +43,9 @@ enum AcoupletMain {
         if deferToRunningCopy() {
             exit(EXIT_SUCCESS)
         }
+        #if !ACOUPLET_PUBLIC_APIS_ONLY
+        if !AppDelegate.isRunningTests { MacMediaPlaybackLifetime.shared.start() }
+        #endif
         AcoupletApp.main()
     }
 

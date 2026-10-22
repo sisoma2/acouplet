@@ -66,6 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
             .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && $0.activationPolicy != .prohibited }) {
             isDuplicateLaunch = true
+            #if !ACOUPLET_PUBLIC_APIS_ONLY
+            MacMediaPlaybackLifetime.shared.disarm()
+            #endif
             NSApp.terminate(nil)
             return
         }
@@ -220,6 +223,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        #if !ACOUPLET_PUBLIC_APIS_ONLY
+        if !isRunningTests, !isDuplicateLaunch { MacMediaPlaybackLifetime.shared.pauseForTermination() }
+        #endif
         #if !DEBUG && !ACOUPLET_PUBLIC_APIS_ONLY
         let quitReason = NSAppleEventManager.shared().currentAppleEvent?.paramDescriptor(forKeyword: kAEQuitReason)?.enumCodeValue
         if [kAEQuitAll, kAEShutDown, kAERestart, kAEReallyLogOut].contains(quitReason ?? 0) {
@@ -292,6 +298,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 self?.testTerminationObserver = nil
                 if interrupted != nil {
+                    #if !ACOUPLET_PUBLIC_APIS_ONLY
+                    MacMediaPlaybackLifetime.shared.cancelTermination()
+                    #endif
                     self?.environment.devices.cancelTermination()
                     self?.retriesBackgroundServiceMigration = false
                     self?.isSystemTerminating = false
@@ -352,6 +361,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        #if !ACOUPLET_PUBLIC_APIS_ONLY
+        if !isRunningTests, !isDuplicateLaunch { MacMediaPlaybackLifetime.shared.finishTermination() }
+        #endif
         preferencePaneServer?.stop()
         preferencePaneServer = nil
         menuBarController?.stop()

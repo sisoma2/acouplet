@@ -34,6 +34,14 @@ pinned uv and syncs the locked Python 3.15 environment.
 
 ## Tests
 
+`Helpers/MediaPlaybackLifetimeCheck.py` compiles the production playback lifetime
+code with a recording pause command. Separate processes cover Quit, restart,
+cancelled termination, duplicate launch, unexpected exit, SIGTERM and SIGKILL,
+including parent death before the worker registers its watcher. The fixture checks
+that playback is untouched while the app runs, normal shutdown pauses once,
+and workers exit after handling the parent. Live music and browser playback still
+need manual confirmation with a player that supports macOS media controls.
+
 ```sh
 Packaging/fetch-sparkle.sh
 python3 Packaging/check-all.py
