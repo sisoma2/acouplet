@@ -2,6 +2,40 @@
 
 # Validation history
 
+## Morning reconnect and battery expiry recovery
+
+On 2026-10-22, WF-1000XM5 logs showed ordinary A2DP audio reconnecting during
+the first LDAC handoff at 10:32. That attempt failed its five-second disconnect
+check, and the next startup succeeded. The helper now retries once within the
+same takeover when the native headset output is confirmed present. Restoration
+keeps its existing ownership checks and single disconnect attempt.
+
+Battery publication used 45-second sample leases while LDAC polled battery every
+60 seconds. A later withdrawal recorded child exit 78 (clean lease expiry), final
+native inventory restored, and supervisor exit 1, blocking subsequent publication.
+An offline regression reproduced that exit combination when the child withdrew
+its entries before the supervisor's next active inventory check. The supervisor
+now enters cleanup on a validated component-withdrawal report and rechecks expiry
+after waiting for child input. Failed cleanup still returns failure. LDAC battery
+polling now runs every 30 seconds, without the full settings refresh.
+
+Both native regression suites passed, including bounded takeover retries,
+restoration boundaries, clean child expiry and unsuccessful child cleanup.
+The 58 battery publisher XCTest cases and two focused streaming battery refresh
+and command retry cases passed, as did Ruff lint and formatting checks. Evidence
+is saved locally under `.build/reconnect-fix/`.
+
+Privately signed Release build 210 was installed using the local installer.
+The installed executable, battery helper and audio connection helper matched
+the Release products, and signature verification confirmed the existing private
+certificate. Only the installed app and its expected workers were running;
+the revision 8 driver reported `current`. The same battery supervisor and child
+stayed running beyond the old 45-second expiry window. Live LDAC at 96 kHz /
+fixed 660 kbps showed increasing nonzero PCM frames with no PCM failures,
+skipped frames, drain breaches or transport queue drops during the observed
+first minute. The original takeover race was exercised offline, not forced on
+the real headset. No Core Audio restart or Mac reboot was performed.
+
 ## Live capture recovery after injected silence
 
 On 2026-10-22, a controlled live test with WF-1000XM5 earbuds on macOS 26.7.1

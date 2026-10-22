@@ -367,12 +367,19 @@ int main(int argc, const char *argv[]) {
                        expectedHandle, device.connectionHandle);
                 return 6;
             }
-            IOReturn status = SonyClassicIsConnected(device) ? [device closeConnection] : kIOReturnSuccess;
-            printf("DISCONNECT_RETURN time=%.6f status=0x%08X\n", NSDate.date.timeIntervalSince1970, status);
-            if (status != kIOReturnSuccess) return 3;
-            double deadline = MonotonicTime() + 5;
-            while (SonyClassicIsConnected(device) && MonotonicTime() < deadline)
-                RunLoopFor(0.01);
+            for (NSUInteger attempt = 0; attempt < (restore ? 1 : 2); attempt++) {
+                if (attempt > 0) {
+                    if (!SonyClassicIsConnected(device) || NativeOutputState(address) != 1) break;
+                    printf("DISCONNECT_RETRY attempt=%lu reason=native-audio-reconnected\n", (unsigned long)(attempt + 1));
+                }
+                IOReturn status = SonyClassicIsConnected(device) ? [device closeConnection] : kIOReturnSuccess;
+                printf("DISCONNECT_RETURN time=%.6f status=0x%08X\n", NSDate.date.timeIntervalSince1970, status);
+                if (status != kIOReturnSuccess) return 3;
+                double deadline = MonotonicTime() + 5;
+                while (SonyClassicIsConnected(device) && MonotonicTime() < deadline)
+                    RunLoopFor(0.01);
+                if (!SonyClassicIsConnected(device)) break;
+            }
             BOOL disconnected = !SonyClassicIsConnected(device);
             printf("AFTER disconnected=%d connected=%d\n", disconnected, !disconnected);
             if (restore && disconnected) printf("RESTORE_DISCONNECTED disconnected=1\n");

@@ -67,10 +67,25 @@ static BOOL checkDisconnectAfterUpdate;
 static int checkFailures;
 static int checkNextSource;
 static NSString *checkReleasePath;
+static NSString *checkSupervisorDirectory;
 
 static CFTypeRef checkCopyPowerSourcesByType(int type) {
     assert(type == 4);
-    return checkUnavailable ? NULL : CFBridgingRetain(checkRecords.copy);
+    if (checkUnavailable) return NULL;
+    NSMutableArray *records = checkRecords.mutableCopy;
+    NSFileManager *files = NSFileManager.defaultManager;
+    if (checkSupervisorDirectory && [files fileExistsAtPath:[checkSupervisorDirectory stringByAppendingPathComponent:@"prepared"]]
+        && ![files fileExistsAtPath:[checkSupervisorDirectory stringByAppendingPathComponent:@"withdrawing"]]) {
+        NSDictionary *baseline = records.firstObject;
+        for (NSUInteger index = 0; index < 3; index++) {
+            NSMutableDictionary *record = [single(baseline, [@"cleanup-check/" stringByAppendingString:@[@"a", @"b", @"c"][index]]) mutableCopy];
+            record[@"Power Source ID"] = @(102 + index);
+            [records addObject:record];
+        }
+        if ([files fileExistsAtPath:[checkSupervisorDirectory stringByAppendingPathComponent:@"submitted"]])
+            assert([NSData.data writeToFile:[checkSupervisorDirectory stringByAppendingPathComponent:@"acknowledged"] atomically:YES]);
+    }
+    return CFBridgingRetain(records);
 }
 
 static CFArrayRef checkCopyPowerSourcesList(CFTypeRef info) { return CFRetain(info); }
@@ -188,6 +203,28 @@ static int checkPreparingChild(NSString *session) {
         if (receive(STDIN_FILENO, buffer, &command) > 0) break;
     }
     if (![command[@"command"] isEqual:@"prepare"]) return 2;
+    if (getenv("ACOUPLET_BATTERY_CHECK_WITHDRAWAL")) {
+        NSDictionary *sample = command[@"sample"];
+        assert([NSData.data writeToFile:[directory stringByAppendingPathComponent:@"prepared"] atomically:YES]);
+        NSDictionary *markers = @{@"guard": [session stringByAppendingString:@"/a"],
+            @"pair": [session stringByAppendingString:@"/b"], @"trailer": [session stringByAppendingString:@"/c"]};
+        event(@"prepared", markers);
+        command = nil;
+        while (NSProcessInfo.processInfo.systemUptime < deadline) {
+            if (receive(STDIN_FILENO, buffer, &command) > 0) break;
+        }
+        if (![command[@"command"] isEqual:@"activate"]) return 5;
+        assert([NSData.data writeToFile:[directory stringByAppendingPathComponent:@"submitted"] atomically:YES]);
+        event(@"pair-submitted", @{@"sample": sample, @"sourcesUnchanged": @YES});
+        NSString *acknowledged = [directory stringByAppendingPathComponent:@"acknowledged"];
+        while (![NSFileManager.defaultManager fileExistsAtPath:acknowledged] && NSProcessInfo.processInfo.systemUptime < deadline) tick();
+        if (![NSFileManager.defaultManager fileExistsAtPath:acknowledged]) return 6;
+        assert([NSData.data writeToFile:[directory stringByAppendingPathComponent:@"withdrawing"] atomically:YES]);
+        event(@"components-absent", markers);
+        NSString *released = [directory stringByAppendingPathComponent:@"parent-removed"];
+        while (![NSFileManager.defaultManager fileExistsAtPath:released] && NSProcessInfo.processInfo.systemUptime < deadline) tick();
+        return [NSFileManager.defaultManager fileExistsAtPath:released] ? atoi(getenv("ACOUPLET_BATTERY_CHECK_WITHDRAWAL")) : 7;
+    }
     if (getenv("ACOUPLET_BATTERY_CHECK_EOF")) {
         command = nil;
         while (NSProcessInfo.processInfo.systemUptime < deadline) {
@@ -206,13 +243,15 @@ static int checkPreparingChild(NSString *session) {
     return 0;
 }
 
-static void checkSupervisor(NSDictionary *sample, NSDictionary *native, BOOL closesInput) {
+static void checkSupervisor(NSDictionary *sample, NSDictionary *native, BOOL closesInput, int childWithdrawal) {
     reset(@[native]);
     NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
     assert([[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:NO attributes:nil error:nil]);
     checkReleasePath = [directory stringByAppendingPathComponent:@"parent-removed"];
+    checkSupervisorDirectory = childWithdrawal ? directory : nil;
     assert(setenv("ACOUPLET_BATTERY_CHECK_DIRECTORY", directory.fileSystemRepresentation, 1) == 0);
     if (closesInput) assert(setenv("ACOUPLET_BATTERY_CHECK_EOF", "1", 1) == 0);
+    if (childWithdrawal) assert(setenv("ACOUPLET_BATTERY_CHECK_WITHDRAWAL", [@(childWithdrawal) stringValue].UTF8String, 1) == 0);
     int descriptors[2];
     assert(pipe(descriptors) == 0 && fcntl(descriptors[1], F_SETFD, FD_CLOEXEC) == 0);
     NSMutableData *input = [[NSJSONSerialization dataWithJSONObject:sample options:0 error:nil] mutableCopy];
@@ -222,15 +261,17 @@ static void checkSupervisor(NSDictionary *sample, NSDictionary *native, BOOL clo
     int savedInput = dup(STDIN_FILENO);
     assert(savedInput >= 0 && dup2(descriptors[0], STDIN_FILENO) == STDIN_FILENO);
     close(descriptors[0]);
-    assert(supervisor(NSProcessInfo.processInfo.arguments.firstObject, sample[@"identifier"], @"cleanup-check") == (closesInput ? 0 : 1));
+    assert(supervisor(NSProcessInfo.processInfo.arguments.firstObject, sample[@"identifier"], @"cleanup-check") == (childWithdrawal ? childWithdrawal : closesInput ? 0 : 1));
     alarm(0);
     assert(dup2(savedInput, STDIN_FILENO) == STDIN_FILENO);
     close(savedInput);
     if (!closesInput) close(descriptors[1]);
-    assert([[NSFileManager defaultManager] fileExistsAtPath:[directory stringByAppendingPathComponent:@"child-finished"]]);
+    if (!childWithdrawal) assert([[NSFileManager defaultManager] fileExistsAtPath:[directory stringByAppendingPathComponent:@"child-finished"]]);
     assert([checkRemoved isEqual:@[@101]] && [checkRecords isEqual:@[native]]);
     checkReleasePath = nil;
+    checkSupervisorDirectory = nil;
     assert(unsetenv("ACOUPLET_BATTERY_CHECK_DIRECTORY") == 0 && unsetenv("ACOUPLET_BATTERY_CHECK_EOF") == 0);
+    assert(unsetenv("ACOUPLET_BATTERY_CHECK_WITHDRAWAL") == 0);
     assert([[NSFileManager defaultManager] removeItemAtPath:directory error:nil]);
 }
 
@@ -402,8 +443,10 @@ int main(int argc, const char *argv[]) {
         checkCasePublisher(caseSample, baseline, @"old");
         checkCasePublisher(caseSample, baseline, @"retained");
         checkCasePublisher(caseSample, baseline, @"disconnect");
-        checkSupervisor(sample, baseline, NO);
-        checkSupervisor(sample, baseline, YES);
+        checkSupervisor(sample, baseline, NO, 0);
+        checkSupervisor(sample, baseline, YES, 0);
+        checkSupervisor(sample, baseline, NO, leaseExpiredExit);
+        checkSupervisor(sample, baseline, NO, 1);
 
         FILE *output = tmpfile();
         assert(output);

@@ -1874,7 +1874,7 @@ final class SonyConnectionControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testLDACStreamingReducesThePeriodicPollToABatteryReadEveryMinute() throws {
+    func testLDACStreamingRefreshesOnlyBatteryBeforeNativeSamplesExpire() throws {
         let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
         controller.simulateDeviceConnection(named: "WF-1000XM5")
         var count = 0
@@ -1882,8 +1882,8 @@ final class SonyConnectionControllerTests: XCTestCase {
         XCTAssertNil(controller.simulatedPendingFrame)
         XCTAssertTrue(controller.isControlChannelIdle)
         controller.isLDACStreaming = true
-        for _ in 0..<19 { controller.simulateAutomaticRefresh() }
-        XCTAssertNil(controller.simulatedPendingFrame, "LDAC streaming sent reads before the 60 s battery poll")
+        for _ in 0..<9 { controller.simulateAutomaticRefresh() }
+        XCTAssertNil(controller.simulatedPendingFrame, "LDAC streaming sent reads before the 30 s battery poll")
         controller.simulateAutomaticRefresh()
         XCTAssertEqual(controller.simulatedPendingFrame?.payload.first, 0x22, "LDAC streaming stopped refreshing the battery")
         XCTAssertFalse(controller.isControlChannelIdle)
@@ -1907,7 +1907,7 @@ final class SonyConnectionControllerTests: XCTestCase {
             while controller.simulatedPendingFrame != nil, count < 80 { acknowledge(controller); count += 1 }
             XCTAssertTrue(controller.isControlChannelIdle)
             controller.isLDACStreaming = true
-            for _ in 0..<20 { controller.simulateAutomaticRefresh() }
+            for _ in 0..<10 { controller.simulateAutomaticRefresh() }
             let frame = try XCTUnwrap(controller.simulatedPendingFrame)
             XCTAssertEqual(frame.payload.first, 0x22)
             let writes = controller.simulatedTransmittedFrames.count

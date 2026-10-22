@@ -124,6 +124,11 @@ availability. Existing profiles with LDAC manually enabled also adopt automatic
 activation once when upgrading. Connected headphones selected in Acouplet start
 LDAC automatically at launch even when another Mac audio output is selected.
 Direct startup waits for headphone controls and volume readback before playback.
+If ordinary Bluetooth audio reconnects during the initial disconnect, the handoff
+retries that disconnect once within the same startup, after confirming the native
+headset output is present. Each attempt waits at most five seconds. Ordinary-audio
+restoration retains its existing connection ownership checks and does not use this
+takeover retry.
 During startup, LDAC takes precedence when macOS automatically selects the same
 headphones as its ordinary Bluetooth output, including a late switch after handoff.
 Other output choices and output changes after playback starts remain respected.

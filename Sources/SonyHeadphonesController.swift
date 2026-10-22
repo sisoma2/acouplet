@@ -901,7 +901,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     /// interrupted the stream, so while it is set the poll only reads the battery every `ldacBatteryPollInterval` ticks.
     var isLDACStreaming = false
     private var ldacBatteryPollCount = 0
-    private static let ldacBatteryPollInterval = 20
+    private static let ldacBatteryPollInterval = 10
     private var supportsTable2 = false
     private var supportFunctionsReadTransmitted = false
     @Published private var discoveryReads: [[UInt8]: DiscoveryRead] = [:]
@@ -1908,7 +1908,6 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             refreshNoiseControl()
         }
         if isLDACStreaming {
-            // The poll ticks every 3 s: a battery read every 60 s keeps the menu current without the settings burst.
             syncPollCount = 0
             ldacBatteryPollCount += 1
             if ldacBatteryPollCount >= Self.ldacBatteryPollInterval {

@@ -32,6 +32,20 @@ connection and the scheduled timeout identity, so a cancelled callback cannot
 interrupt a replacement attempt. The controller retains transport failure
 handling, diagnostics and the existing read-only feature properties.
 
+## Native battery publication
+
+Native battery samples expire after 45 seconds. LDAC streaming requests only
+battery readings every 30 seconds, leaving time to refresh those samples before
+expiry without polling the full settings set. The child helper can start
+withdrawing expired entries before its supervisor observes that deadline. The
+supervisor treats the child's validated `components-absent` report as a shutdown
+transition and waits for verified removal, final inventory and process exit.
+It also rechecks sample expiry after waiting for child reports, before checking
+the active publication's inventory. A clean expiry permits fresh observations
+from both earbuds to publish again after the existing 15-second backoff; failed
+cleanup still blocks retry. Lifecycle logs distinguish sample expiry from failure
+and include component withdrawal and unconfirmed disposal.
+
 ## Settings and menu presentation
 
 `SettingsView` owns tab selection and Settings lifecycle work, including automatic

@@ -446,7 +446,7 @@ final class SonyNativeBatteryPublisher {
     private func logHelperEvent(_ object: [String: Any]) {
         let report = object["event"] as? String == "child-report" ? object["report"] as? [String: Any] : object
         guard let report, let event = report["event"] as? String,
-              ["guard-lost", "native-unavailable", "native-disconnected", "final-inventory", "child-exit", "supervisor-exit", "child-terminated", "prerequisite-unavailable"].contains(event) else { return }
+              ["guard-lost", "native-unavailable", "native-disconnected", "components-absent", "source-disposal-unconfirmed", "final-inventory", "child-exit", "supervisor-exit", "child-terminated", "prerequisite-unavailable"].contains(event) else { return }
         let phase = report["phase"] as? String ?? "none"
         let knownPhase = ["child", "supervisor", "supervisor-refresh"].contains(phase) ? phase : "none"
         Self.logger.info("Native battery withdrawal: event=\(event, privacy: .public) phase=\(knownPhase, privacy: .public) result=\((report["result"] as? Int) ?? -1, privacy: .public) status=\((report["status"] as? Int) ?? -1, privacy: .public) nativeSingle=\((report["nativeSingle"] as? Bool) ?? false, privacy: .public) disconnected=\((report["nativeDisconnected"] as? Bool) ?? false, privacy: .public)")
@@ -481,7 +481,8 @@ final class SonyNativeBatteryPublisher {
             attempts[address] = Attempt(publication: session.queued ?? session.pending ?? session.publication,
                 date: now(), count: session.attempt)
         }
-        let classification = resumeAfterWithdrawal ? "intentional-withdrawal" : retryIfUnpublished ? "process-exit" : "failure"
+        let sampleExpired = session.pending == nil && session.publication.expiresAt <= now()
+        let classification = resumeAfterWithdrawal ? "intentional-withdrawal" : retryIfUnpublished ? "process-exit" : sampleExpired ? "sample-expired" : "failure"
         Self.logger.info("Native battery closing: classification=\(classification, privacy: .public)")
         closing[address] = (session.connection, session.queued ?? session.pending ?? session.publication, now(), retryIfUnpublished, resumeAfterWithdrawal, session.attempt, session.output, outputComplete, protocolFailed, true)
     }

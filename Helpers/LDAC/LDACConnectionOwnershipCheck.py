@@ -67,6 +67,8 @@ static int fixtureNative;
 static double elapsed;
 static double publishAt = -1;
 static double disconnectAt = -1;
+static NSUInteger reconnectingCloses;
+static IOReturn closeStatus;
 static void (*tick)(void);
 static double MonotonicTime(void) { return elapsed; }
 static void RunLoopFor(double seconds) { elapsed += seconds; if (tick) tick(); Complete(); if (disconnectAt >= 0 && elapsed >= disconnectAt) fixtureDevice.connected = NO; }
@@ -86,7 +88,7 @@ static BOOL FixtureConnected(FixtureDevice *device) { return device.connected; }
 + (FixtureDevice *)deviceWithAddressString:(NSString *)address { return fixtureDevice; }
 - (BOOL)isPaired { return self.paired; }
 - (BOOL)isConnected { return self.connected; }
-- (IOReturn)closeConnection { self.closes++; self.connected = NO; return 0; }
+- (IOReturn)closeConnection { self.closes++; if (closeStatus == 0 && self.closes > reconnectingCloses) self.connected = NO; return closeStatus; }
 - (IOReturn)openConnection:(ConnectionObserver *)observer { self.opens++; if (acquisitionStatus != kIOReturnSuccess) return acquisitionStatus; self.connected = YES; activeObserver = observer; Complete(); return 0; }
 - (IOBluetoothUserNotification *)registerForDisconnectNotification:(id)observer selector:(SEL)selector { return (IOBluetoothUserNotification *)[FixtureNotification new]; }
 @end
@@ -212,6 +214,27 @@ int main(int argc, const char **argv) {
         status = Invoke(@[@"fixture", @"--address", @"02-00-00-00-00-01", @"--disconnect"], YES, 2, 0);
         assert(status == 0 && fixtureDevice.closes == 1);
         puts("PASS explicit initial takeover still disconnects the selected target");
+        NSArray *takeover = @[@"fixture", @"--address", @"02-00-00-00-00-01", @"--disconnect"];
+        reconnectingCloses = 1;
+        status = Invoke(takeover, YES, 0, 1);
+        assert(status == 0 && fixtureDevice.closes == 2 && elapsed >= 5 && elapsed < 11);
+        puts("PASS initial native audio reconnect is retried within the same takeover");
+        reconnectingCloses = 100;
+        status = Invoke(takeover, YES, 0, 1);
+        assert(status == 4 && fixtureDevice.closes == 2 && elapsed >= 10 && elapsed < 11);
+        puts("PASS repeated native reconnection exhausts a bounded takeover retry");
+        for (NSNumber *native in @[@0, @-1]) {
+            status = Invoke(takeover, YES, 0, native.intValue);
+            assert(status == 4 && fixtureDevice.closes == 1);
+        }
+        status = Invoke(zero, YES, 0, 0);
+        assert(status == 4 && fixtureDevice.closes == 1);
+        closeStatus = kIOReturnError;
+        status = Invoke(takeover, YES, 0, 1);
+        assert(status == 3 && fixtureDevice.closes == 1 && elapsed == 0);
+        closeStatus = 0;
+        reconnectingCloses = 0;
+        puts("PASS restoration, unknown output and rejected closes do not retry takeover");
     }
     return 0;
 }
