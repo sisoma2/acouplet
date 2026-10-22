@@ -42,6 +42,7 @@ python_checks = (
     "Helpers/LDAC/LDACNativeOutputRestoreCheck.py",
     "Helpers/LDAC/LDACSessionClosureCheck.py",
     "Helpers/LDAC/LDACCaptureStartupCheck.py",
+    "Helpers/LDAC/LDACCaptureRecoveryCheck.py",
     "Helpers/LDAC/LDACSignalingStartupCheck.py",
     "Helpers/LDAC/LDACSenderTimingCheck.py",
     "Helpers/LDAC/LDACAdaptivePolicyCheck.py",

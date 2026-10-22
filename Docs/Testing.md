@@ -181,6 +181,35 @@ Acouplet service or login item.
 
 Bluetooth, audio and connection recovery still need testing with real hardware.
 
+`Helpers/LDAC/LDACCaptureRecoveryCheck.py` exercises the production overload
+watchdog, capture restart and active-source inventory with synthetic clocks and
+Core Audio calls. It covers silence without overloads, initial silence, returning
+audio, window expiry, notification bursts, cooldowns, cancellation, stop/start
+errors, PCM ring preservation and selected-application/output admission. The
+fixture does not overload the host audio service or control a real player.
+
+Run that check directly with:
+
+```sh
+uv run --locked python Helpers/LDAC/LDACCaptureRecoveryCheck.py
+```
+
+It also runs the production audio callback, PCM ring and complete streaming loop
+with synthetic stereo samples and a simulated clock. Seven stream scenarios cover
+overload followed by silence and recovery, silence without an overload, a paused
+source, an unrelated output, included and excluded applications, and silence that
+persists after the restart. The test asserts the two-second recovery threshold,
+one stop/start, delivered audio after a successful simulated restart, preserved
+frame counts and the absence of repeated restarts if silence persists. Core Audio
+stop/start calls and source inventory are simulated, so this confirms the helper's
+control flow rather than recovery from a real macOS overload. Live qualification
+requires a recovery attempt followed by increasing `PCM_HEALTH` nonzero-frame
+counts and audible playback without pausing the source player. The
+[2026-10-22 headset test](ValidationHistory.md#live-capture-recovery-after-injected-silence)
+verified these with a temporary signed helper injecting silent PCM and an overload
+event into the real playback pipeline. Its real capture restart and audible
+recovery passed; the original macOS scheduling failure was not reproduced.
+
 Packaging, app installation, LDAC driver installation, and direct-release
 fixtures run up to eight isolated cases concurrently when invoked directly,
 bounded by the logical CPU count. Through `check-all.py`, each suite uses up to

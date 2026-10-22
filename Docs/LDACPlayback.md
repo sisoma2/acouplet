@@ -199,6 +199,30 @@ firmware, driver revisions, configuration scalars and structured health. It excl
 recorded audio, raw signaling, process IDs, selected application IDs and device UIDs;
 free-form recovery reasons redact addresses, UUIDs, process IDs and user paths.
 
+The capture helper also records `PCM_HEALTH` once per second, including callback,
+delivered-frame, nonzero-frame, overload and recovery-attempt counts and elapsed
+silence. These are signal statistics; no audio is saved. Core Audio overload
+notifications on the capture aggregate and source output arm a five-second
+recovery window after the stream has produced nonzero audio. If capture then
+remains entirely silent for two seconds while another audio process is still
+running on that same output, the helper attempts one stop/start of its own capture
+IOProc. Application selection still limits which source processes qualify.
+The PCM ring, LDAC encoder, Bluetooth connection, output volume and source player
+remain in place. A ten-second cooldown and a new overload are required for another
+attempt. Silence alone, initial silence and inactive sources do not arm recovery;
+an overload coinciding with an intentional silent passage can still cause one
+capture restart. Restart errors use the existing capture shutdown path.
+
+`PCM_OVERLOAD_RECOVERY` identifies attempts; later `PCM_HEALTH` nonzero-frame
+increments show that capture contains audio again. This addresses suspected silent
+capture after an overload, rather than proving the cause of every audible dropout.
+The 2026-10-22 interruption coincided with a Core Audio overload and recovered after
+the user paused Spotify. Deterministic fixtures cover recovery decisions and failed
+restarts. A [controlled live test](ValidationHistory.md#live-capture-recovery-after-injected-silence)
+with WF-1000XM5 earbuds at 96 kHz / 660 kbps confirmed one real capture restart and
+automatic audible recovery after injected silence. Recovery from the original
+macOS overload still needs qualification when that failure recurs.
+
 Setup and compatibility combines bundled/installed/loaded driver revisions, restart
 state, capture access, controller readiness, Sound Quality, advertised stereo rates,
 model-specific multipoint restrictions and runtime ownership checks. Reading this

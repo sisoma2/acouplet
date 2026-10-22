@@ -2,6 +2,36 @@
 
 # Validation history
 
+## Live capture recovery after injected silence
+
+On 2026-10-22, a controlled live test with WF-1000XM5 earbuds on macOS 26.7.1
+(25G241) used privately signed Release build 207 and the current revision 8 LDAC
+driver. Spotify played through the real LDAC pipeline at 96 kHz / fixed 660 kbps.
+The temporary capture helper accepted an explicit signal to invoke its overload
+handler and substitute silent PCM. The injected silence cleared after a successful
+real `AudioDeviceStop`/`AudioDeviceStart` of the capture aggregate; an eight-second
+failsafe would have released silence if recovery failed.
+
+The production watchdog requested exactly one restart after 2.001 seconds of
+silence. Both Core Audio calls succeeded, completing 2.068 seconds after fault
+injection. Subsequent `PCM_HEALTH` nonzero-frame counts increased from 1,380,979
+to 1,573,491, while Spotify remained playing on the same track and advanced from
+64.209 to 69.744 seconds. The app, owner and capture helper stayed running through
+the trial, with no PCM failure or failsafe timeout. The user confirmed hearing the
+brief dropout and automatic audible recovery without touching Spotify.
+
+Local evidence is saved under `.build/live-capture-recovery/` in
+`live-trial.json`, `live-trial.log`, the test build receipt and the temporary helper
+source. The production source was restored before the trial. The test qualifies
+the watchdog, real capture restart and audible LDAC recovery for the injected
+fault; the original macOS scheduling overload was not reproduced.
+
+Normal signed Release build 208 was installed afterward. Its app and capture
+helper matched the Release binaries, the temporary injection hook was absent,
+and the original signing certificate was preserved. The driver remained `current`;
+Spotify resumed playing and the normal capture reported increasing nonzero-frame
+counts through the LDAC output.
+
 ## Bluetooth headset discovery during calls
 
 On 2026-10-21, a Zoom test with WH-1000XM5 headphones on macOS 26.7.1
