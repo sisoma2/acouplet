@@ -778,6 +778,59 @@ final class SonyNoiseControlControllerTests: XCTestCase {
         controller.setNoiseControl(.anc)
         XCTAssertEqual(controller.simulatedPendingFrame?.payload, [0x68, 0x19, 1, 1, 0, 0, 12, 1, 0])
     }
+    func testNormalizedOffConfirmationDoesNotLoseTheNextModeClick() {
+        for inquiry: UInt8 in [0x17, 0x19] {
+            let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+            defer { controller.simulateControlLoss() }
+            controller.simulateDeviceConnection(named: "WH-1000XM5", galleryModel: inquiry == 0x17 ? .whXM5 : nil)
+            let extra: [UInt8] = inquiry == 0x19 ? [0, 0] : []
+            controller.setNoiseControl(.off)
+            acknowledgeAll(controller)
+            controller.setNoiseControl(.anc)
+            deliver([0x69, inquiry, 1, 0, 0, 0, 12] + extra, to: controller)
+            acknowledgeAll(controller)
+            XCTAssertEqual(controller.simulatedTransmittedFrames.filter { $0.payload.first == 0x68 }.count, 2)
+            XCTAssertEqual(controller.pendingChanges[.noiseControl], [inquiry, 1, 1, 0, 0, 12] + extra)
+            deliver([0x69, inquiry, 1, 1, 0, 0, 12] + extra, to: controller)
+            XCTAssertNil(controller.pendingChanges[.noiseControl])
+            XCTAssertTrue(controller.canChangeNoiseControl)
+            XCTAssertEqual(controller.noiseControlMode, .anc)
+        }
+    }
+
+    func testANCConfirmationIgnoresInactiveAmbientFieldsButRequiresAdaptation() {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        controller.simulateDeviceConnection(named: "WH-1000XM5")
+        controller.setNoiseControl(.anc)
+        acknowledgeAll(controller)
+        deliver([0x69, 0x19, 1, 1, 0, 1, 10, 0, 0], to: controller)
+        XCTAssertNil(controller.pendingChanges[.noiseControl])
+        controller.setNoiseAdaptation(enabled: true)
+        acknowledgeAll(controller)
+        deliver([0x69, 0x19, 1, 1, 0, 1, 10, 0, 0], to: controller)
+        XCTAssertNotNil(controller.pendingChanges[.noiseControl])
+        deliver([0x69, 0x19, 1, 1, 0, 1, 10, 1, 0], to: controller)
+        XCTAssertNil(controller.pendingChanges[.noiseControl])
+    }
+
+    func testUnconfirmedModeChangeRequestsFreshStateWithoutManualRefresh() async throws {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        controller.simulateDeviceConnection(named: "WH-1000XM5", galleryModel: .whXM5)
+        controller.setNoiseControl(.anc)
+        acknowledgeAll(controller)
+        controller.simulateSettingTimeout(.noiseControl)
+        for _ in 0..<4 { await Task.yield() }
+        XCTAssertEqual(controller.simulatedPendingFrame?.payload, [0x66, 0x17])
+        XCTAssertFalse(controller.canChangeNoiseControl)
+        acknowledgeAll(controller)
+        deliver([0x67, 0x17, 1, 1, 0, 0, 12], to: controller)
+        XCTAssertTrue(controller.canChangeNoiseControl)
+        XCTAssertNil(controller.settingErrors[.noiseControl])
+    }
+
+
 }
 
 @MainActor

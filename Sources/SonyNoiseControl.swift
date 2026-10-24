@@ -108,6 +108,17 @@ struct SonyNoiseControl: Equatable, Sendable {
         return state.mode
     }
 
+    func confirms(_ value: [UInt8]?, expected: [UInt8]) -> Bool {
+        guard let value, let received = State(payload: [0x67] + value),
+              let requested = State(payload: [0x68] + expected),
+              received.inquiryType == inquiryType, requested.inquiryType == inquiryType,
+              received.mode == requested.mode else { return false }
+        guard received.adaptationEnabled == requested.adaptationEnabled,
+              received.sensitivity == requested.sensitivity else { return false }
+        return received.mode == .off || received.mode == .anc
+            || (received.ambientMode == requested.ambientMode && received.ambientLevel == requested.ambientLevel)
+    }
+
     func setPayload(mode: NoiseControlMode? = nil, ambientLevel: Int? = nil, focusOnVoice: Bool? = nil,
                     adaptationEnabled: Bool? = nil, sensitivity: Sensitivity? = nil) -> [UInt8]? {
         guard canSet, let state else { return nil }

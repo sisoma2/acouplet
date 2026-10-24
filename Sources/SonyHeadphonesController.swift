@@ -4404,6 +4404,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
                     error: HeadphoneControlError(message: String(localized: "Headphones did not confirm the change.")))
                 if setting == .noiseControl {
                     self.sendRequestedNoiseControl()
+                    if let query { self.send(query) }
                 }
                 if let query {
                     if frame.type == 0x0E, query.first == 0x46 { self.send(query, type: frame.type) }
@@ -4425,7 +4426,8 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         guard receivedAfter(settingTransmissionOrdinals[setting]) else { return }
         let sentValue = settingTimeouts[setting] == nil ? nil : pendingChanges[setting]
         guard let expected = sentValue ?? unconfirmedChanges[setting],
-              value == expected || (setting == .equalizer && expected.count == 1 && value?.first == expected.first) else { return }
+              value == expected || (setting == .equalizer && expected.count == 1 && value?.first == expected.first)
+                || (setting == .noiseControl && noiseControl?.confirms(value, expected: expected) == true) else { return }
         recordDiagnostic("setting=\(setting) confirmed")
         if setting == .stamina { staminaChange = nil }
         let requestID = settingRequests[setting]
