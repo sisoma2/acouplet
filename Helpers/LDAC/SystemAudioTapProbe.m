@@ -67,6 +67,7 @@ typedef struct {
     atomic_uint_fast64_t consumed;
     atomic_uint_fast64_t streamCallbacks;
     atomic_uint highWater;
+    atomic_uint_fast64_t overloads;
     AudioConverterRef converter;
     float converterInput[2048];
     BOOL converterEOF;
@@ -273,12 +274,122 @@ static int CheckStreamRates(void) {
     return 0;
 }
 
-static BOOL StreamAudio(Capture *capture, int fd, double duration, pid_t parentPID) {
+typedef struct {
+    uint64_t overloads;
+    uint64_t nonzeroFrames;
+    double lastAudio;
+    double pendingUntil;
+    double lastRecovery;
+    unsigned recoveryAttempts;
+} CaptureRecovery;
+
+static BOOL CaptureRecoveryDue(CaptureRecovery *recovery, double now, uint64_t overloads, uint64_t nonzeroFrames) {
+    if (nonzeroFrames != recovery->nonzeroFrames) {
+        recovery->nonzeroFrames = nonzeroFrames;
+        recovery->lastAudio = now;
+    }
+    if (overloads != recovery->overloads) {
+        recovery->overloads = overloads;
+        if (recovery->nonzeroFrames && (!recovery->recoveryAttempts || now - recovery->lastRecovery >= 10) &&
+            now > recovery->pendingUntil)
+            recovery->pendingUntil = now + 5;
+    }
+    return recovery->pendingUntil > now && now - recovery->lastAudio >= 2;
+}
+
+static BOOL RestartCapture(Capture *capture, CaptureRecovery *recovery, AudioDeviceID aggregate,
+                            AudioDeviceIOProcID io, double now) {
+    if (interrupted || atomic_load(&capture->failed)) return NO;
+    recovery->pendingUntil = 0;
+    recovery->lastRecovery = now;
+    recovery->recoveryAttempts++;
+    printf("PCM_OVERLOAD_RECOVERY attempt=%u overloads=%llu silentMs=%.0f\n", recovery->recoveryAttempts,
+           (unsigned long long)recovery->overloads, (now - recovery->lastAudio) * 1000);
+    if (!Status(AudioDeviceStop(aggregate, io), "OVERLOAD_STOP_AUDIO")) {
+        atomic_store(&capture->failed, 8);
+        return NO;
+    }
+    if (interrupted || atomic_load(&capture->failed)) return NO;
+    if (!Status(AudioDeviceStart(aggregate, io), "OVERLOAD_START_AUDIO")) {
+        atomic_store(&capture->failed, 8);
+        return NO;
+    }
+    return YES;
+}
+
+static BOOL CaptureSourceIsRunning(AudioDeviceID device);
+
+static OSStatus CaptureOverloaded(AudioObjectID object, UInt32 count,
+                                   const AudioObjectPropertyAddress *addresses, void *context) {
+    Capture *capture = context;
+    for (UInt32 index = 0; index < count; index++) {
+        if (addresses[index].mSelector == kAudioDeviceProcessorOverload) {
+            atomic_fetch_add_explicit(&capture->overloads, 1, memory_order_relaxed);
+            break;
+        }
+    }
+    return noErr;
+}
+
+static BOOL CaptureSourceIsRunning(AudioDeviceID device) {
+    if (device == kAudioObjectUnknown) return NO;
+    AudioObjectPropertyAddress address = {kAudioHardwarePropertyProcessObjectList,
+        kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, NULL, &size) != noErr ||
+        size > 65536 || size % sizeof(AudioObjectID) || !size) return NO;
+    NSMutableData *storage = [NSMutableData dataWithLength:size];
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, NULL, &size, storage.mutableBytes) != noErr ||
+        size > storage.length || size % sizeof(AudioObjectID)) return NO;
+    AudioObjectID *processes = storage.mutableBytes;
+    for (UInt32 index = 0; index < size / sizeof(AudioObjectID); index++) {
+        AudioObjectID process = processes[index];
+        UInt32 running = 0, valueSize = sizeof(running);
+        address.mSelector = kAudioProcessPropertyIsRunningOutput;
+        if (AudioObjectGetPropertyData(process, &address, 0, NULL, &valueSize, &running) != noErr ||
+            valueSize != sizeof(running) || !running) continue;
+        pid_t pid = 0;
+        valueSize = sizeof(pid);
+        address.mSelector = kAudioProcessPropertyPID;
+        if (AudioObjectGetPropertyData(process, &address, 0, NULL, &valueSize, &pid) != noErr ||
+            valueSize != sizeof(pid) || pid <= 0 || pid == getpid()) continue;
+        address.mSelector = kAudioProcessPropertyDevices;
+        address.mScope = kAudioObjectPropertyScopeOutput;
+        AudioObjectID devices[128];
+        valueSize = sizeof(devices);
+        OSStatus status = AudioObjectGetPropertyData(process, &address, 0, NULL, &valueSize, devices);
+        address.mScope = kAudioObjectPropertyScopeGlobal;
+        if (status != noErr || valueSize > sizeof(devices) || valueSize % sizeof(AudioObjectID)) continue;
+        for (UInt32 output = 0; output < valueSize / sizeof(AudioObjectID); output++)
+            if (devices[output] == device) return YES;
+    }
+    return NO;
+}
+
+static BOOL StreamAudio(Capture *capture, int fd, double duration, pid_t parentPID,
+                         AudioDeviceID aggregate, AudioDeviceIOProcID io, AudioDeviceID source) {
     double deadline = duration ? MonotonicTime() + duration : INFINITY;
+    double nextHealth = 0, nextRecoveryCheck = 0;
+    CaptureRecovery recovery = {0};
     while (!interrupted && !atomic_load(&capture->failed) && MonotonicTime() < deadline) {
         if (parentPID > 1 && getppid() != parentPID) {
             printf("PCM_PARENT_EXIT pid=%d\n", parentPID);
             return !atomic_load(&capture->failed);
+        }
+        double now = MonotonicTime();
+        uint64_t overloads = atomic_load_explicit(&capture->overloads, memory_order_relaxed);
+        BOOL due = CaptureRecoveryDue(&recovery, now, overloads, capture->nonzeroFrames);
+        if (now >= nextHealth) {
+            printf("PCM_HEALTH callbacks=%llu frames=%llu nonzeroFrames=%llu overloads=%llu recoveryAttempts=%u silentMs=%.0f\n",
+                   (unsigned long long)atomic_load(&capture->streamCallbacks), (unsigned long long)capture->frames,
+                   (unsigned long long)capture->nonzeroFrames, (unsigned long long)overloads, recovery.recoveryAttempts,
+                   recovery.nonzeroFrames ? (now - recovery.lastAudio) * 1000 : 0);
+            nextHealth = now + 1;
+        }
+        if (due && now >= nextRecoveryCheck) {
+            nextRecoveryCheck = now + 0.5;
+            if (CaptureSourceIsRunning(source) &&
+                !RestartCapture(capture, &recovery, aggregate, io, now)) break;
         }
         uint64_t consumed = atomic_load_explicit(&capture->consumed, memory_order_relaxed);
         uint64_t produced = atomic_load_explicit(&capture->produced, memory_order_acquire);
@@ -523,12 +634,14 @@ int main(int argc, const char *argv[]) {
             }
             AudioObjectID tap = kAudioObjectUnknown;
             AudioDeviceID aggregate = kAudioObjectUnknown;
+            AudioDeviceID sourceDevice = kAudioObjectUnknown;
             AudioDeviceIOProcID io = NULL;
             BOOL started = NO;
             BOOL captured = NO;
             BOOL cancelledBeforeStream = NO;
             BOOL cleaned = YES, listenersQuiesced = YES;
             BOOL tapListening = NO, aggregateListening = NO;
+            BOOL aggregateOverloadListening = NO, sourceOverloadListening = NO;
             AudioObjectPropertyListenerBlock formatListener = nil;
             dispatch_queue_t formatQueue = nil;
             Capture capture = {0};
@@ -539,6 +652,7 @@ int main(int argc, const char *argv[]) {
             atomic_init(&capture.consumed, 0);
             atomic_init(&capture.streamCallbacks, 0);
             atomic_init(&capture.highWater, 0);
+            atomic_init(&capture.overloads, 0);
             double startupDeadline = MonotonicTime() + 5;
             do {
                 NSString *identifier = @ACOUPLET_AUDIO_HELPER_BUNDLE_ID;
@@ -557,6 +671,7 @@ int main(int argc, const char *argv[]) {
                     if (!Status(AudioObjectGetPropertyData(kAudioObjectSystemObject, &deviceAddress,
                         sizeof(selectedUID), &selectedUID, &selectedSize, &selectedDevice), "RESOLVE_CAPTURE_DEVICE") ||
                         selectedDevice == kAudioObjectUnknown) break;
+                    sourceDevice = selectedDevice;
                     deviceAddress.mSelector = kAudioDevicePropertyNominalSampleRate;
                     Float64 nativeRate = 0;
                     selectedSize = sizeof(nativeRate);
@@ -718,6 +833,15 @@ int main(int argc, const char *argv[]) {
                     }
                 }
                 printf("BEFORE_START_AUDIO monotonic=%.9f\n", MonotonicTime());
+                if (streaming) {
+                    AudioObjectPropertyAddress overloadAddress = {kAudioDeviceProcessorOverload,
+                        kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+                    aggregateOverloadListening = Status(AudioObjectAddPropertyListener(aggregate, &overloadAddress,
+                        CaptureOverloaded, &capture), "LISTEN_AGGREGATE_OVERLOAD");
+                    if (sourceDevice != kAudioObjectUnknown)
+                        sourceOverloadListening = Status(AudioObjectAddPropertyListener(sourceDevice, &overloadAddress,
+                            CaptureOverloaded, &capture), "LISTEN_SOURCE_OVERLOAD");
+                }
                 if (!Status(AudioDeviceStart(aggregate, io), "START_AUDIO")) break;
                 started = YES;
                 if (checkingPermission) {
@@ -740,7 +864,7 @@ int main(int argc, const char *argv[]) {
                         break;
                     }
                     printf("PCM_CAPTURE_READY rate=%.9g channels=2 format=F32 interleaved=1 bytesPerFrame=8\n", sampleRate);
-                    captured = StreamAudio(&capture, pcmFD, duration, parentPID);
+                    captured = StreamAudio(&capture, pcmFD, duration, parentPID, aggregate, io, sourceDevice);
                     break;
                 }
 #if !ACOUPLET_AUDIO_HELPER_STREAM_ONLY
@@ -755,6 +879,20 @@ int main(int argc, const char *argv[]) {
 #endif
             } while (NO);
             printf("BEFORE_AUDIO_CLEANUP interrupted=%d error=%d\n", interrupted, atomic_load(&capture.failed));
+            AudioObjectPropertyAddress overloadAddress = {kAudioDeviceProcessorOverload,
+                kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+            if (aggregateOverloadListening) {
+                BOOL removed = Status(AudioObjectRemovePropertyListener(aggregate, &overloadAddress,
+                    CaptureOverloaded, &capture), "UNLISTEN_AGGREGATE_OVERLOAD");
+                cleaned &= removed;
+                listenersQuiesced &= removed;
+            }
+            if (sourceOverloadListening) {
+                BOOL removed = Status(AudioObjectRemovePropertyListener(sourceDevice, &overloadAddress,
+                    CaptureOverloaded, &capture), "UNLISTEN_SOURCE_OVERLOAD");
+                cleaned &= removed;
+                listenersQuiesced &= removed;
+            }
             if (tapListening) {
                 AudioObjectPropertyAddress address = {kAudioTapPropertyFormat, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
                 BOOL removed = Status(AudioObjectRemovePropertyListenerBlock(tap, &address, formatQueue, formatListener), "UNLISTEN_TAP_FORMAT");
