@@ -129,6 +129,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !isDuplicateLaunch else { return }
+        #if !ACOUPLET_PUBLIC_APIS_ONLY
+        if !isRunningTests { MacMediaPlaybackLifetime.shared.start() }
+        #endif
         environment.settings.backgroundServiceMigrationError = backgroundServiceMigrationError
         environment.settings.retryBackgroundServiceMigration = { [weak self] in
             guard let self, self.backgroundServiceMigrationError != nil else { return }
@@ -258,6 +261,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             retriesBackgroundServiceMigration = true
         }
         #endif
+        #if !ACOUPLET_PUBLIC_APIS_ONLY
+        if !isRunningTests, !isDuplicateLaunch { MacMediaPlaybackLifetime.shared.pauseForTermination() }
+        #endif
         if environment.devices.prepareEarbudFindingForTermination(completion: { [weak self] in
             guard let self else { sender.reply(toApplicationShouldTerminate: true); return }
             let reply = self.applicationShouldTerminate(sender)
@@ -299,6 +305,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 self?.testTerminationObserver = nil
                 if interrupted != nil {
+                    #if !ACOUPLET_PUBLIC_APIS_ONLY
+                    MacMediaPlaybackLifetime.shared.cancelTermination()
+                    #endif
                     self?.environment.devices.cancelTermination()
                     self?.retriesBackgroundServiceMigration = false
                     self?.isSystemTerminating = false
@@ -355,6 +364,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     #endif
 
     func applicationWillTerminate(_ notification: Notification) {
+        #if !ACOUPLET_PUBLIC_APIS_ONLY
+        if !isRunningTests, !isDuplicateLaunch { MacMediaPlaybackLifetime.shared.finishTermination() }
+        #endif
         menuBarController?.stop()
         menuBarController = nil
         #if !ACOUPLET_PUBLIC_APIS_ONLY

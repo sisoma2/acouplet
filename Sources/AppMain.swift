@@ -6,6 +6,11 @@ import SwiftUI
 enum AcoupletMain {
     static func main() {
         #if !ACOUPLET_PUBLIC_APIS_ONLY
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--media-playback-watch",
+           let parent = pid_t(CommandLine.arguments[2]) {
+            MacMediaPlaybackExitWorker.run(parent: parent)
+            return
+        }
         if CommandLine.arguments == [CommandLine.arguments[0], "--ldac-owner"] {
             LDACOwnerWorker.run()
             return

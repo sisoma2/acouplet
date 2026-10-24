@@ -3,6 +3,7 @@ import json, os, plistlib, subprocess, sys, tempfile
 
 repo = Path(__file__).resolve().parent.parent
 python_checks = (
+    'Helpers/MediaPlaybackLifetimeCheck.py',
     'Packaging/check-localizations-check.py',
     'Packaging/check-no-sony-artwork.py',
     'Packaging/check-sparkle.py',
