@@ -684,8 +684,10 @@ static int supervisor(NSString *executable, NSString *identifier, NSString *sess
             @autoreleasepool {
                 int childReceived = receive(fromChild.fileHandleForReading.fileDescriptor, childInput, &incoming);
                 if (childReceived < 0) { if (childReceived != -1) result = 1; break; }
+                if (expired(sample, lease)) break;
                 if (childReceived > 0) {
                     event(@"child-report", @{@"report": incoming});
+                    if (componentsAbsentReport(incoming, session)) break;
                     if ([incoming[@"event"] isEqual:@"native-disconnected"]) { result = nativeDisconnectedExit; break; }
                     if ([incoming[@"event"] isEqual:@"native-unavailable"]) { result = nativeUnavailableExit; break; }
                     if ([incoming[@"event"] isEqual:@"case-expired"]) {
