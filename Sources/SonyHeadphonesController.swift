@@ -16,6 +16,7 @@ protocol SonyBluetoothDevice: AnyObject where Self: NSObject {
     func isClassicConnected() -> Bool
     func isPaired() -> Bool
     func openConnection(_ target: Any!) -> IOReturn
+    func closeConnection() -> IOReturn
     func sonyServiceRecord(for uuid: IOBluetoothSDPUUID) -> (any SonyServiceRecord)?
     func performSonySDPQuery(_ target: any SonyServiceDiscoveryDelegate) -> IOReturn
     func openSonyRFCOMMChannel(withChannelID channelID: BluetoothRFCOMMChannelID, delegate: Any) -> (IOReturn, (any RFCOMMChannel)?)
@@ -385,6 +386,14 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         earTipFitTransition?.phase == .interrupted || headGesturePracticeTransition?.phase == .interrupted || legacyOptimizerTransition?.phase == .interrupted
     }
     var isPoweringOff: Bool { powerOffState == .sending }
+    var isReconnectPaused: Bool { isDisconnectedByUser || powerOffState != nil }
+    var canDisconnect: Bool {
+        !displayOnly && !isSystemSleeping && !isTerminating && !isPoweringOff
+            && (isDeviceConnected || hasOpenControlTransport || hasPendingManualBLEConnection)
+            && !isRunningHeadphoneTest && classicConnectionID == nil
+            && connectionTransition?.isFinished != false && sourceTransition?.isFinished != false
+            && deviceActionTransition?.isFinished != false && multipointTransition?.isFinished != false
+    }
     var canPowerOff: Bool { powerOffUnavailableReason == nil }
     var powerOffSession: UInt64? { canPowerOff ? controlSession : nil }
     var powerOffUnavailableReason: String? {
@@ -767,6 +776,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     private var savedIdentity: SonyBLEIdentity.VerifiedDevice?
     private var device: (any SonyBluetoothDevice)?
     private var classicConnectionID: UUID?
+    private var classicConnectionTimeout: DispatchWorkItem?
     private var classicConnections: [UUID: ClassicConnection] = [:]
     private var serviceDiscoveryID: UUID?
     private var serviceDiscoveries: [UUID: ServiceDiscovery] = [:]
@@ -894,6 +904,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     private var noiseReadTimeouts: [[UInt8]: (id: UUID, work: DispatchWorkItem)] = [:]
     private var noiseAvailabilityReadObsolete = false
     private var reconnectAutomatically = true
+    private(set) var isDisconnectedByUser = false
     private var legacyOptimizerTimeout: DispatchWorkItem?
     private var legacyOptimizerTimeoutPhase: SonyLegacyOptimizerTransition.Phase?
     private var headGesturePracticeTimeout: DispatchWorkItem?
@@ -1217,6 +1228,8 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         guard isSimulated, let connection = beginClassicConnection(recovering: recovering) else { return nil }
         return connection.complete
     }
+
+    func simulateClassicConnectionTimeout() { classicConnectionTimeout?.perform() }
 
     func simulateSonyLink(to device: any SonyBluetoothDevice) {
         guard isSimulated else { return }
@@ -1769,7 +1782,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     }
 
     func retryControlsIfNeeded() -> Bool {
-        guard !displayOnly, !isSystemSleeping, !isTerminating, isBluetoothInitialized, reconnectAutomatically,
+        guard !isDisconnectedByUser, !displayOnly, !isSystemSleeping, !isTerminating, isBluetoothInitialized, reconnectAutomatically,
               isDeviceConnected, powerOffState == nil, !isRunningHeadphoneTest,
               stage == .idle, channel == nil, classicConnectionID == nil,
               serviceDiscoveries.isEmpty, recoveryUsesBLE == nil,
@@ -2353,7 +2366,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     }
 
     private func refresh(shouldOpenLink: Bool, automatically: Bool = true) {
-        guard !displayOnly, !isSystemSleeping, !isTerminating, powerOffState == nil, !isRunningHeadphoneTest else { return }
+        guard !isDisconnectedByUser, !displayOnly, !isSystemSleeping, !isTerminating, powerOffState == nil, !isRunningHeadphoneTest else { return }
         guard classicConnectionID == nil else { return }
         guard canRecoverDeviceAction else { return }
         if let transition = multipointTransition, !transition.isFinished || (transition.phase == .failed && multipointConnection != nil && !isReady) {
@@ -2816,7 +2829,26 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         powerOffRequestSession = nil
     }
 
+    func disconnect() {
+        guard canDisconnect else { return }
+        isDisconnectedByUser = true
+        cancelScheduledRetry(resetAttempts: true)
+        closeSonyLink()
+        linkState = .disconnected
+        lastErrorMessage = nil
+        let target: (any SonyBluetoothDevice)? = device ?? (isSimulated ? nil : IOBluetoothDevice(addressString: address))
+        let result = target?.closeConnection() ?? kIOReturnSuccess
+        if result == kIOReturnSuccess {
+            isDeviceConnected = false
+        } else {
+            let message = String(localized: "Couldn’t disconnect the headphones. Try again or use Bluetooth Settings.")
+            lastErrorMessage = message
+            linkState = .failed(message)
+        }
+    }
+
     func connect() {
+        isDisconnectedByUser = false
         guard !displayOnly, !isSystemSleeping, classicConnectionID == nil else { return }
         guard clearHeadphoneTestsForExplicitConnection() else { return }
         clearPowerOffForExplicitConnection()
@@ -2855,13 +2887,15 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             return
         }
         #if DEBUG
-        if !device.isClassicConnected(), openPairedBluetoothLE(for: device) { return }
+        if !device.isClassicConnected(), lastReadyTransportWasBluetoothLE || connectionMode == .lowLatency,
+           openPairedBluetoothLE(for: device) { return }
         #endif
         openClassicConnection(device, recovering: false)
     }
 
     #if DEBUG
     func connectBluetoothLE() {
+        isDisconnectedByUser = false
         guard !displayOnly, !isSystemSleeping, !hasPendingManualBLEConnection else { return }
         guard clearHeadphoneTestsForExplicitConnection() else { return }
         clearPowerOffForExplicitConnection()
@@ -3560,6 +3594,8 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         if connectionTransition?.timeout() == true || connectionTransition?.recoveryFailed() == true {
             if wasRecovering, classicConnectionID != nil {
                 classicConnectionID = nil
+                classicConnectionTimeout?.cancel()
+                classicConnectionTimeout = nil
                 linkState = .disconnected
             }
             if wasRecovering, isReady {
@@ -4900,6 +4936,8 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         lastReceivedSequence = nil
         earbudFinder?.dismiss(retiringTransport: true)
         classicConnectionID = nil
+        classicConnectionTimeout?.cancel()
+        classicConnectionTimeout = nil
         pendingClassicOpenID = nil
         serviceDiscoveryID = nil
         cachedServiceOpenIsAutomatic = nil
@@ -7955,7 +7993,9 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             connection.complete(kIOReturnSuccess, true)
             return
         }
+        Self.logger.notice("Requesting Classic connection; session=\(self.controlSession) recovering=\(recovering)")
         let result = target.openConnection(connection)
+        Self.logger.notice("Classic connection request returned; session=\(self.controlSession) status=\(result)")
         if result != kIOReturnSuccess { connection.complete(result, target.isClassicConnected()) }
     }
 
@@ -7970,6 +8010,9 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             self.classicConnections[identifier] = nil
             guard self.classicConnectionID == identifier, self.controlSession == session, !self.isSystemSleeping else { return }
             self.classicConnectionID = nil
+            self.classicConnectionTimeout?.cancel()
+            self.classicConnectionTimeout = nil
+            Self.logger.notice("Classic connection completed; session=\(session) status=\(status) connected=\(connected)")
             self.isDeviceConnected = connected
             guard status == kIOReturnSuccess || connected else {
                 self.fail(recovering ? String(localized: "Could not reconnect the selected headphones.")
@@ -7983,6 +8026,17 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             }
         }
         classicConnections[identifier] = connection
+        let timeout = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self, self.classicConnectionID == identifier,
+                      self.controlSession == session, !self.isSystemSleeping else { return }
+                Self.logger.error("Classic connection timed out; session=\(session)")
+                self.fail(recovering ? String(localized: "Could not reconnect the selected headphones.")
+                    : String(localized: "No response. Check that the headphones are on."))
+            }
+        }
+        classicConnectionTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 45, execute: timeout)
         return connection
     }
 
@@ -8036,7 +8090,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     }
 
     private func scheduleRetry() {
-        guard !isSystemSleeping, powerOffState == nil, !isRunningHeadphoneTest else {
+        guard !isDisconnectedByUser, !isSystemSleeping, powerOffState == nil, !isRunningHeadphoneTest else {
             cancelScheduledRetry(resetAttempts: false)
             return
         }

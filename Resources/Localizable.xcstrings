@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Couldn’t disconnect the headphones. Try again or use Bluetooth Settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t disconnect the headphones. Try again or use Bluetooth Settings."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kulaklıkların bağlantısı kesilemedi. Tekrar deneyin veya Bluetooth Ayarları’nı kullanın."
+          }
+        }
+      }
+    },
     "Last reported": {
       "extractionState": "manual",
       "localizations": {

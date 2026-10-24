@@ -68,6 +68,8 @@ final class SonyDeviceCoordinator: NSObject, ObservableObject {
     private var controllersByAddress: [String: SonyHeadphonesController] = [:]
     private var devicesByAddress: [String: SonyConnectedDevice] = [:]
     private var connectedAddresses: Set<String> = []
+    @Published private var pairedAddresses: Set<String> = []
+    private var pendingConnectionSelection: String?
     private var observations: [String: AnyCancellable] = [:]
     private var fallbackObservation: AnyCancellable?
     private var updateScheduled = false
@@ -101,7 +103,8 @@ final class SonyDeviceCoordinator: NSObject, ObservableObject {
 
     var selectableDevices: [SonyConnectedDevice] {
         retainedDevices.filter { device in
-            connectedAddresses.contains(device.address) || controllersByAddress[device.address]?.earbudFinder?.isBusy == true
+            pairedAddresses.contains(device.address) || connectedAddresses.contains(device.address)
+                || controllersByAddress[device.address]?.earbudFinder?.isBusy == true
                 || controllersByAddress[device.address]?.earbudFinder?.mayBeRinging == true
         }
     }
@@ -124,6 +127,7 @@ final class SonyDeviceCoordinator: NSObject, ObservableObject {
         }
         if let device = SonyConnectedDevice(address: controller.address, name: controller.deviceName, model: controller.deviceModel) {
             retain(controller, for: device)
+            pairedAddresses = [device.address]
             selectedAddress = device.address
             if controller.isDeviceConnected {
                 connectedAddresses = [device.address]
@@ -155,14 +159,17 @@ final class SonyDeviceCoordinator: NSObject, ObservableObject {
     }
 
     func select(address: String) {
-        guard let normalized = SonyBLEIdentity.normalizedAddress(address), selectableDevices.contains(where: { $0.address == normalized }),
-              selectedAddress != normalized else { return }
+        guard let normalized = SonyBLEIdentity.normalizedAddress(address),
+              selectableDevices.contains(where: { $0.address == normalized }) else { return }
+        pendingConnectionSelection = connectedAddresses.contains(normalized) ? nil : normalized
+        guard selectedAddress != normalized else { return }
         selectedAddress = normalized
     }
 
     func selectForWorkflow(address: String) {
         guard let normalized = SonyBLEIdentity.normalizedAddress(address), controllersByAddress[normalized] != nil,
               selectedAddress != normalized else { return }
+        pendingConnectionSelection = nil
         selectedAddress = normalized
     }
 
@@ -248,6 +255,7 @@ final class SonyDeviceCoordinator: NSObject, ObservableObject {
                 devicesByAddress[device.address] = device
             }
         }
+        if pairedAddresses != addresses { pairedAddresses = addresses }
         self.connectedAddresses = Set(connectedAddresses.compactMap(SonyBLEIdentity.normalizedAddress)).intersection(addresses)
         updateDevices()
         if selectedAddress == nil {
@@ -420,6 +428,13 @@ final class SonyDeviceCoordinator: NSObject, ObservableObject {
         }
         let connected = retainedDevices.filter { connectedAddresses.contains($0.address) }
         if connectedDevices != connected { connectedDevices = connected }
+        if let pendingConnectionSelection {
+            if connectedAddresses.contains(pendingConnectionSelection) || !pairedAddresses.contains(pendingConnectionSelection) {
+                self.pendingConnectionSelection = nil
+            } else if selectedAddress == pendingConnectionSelection {
+                return
+            }
+        }
         guard let first = connected.first, selectedAddress.map({ !connectedAddresses.contains($0) }) ?? true else { return }
         if selectedAddress != nil, selectedController.needsDeviceContext || selectedAddress == reconnectSuppressedAddress { return }
         selectedAddress = first.address

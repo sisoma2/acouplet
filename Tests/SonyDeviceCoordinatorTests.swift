@@ -147,6 +147,30 @@ final class SonyDeviceCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testPairedDisconnectedHeadphonesCanBeChosenBeforeRetryAndKeepSelection() throws {
+        let coordinator = makeCoordinator(connected: false)
+        let earbuds = try device(firstAddress, name: "WF-1000XM5", model: .wfXM5)
+        let headphones = try device(secondAddress, name: "WH-1000XM5", model: .whXM5)
+        coordinator.reconcilePairedDevices([earbuds, headphones], connectedAddresses: [])
+        XCTAssertEqual(coordinator.selectableDevices.map(\.address), [firstAddress, secondAddress])
+        XCTAssertTrue(coordinator.hasOtherSelectableDevices)
+        coordinator.select(address: secondAddress)
+        XCTAssertEqual(coordinator.selectedController.pinnedAddress, secondAddress)
+        coordinator.reconcilePairedDevices([earbuds, headphones], connectedAddresses: [firstAddress])
+        XCTAssertEqual(coordinator.selectedAddress, secondAddress)
+        coordinator.reconcilePairedDevices([earbuds, headphones], connectedAddresses: [firstAddress, secondAddress])
+        XCTAssertEqual(coordinator.selectedAddress, secondAddress)
+        coordinator.reconcilePairedDevices([earbuds, headphones], connectedAddresses: [firstAddress])
+        XCTAssertEqual(coordinator.selectedAddress, firstAddress)
+        coordinator.select(address: secondAddress)
+        coordinator.reconcilePairedDevices([earbuds], connectedAddresses: [firstAddress])
+        XCTAssertEqual(coordinator.selectableDevices.map(\.address), [firstAddress])
+        XCTAssertEqual(coordinator.selectedAddress, firstAddress)
+        coordinator.select(address: secondAddress)
+        XCTAssertEqual(coordinator.selectedAddress, firstAddress)
+    }
+
+    @MainActor
     func testUnfinishedHeadphoneWorkflowRetainsContextWhenAnotherDeviceConnects() throws {
         let coordinator = makeCoordinator()
         let first = try device(firstAddress, name: "WF-1000XM5", model: .wfXM5)
@@ -600,7 +624,7 @@ final class SonyDeviceCoordinatorTests: XCTestCase {
             for _ in 0..<10 { await Task.yield() }
             XCTAssertEqual(coordinator.selectedAddress, secondAddress)
             XCTAssertEqual(coordinator.connectedDevices.map(\.address), otherStaysConnected ? [secondAddress] : [])
-            XCTAssertEqual(coordinator.selectableDevices.map(\.address), otherStaysConnected ? [firstAddress, secondAddress] : [firstAddress])
+            XCTAssertEqual(coordinator.selectableDevices.map(\.address), [firstAddress, secondAddress])
             XCTAssertTrue(coordinator.hasOtherSelectableDevices)
             XCTAssertEqual(finder.session?.phase, .unconfirmed)
             XCTAssertTrue(finder.mayBeRinging)
@@ -617,8 +641,8 @@ final class SonyDeviceCoordinatorTests: XCTestCase {
             for _ in 0..<10 { await Task.yield() }
             XCTAssertEqual(finder.session?.phase, .finished)
             XCTAssertFalse(finder.mayBeRinging)
-            XCTAssertEqual(coordinator.selectableDevices.map(\.address), otherStaysConnected ? [secondAddress] : [])
-            XCTAssertFalse(coordinator.hasOtherSelectableDevices)
+            XCTAssertEqual(coordinator.selectableDevices.map(\.address), [firstAddress, secondAddress])
+            XCTAssertTrue(coordinator.hasOtherSelectableDevices)
             XCTAssertEqual(finder.simulatedSentMessages, [ring, stop])
         }
     }
