@@ -30,6 +30,15 @@ no integration merge history. Its new native battery expiry regression fails
 against upstream's helper and passes with the fix. All 58 publisher unit tests
 and the native battery self-test script pass on that PR branch.
 
+Signed Release build 215, from integration commit `ae528e3`, was installed with
+the local installer and launched from `/Applications/Acouplet.app`. The app,
+transport, connection and battery executables matched the Release products.
+Strict signature verification passed and the private certificate fingerprint
+matched the previous installation. Only the installed app and its expected media
+watcher were running. The installed driver binary was unchanged and reported
+`current`; no driver installation, Core Audio restart or Mac reboot was performed.
+The temporary signing keychain was removed and the original search list restored.
+
 Driver revision remains 8 at the user's request. Driver revision and installer
 compatibility updates are deferred. Live LDAC playback with the combined transport
 still requires separate hardware qualification. See the
