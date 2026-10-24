@@ -13,11 +13,13 @@ typedef struct {
     double congestionSeconds;
     double lastObservationSeconds;
     bool congestionBackoff;
+    double deficitSeconds;
+    double previousLatenessSeconds;
 } LDACAdaptivePolicy;
 
 static inline LDACAdaptivePolicy LDACAdaptivePolicyInit(void) {
     return (LDACAdaptivePolicy){.promotionSeconds = 15, .minimumDrainBudgetSeconds = 0.012,
-        .schedulerGapLimitSeconds = 0.020};
+        .schedulerGapLimitSeconds = 0.020, .previousLatenessSeconds = -1};
 }
 
 static inline int LDACAdaptivePolicyObserve(LDACAdaptivePolicy *policy, int eqmid,
@@ -30,15 +32,22 @@ static inline int LDACAdaptivePolicyObserve(LDACAdaptivePolicy *policy, int eqmi
     if (!sourceReady || maximumSchedulerGapSeconds > policy->schedulerGapLimitSeconds) {
         policy->healthySeconds = 0;
         policy->congestionSeconds = 0;
+        policy->deficitSeconds = 0;
+        policy->previousLatenessSeconds = -1;
         return 0;
     }
+    if (policy->previousLatenessSeconds >= 0)
+        policy->deficitSeconds = fmax(0, policy->deficitSeconds + pacingLatenessSeconds - policy->previousLatenessSeconds);
+    policy->previousLatenessSeconds = pacingLatenessSeconds;
+    bool accumulatedDeficit = policy->deficitSeconds > 0.020 && pacingLatenessSeconds > 0.020;
     bool delayed = writeAndDrainSeconds > fmax(policy->minimumDrainBudgetSeconds, packetAudioSeconds);
-    bool congested = writeAndDrainSeconds >= 0.040 || queuedAudioSeconds >= 0.040;
+    bool congested = writeAndDrainSeconds >= 0.040 || queuedAudioSeconds >= 0.040 || accumulatedDeficit;
     if (delayed || congested) {
         policy->healthySeconds = 0;
         policy->congestionSeconds += observedSeconds;
         if (!congested && policy->congestionSeconds < 0.060) return 0;
         policy->congestionSeconds = 0;
+        policy->deficitSeconds = 0;
         if (!policy->congestionBackoff) {
             policy->promotionSeconds = fmin(120, fmax(30, policy->promotionSeconds * 2));
             policy->congestionBackoff = true;
@@ -46,9 +55,12 @@ static inline int LDACAdaptivePolicyObserve(LDACAdaptivePolicy *policy, int eqmi
         return eqmid == LDACBT_EQMID_MQ ? 0 : LDACBT_EQMID_INC_CONNECTION;
     }
     policy->congestionSeconds = 0;
-    if (pacingLatenessSeconds > policy->minimumDrainBudgetSeconds || queuedAudioSeconds > 0 ||
-        writeAndDrainSeconds > fmax(0.006, packetAudioSeconds / 2)) {
+    if (pacingLatenessSeconds > policy->minimumDrainBudgetSeconds || queuedAudioSeconds > packetAudioSeconds) {
         policy->healthySeconds = 0;
+        return 0;
+    }
+    if (writeAndDrainSeconds > fmax(0.006, packetAudioSeconds / 2)) {
+        policy->healthySeconds = fmax(0, policy->healthySeconds - observedSeconds);
         return 0;
     }
     policy->healthySeconds += observedSeconds;

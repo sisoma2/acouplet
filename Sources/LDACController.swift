@@ -32,6 +32,7 @@ final class LDACController: ObservableObject {
     @Published private(set) var multipointShutdownAddress: String?
     private var multipointConflictConfiguration: LDACConfiguration?
     private var multipointShutdownTask: Task<Void, Never>?
+    private var multipointShutdownRequestID: UUID?
     private let bundle: Bundle
     private let defaults: UserDefaults?
     @Published private var pendingConnectionModes: [String: UUID] = [:] {
@@ -47,6 +48,9 @@ final class LDACController: ObservableObject {
     private let localBluetoothAddress: () -> String?
     private var session: LDACOwnerSession?
     private var sessionID = UUID()
+    private var diagnosticAttempt = 0
+    private var diagnosticHistory = DiagnosticHistory()
+    private var lastNativeFailure: (attempt: Int, message: String)?
     private var requestedAddress: String? {
         didSet {
             if oldValue != requestedAddress { clearWaitingDeadline() }
@@ -586,22 +590,23 @@ final class LDACController: ObservableObject {
             return
         }
         let requestID = transition.requestID
+        multipointShutdownRequestID = requestID
         multipointShutdownAddress = address
         record("multipoint-off-requested", reason: "model=\(headphones.deviceModel.rawValue)")
         multipointShutdownTask = Task { [weak self] in
             let deadline = Date().addingTimeInterval(90)
             while !Task.isCancelled, Date() < deadline {
-                guard let current = headphones.multipointTransition, current.requestID == requestID, !current.isFinished else { break }
-                // The user already chose to turn multipoint off, so confirm the headphones' own prompt for that change.
-                if let alert = current.alert {
-                    headphones.respondToMultipointAlert(alert, action: alert.availableActions.contains(.positive) ? .positive : nil)
-                }
+                guard self?.devices?.controller(for: address) === headphones,
+                      let current = headphones.multipointTransition, current.requestID == requestID, !current.isFinished else { break }
+                self?.confirmPendingMultipointAlert()
                 try? await Task.sleep(for: .milliseconds(200))
             }
             guard let self, !Task.isCancelled else { return }
+            self.multipointShutdownRequestID = nil
             self.multipointShutdownAddress = nil
             self.multipointShutdownTask = nil
-            if headphones.multipointTransition?.requestID == requestID, headphones.multipointTransition?.phase == .complete,
+            if self.devices?.controller(for: address) === headphones,
+               headphones.multipointTransition?.requestID == requestID, headphones.multipointTransition?.phase == .complete,
                headphones.systemFeatures.multipoint?.enabled == false {
                 self.record("multipoint-off-confirmed", reason: "starting LDAC")
                 self.setEnabled(true, forAddress: address, configuration: configuration)
@@ -610,6 +615,28 @@ final class LDACController: ObservableObject {
                 self.state = .failed(headphones.multipointTransition?.failureMessage ?? failure)
             }
         }
+    }
+
+    func handlesMultipointConfirmation(_ transition: SonyMultipointTransition?) -> Bool {
+        guard let transition else { return false }
+        return transition.requestID == multipointShutdownRequestID
+    }
+
+    private func confirmPendingMultipointAlert() {
+        guard let address = multipointShutdownAddress, let headphones = devices?.controller(for: address),
+              handlesMultipointConfirmation(headphones.multipointTransition),
+              let alert = headphones.multipointTransition?.alert else { return }
+        headphones.respondToMultipointAlert(alert, action: alert.availableActions.contains(.positive) ? .positive : nil)
+    }
+
+    private func cancelMultipointRequest() {
+        multipointShutdownTask?.cancel()
+        multipointShutdownTask = nil
+        confirmPendingMultipointAlert()
+        multipointShutdownRequestID = nil
+        multipointShutdownAddress = nil
+        multipointConflictAddress = nil
+        multipointConflictConfiguration = nil
     }
 
     func resumeUpdateHandoff(handoff: LDACUpdateHandoff = LDACUpdateHandoff()) {
@@ -662,6 +689,7 @@ final class LDACController: ObservableObject {
         if let address = requestedAddress ?? targetAddress, let headphones = devices?.controller(for: address) {
             automaticStartAttempts[ObjectIdentifier(headphones)] = headphones.notificationSession
         }
+        cancelMultipointRequest()
         requestedAddress = nil
         suspensionRequested = false
         if let completion {
@@ -916,6 +944,7 @@ final class LDACController: ObservableObject {
     }
 
     private func start(_ address: String, directly: Bool = false) {
+        diagnosticAttempt += 1
         startingDirectly = directly
         directStartRequested = false
         lastResumeBlockers = nil
@@ -1254,6 +1283,7 @@ final class LDACController: ObservableObject {
                         } else { self.fail(error.localizedDescription) }
                     }
                 }
+            case let .diagnostic(diagnostic): self.recordNativeDiagnostic(diagnostic)
             case .connecting:
                 self.record("connecting", reason: "owned raw transport setup")
                 if self.state != .stopping { self.state = .connecting }
@@ -1997,7 +2027,64 @@ final class LDACController: ObservableObject {
         }
     }
 
+    private var diagnosticState: String {
+        switch state {
+        case .off: "off"
+        case .requested: "requested"
+        case .connecting: "connecting"
+        case .waitingForDevice: "waiting for device"
+        case let .active(format): "active; \(format)"
+        case .stopping: "stopping"
+        case .failed: "failed"
+        }
+    }
+
+    private var diagnosticMusicControlStatus: String {
+        let volume = headphones?.playback.volume.map(String.init) ?? "unknown"
+        let range = headphones?.playback.musicVolumeRange.map { "\($0.lowerBound)...\($0.upperBound)" } ?? "unknown"
+        return "ready=\(headphones?.isReady == true) owned=\(hasOwnedMusicContext) fresh=\(headphones?.hasFreshMusicVolumeReadback == true) writable=\(headphones?.canControlMusicVolume == true) volume=\(volume) range=\(range) pending=\(volumeSession.pendingVolume.map(String.init) ?? "none") writing=\(volumeSession.isWriting)"
+    }
+
+    var diagnosticReport: String {
+        let names = (headphones?.diagnosticPrivateNames ?? []) + [audioRoute?.route?.name ?? ""]
+        let lines = [
+            "Current LDAC snapshot:",
+            "LDAC state: \(diagnosticState)",
+            "LDAC attempt: \(diagnosticAttempt)",
+            "LDAC target: \(targetAddress == nil ? "None" : "Selected; identity omitted")",
+            "LDAC session running: \(isSessionRunning); recovering: \(isRecovering); retry: \(recoveryAttempt)",
+            "LDAC driver: \(driverState)",
+            "LDAC driver installation issue: \(driverInstallationError ?? "None")",
+            "LDAC audio capture: \(audioCaptureAccess)",
+            "LDAC configuration: \(requestedConfiguration.sampleRate.rawValue) Hz; quality=\(requestedConfiguration.quality)",
+            "LDAC cleanup pending: \(cleanupTask != nil); preference restores: \(preferenceRestoreTasks.count)",
+            "LDAC music controls: \(diagnosticMusicControlStatus)",
+            "LDAC current volume issue: \(volumeError ?? "None")",
+            "LDAC last native failure (may be from an earlier attempt): \(lastNativeFailure?.message ?? "None")",
+        ]
+        return lines.map { DiagnosticHistory.line($0, redacting: names) }.joined(separator: "\n")
+            + "\n\nLDAC history\n" + diagnosticHistory.report
+    }
+
+    func recordOutputFailure(_ error: Error) {
+        if let diagnostic = (error as? LDACOwnerError)?.diagnostic ?? (error as? LDACPriorityCleanupError)?.diagnostic {
+            recordNativeDiagnostic(diagnostic)
+        }
+    }
+
+    func recordNativeDiagnostic(_ diagnostic: LDACNativeSession.Diagnostic) {
+        record("native \(diagnostic.stage)", reason: diagnostic.detail)
+        if diagnostic.isFailure, lastNativeFailure?.attempt != diagnosticAttempt {
+            let message = DiagnosticHistory.line("attempt=\(diagnosticAttempt) stage=\(diagnostic.stage); \(diagnostic.detail)",
+                                                 redacting: (headphones?.diagnosticPrivateNames ?? []) + [audioRoute?.route?.name ?? ""])
+            lastNativeFailure = (diagnosticAttempt, message)
+        }
+    }
+
     private func record(_ event: String, reason: String) {
+        let detail = reason.replacingOccurrences(of: musicControlStatus, with: diagnosticMusicControlStatus)
+        diagnosticHistory.record("attempt=\(diagnosticAttempt) \(event); \(detail)", failure: event.contains("failed"),
+                                 redacting: (headphones?.diagnosticPrivateNames ?? []) + [audioRoute?.route?.name ?? ""])
         Self.logger.notice("LDAC controller \(event, privacy: .public); target=\(self.targetAddress ?? "none", privacy: .private(mask: .hash)) session=\(self.sessionID.uuidString, privacy: .public) reason=\(reason, privacy: .private)")
     }
 

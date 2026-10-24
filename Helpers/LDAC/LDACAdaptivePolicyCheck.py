@@ -50,9 +50,9 @@ static void CheckPolicy(void) {
     assert(Observe(&policy, LDACBT_EQMID_HQ, &now, 0.050, 0.001, 0, false, 0.050) == 0);
     assert(policy.promotionSeconds == 15);
     for (int index = 0; index < 5000; index++) {
-        assert(Observe(&policy, LDACBT_EQMID_MQ, &now, 0.001, 0.001, 0.025, true, 0) == 0);
+        assert(Observe(&policy, LDACBT_EQMID_MQ, &now, 0.001, 0.001, 0.015, true, 0) == 0);
         assert(Observe(&policy, LDACBT_EQMID_MQ, &now, 0.010, 0.001, 0, true, 0) == 0);
-        assert(Observe(&policy, LDACBT_EQMID_MQ, &now, 0.001, 0.001, 0, true, 0.008) == 0);
+        assert(Observe(&policy, LDACBT_EQMID_MQ, &now, 0.001, 0.001, 0, true, 0.016) == 0);
     }
     for (int index = 0; index < 5000; index++)
         assert(LDACAdaptivePolicyObserve(&policy, LDACBT_EQMID_MQ, 0.008, 0.001, 0.001, 0, true, 0, now) == 0);
@@ -65,7 +65,15 @@ static void CheckPolicy(void) {
     Healthy(&policy, LDACBT_EQMID_HQ, &now, 14);
     for (int index = 0; index < 150; index++)
         assert(Observe(&policy, LDACBT_EQMID_HQ, &now, 0.001, 0.001, 0, true, 0) == 0);
-    puts("PASS adaptive replay: sustained small delays, early queue pressure, immediate severe delay, transient/source/scheduler isolation, real-time promotion accounting and bounded retry backoff");
+    policy = LDACAdaptivePolicyInit();
+    promotions = 0;
+    for (int index = 0; index < 2100; index++)
+        promotions += Observe(&policy, LDACBT_EQMID_MQ, &now, index % 100 == 99 ? 0.009 : 0.001,
+            0.001, 0, true, 0) == LDACBT_EQMID_INC_QUALITY;
+    assert(promotions == 1);
+    assert(Observe(&policy, LDACBT_EQMID_MQ, &now, 0.001, 0.001, 0, false, 0) == 0);
+    assert(policy.healthySeconds == 0);
+    puts("PASS adaptive replay: sustained small delays, early queue pressure, immediate severe delay, transient/source/scheduler isolation, intermittent drain jitter recovery, real-time promotion accounting and bounded retry backoff");
 }
 
 static void CheckEncoder(int rate) {

@@ -12,7 +12,7 @@ final class SonyPreferencePane: NSPreferencePane {
     override init(bundle: Bundle) {
         client = MainActor.assumeIsolated {
             SonyPreferencePaneClient(pinnedAddress: bundle.object(forInfoDictionaryKey: "SonyDeviceAddress") as? String,
-                                     appTeam: bundle.object(forInfoDictionaryKey: SonyPreferencePaneWire.appTeamInfoKey) as? String)
+                                     appTeam: bundle.object(forInfoDictionaryKey: "AcoupletAppTeam") as? String)
         }
         super.init(bundle: bundle)
     }

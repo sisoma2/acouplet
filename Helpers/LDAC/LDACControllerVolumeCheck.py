@@ -301,7 +301,9 @@ typealias LDACOwnerSession = LDACNativeSession
 final class LDACNativeSession {
     struct Helpers { var isAvailable = true }
     struct Completion { var message: String?; var canRetry = false; var requiresAttention = false; var targetDisconnected = false; var waitForReconnect = false }
+    struct Diagnostic {}
     enum Event {
+        case diagnostic(Diagnostic)
         case handoffReady, connecting, controlsRequired, active(LDACFormat), formatChanged(LDACFormat), latencyFrames(UInt32), gainApplied(Double), ldacEndpoint(Bool)
         case audioCaptureAccess(LDACAudioCaptureAccess), failed(String), connectionLost(String), finished(Completion)
         case health(LDACTransportHealth), compatibility(LDACRuntimeStatus), capabilities(UInt8, UInt8)
@@ -354,6 +356,9 @@ final class Controller: ObservableObject {
     var automaticStartAttempts: [ObjectIdentifier: UInt64] = [:]
     let localBluetoothAddress: () -> String? = { IOBluetoothHostController.default()?.addressAsString() }
     func synchronizeMicrophoneHandoff() -> Bool { true }
+    var diagnosticAttempt = 0
+    func recordNativeDiagnostic(_ diagnostic: LDACNativeSession.Diagnostic) {}
+    func cancelMultipointRequest() {}
     var state = LDACState.off
     var targetAddress: String?
     var isSessionRunning = false

@@ -6,6 +6,7 @@ final class SonySoundPressureSession: ObservableObject {
     private struct Read {
         let id = UUID()
         let generation: UInt64
+        var transmissionOrdinal: UInt64 = 0
         var transmitted = false
         var timedOut = false
     }
@@ -42,9 +43,10 @@ final class SonySoundPressureSession: ObservableObject {
         return true
     }
 
-    func didTransmit(isCurrent: @escaping @MainActor () -> Bool = { true }, onTimeout: @escaping @MainActor () -> Void) {
+    func didTransmit(transmissionOrdinal: UInt64 = 0, isCurrent: @escaping @MainActor () -> Bool = { true }, onTimeout: @escaping @MainActor () -> Void) {
         guard let read else { return }
         self.read?.transmitted = true
+        self.read?.transmissionOrdinal = transmissionOrdinal
         lastRequest = now()
         let timeout = DispatchWorkItem { [weak self] in
             Task { @MainActor in
@@ -61,11 +63,11 @@ final class SonySoundPressureSession: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: timeout)
     }
 
-    func receive(_ payload: [UInt8], acceptsReading: Bool) -> Bool {
+    func receive(_ payload: [UInt8], acceptsReading: Bool, transmissionOrdinal: UInt64 = .max) -> Bool {
         var updated = soundPressure
         guard updated.update(payload) else { return false }
         if payload[0] == 0x5B {
-            guard let read, read.transmitted else { return true }
+            guard let read, read.transmitted, transmissionOrdinal >= read.transmissionOrdinal else { return true }
             timeout?.cancel()
             timeout = nil
             self.read = nil

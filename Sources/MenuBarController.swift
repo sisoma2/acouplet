@@ -404,7 +404,7 @@ extension LDACState {
 @available(macOS 27.0, *)
 extension MenuBarController: @MainActor NSStatusItemExpandedInterfaceDelegate {
     func statusItem(_ statusItem: NSStatusItem, didBegin expandedInterfaceSession: NSStatusItemExpandedInterfaceSession) {
-        showPopover()
+        togglePopover()
     }
 
     func statusItemDidEndExpandedInterfaceSession(_ statusItem: NSStatusItem, animated: Bool) {

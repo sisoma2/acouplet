@@ -46,21 +46,16 @@ final class SonyPreferencePaneTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: long.path), "Nothing is created for a path that cannot work")
     }
 
-    func testAppRequirementUsesThePaneTeamAndKeepsTheOriginalTeamOtherwise() {
-        let original = "anchor apple generic and identifier \"dev.baglayan.Acouplet\" and certificate leaf[subject.OU] = \"5743Y47SC7\""
-        XCTAssertEqual(SonyPreferencePaneWire.appRequirement(team: nil), original)
-        XCTAssertEqual(SonyPreferencePaneWire.appRequirement(team: "5743Y47SC7"), original)
-        XCTAssertEqual(SonyPreferencePaneWire.appRequirement(team: "5LHT3P9C4T"),
-                       "anchor apple generic and identifier \"dev.baglayan.Acouplet\" and certificate leaf[subject.OU] = \"5LHT3P9C4T\"")
-        for invalid in ["", "5lht3p9c4t", "5LHT3P9C4", "5LHT3P9C4T\" or anchor apple", "5LHT3P9C4T\n"] {
-            XCTAssertEqual(SonyPreferencePaneWire.appRequirement(team: invalid), original, invalid)
+    func testAppRequirementRejectsMissingOrMalformedTeam() {
+        for invalid: String? in [nil, "", "abcde12345", "ABCDE1234", "ABCDE12345\" or anchor apple", "ABCDE12345\n"] {
+            XCTAssertThrowsError(try SonyPreferencePaneWire.appRequirement(team: invalid))
         }
     }
 
     func testCommandsRejectStaleSessionServerAndDuplicateWithoutWriting() async throws {
         let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
         controller.simulateDeviceConnection(named: "WF-1000XM5")
-        let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller), allowsCommands: true, path: socketPath)
+        let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller), allowsCommands: true)
         try server.start()
         defer { server.stop() }
         let initial = await server.reply(to: .init(version: SonyPreferencePaneWire.version, id: UUID(), action: .snapshot))
@@ -92,7 +87,7 @@ final class SonyPreferencePaneTests: XCTestCase {
     func testUnverifiedHostIntegrationRemainsReadOnlyAndStoppedServerRejects() async throws {
         let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
         controller.simulateDeviceConnection(named: "WF-1000XM5")
-        let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller), path: socketPath)
+        let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller))
         try server.start()
         defer { server.stop() }
         let initial = await server.reply(to: .init(version: SonyPreferencePaneWire.version, id: UUID(), action: .snapshot))
@@ -114,7 +109,7 @@ final class SonyPreferencePaneTests: XCTestCase {
         for model in [SonyDeviceModel.wfXM5, .wfXM6, .whXM3, .whCH720N] {
             let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
             controller.simulateGalleryDevice(model: model)
-            let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller), path: socketPath)
+            let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller))
             try server.start()
             let reply = await server.reply(to: .init(version: SonyPreferencePaneWire.version, id: UUID(), action: .snapshot))
             server.stop()
@@ -145,7 +140,7 @@ final class SonyPreferencePaneTests: XCTestCase {
             SonyConnectedDevice(address: second.address, name: second.deviceName, model: .wfXM5)!,
         ])
         coordinator.select(address: first.address)
-        let server = SonyPreferencePaneServer(devices: coordinator, allowsCommands: true, path: socketPath)
+        let server = SonyPreferencePaneServer(devices: coordinator, allowsCommands: true)
         try server.start()
         defer { server.stop(); first.simulateControlLoss(); second.simulateControlLoss() }
         var request = try await self.request(.systemFeature, server: server, address: second.address)
@@ -170,7 +165,7 @@ final class SonyPreferencePaneTests: XCTestCase {
     func testSettingTimeoutAndSessionLossNeverReportApplied() async throws {
         for disconnect in [false, true] {
             let controller = makeController()
-            let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller), allowsCommands: true, path: socketPath)
+            let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller), allowsCommands: true)
             try server.start()
             var request = try await self.request(.dsee, server: server, address: controller.address)
             request.option = "0"
@@ -196,7 +191,7 @@ final class SonyPreferencePaneTests: XCTestCase {
 
     func testInvalidCurveUnsupportedChoiceAndChangedSourceCannotWrite() async throws {
         let controller = makeController()
-        let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller), allowsCommands: true, path: socketPath)
+        let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller), allowsCommands: true)
         try server.start()
         defer { server.stop() }
         let baseline = controller.simulatedTransmittedFrames
@@ -224,7 +219,7 @@ final class SonyPreferencePaneTests: XCTestCase {
 
     func testCompleteEqualizerCurveNeedsConfirmedMatchingLayoutAndValues() async throws {
         let controller = makeController()
-        let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller), allowsCommands: true, path: socketPath)
+        let server = SonyPreferencePaneServer(devices: SonyDeviceCoordinator(controller: controller), allowsCommands: true)
         try server.start()
         defer { server.stop(); controller.simulateControlLoss() }
         deliver([0x57, 0, 0xA0, 0], to: controller)

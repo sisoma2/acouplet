@@ -279,9 +279,6 @@ struct SonySystemFeatures: Equatable, Sendable {
     private var multipointStates: [UInt8: SonySystemFeatureState] = [:]
     private(set) var generation = SonyProtocolInfo.Generation.v2
 
-    /// MDR v1 exposes only the general settings (functions D1–D4), such as multipoint on the WH-1000XM4.
-    /// Their replies use a v1 layout: `D1 slot type titleLength title summaryLength summary xx xx`,
-    /// `D7 slot 01 value` and `D8 slot 01 value`, where value 1 means on.
     init(legacyGeneralSettings supportedFunctions: Set<UInt8>) {
         generation = .v1
         generalSlots = (0xD1...0xD4).filter { supportedFunctions.contains($0) }
@@ -396,23 +393,25 @@ struct SonySystemFeatures: Equatable, Sendable {
         if payload[0] == 0xD1 {
             let isBoolean: Bool
             let titleStart: Int
-            let trailer: Int
             if generation == .v1 {
                 guard payload.count >= 5 else { return false }
-                isBoolean = payload[2] == 0x02
                 titleStart = 4
-                trailer = 2
             } else {
                 guard payload.count >= 6, payload[2] == 0x00, payload[3] <= 1 else { return false }
-                isBoolean = payload[3] == 1
                 titleStart = 5
-                trailer = 0
             }
             let titleEnd = titleStart + Int(payload[titleStart - 1])
             guard titleEnd < payload.count else { return false }
             let summaryEnd = titleEnd + 1 + Int(payload[titleEnd])
-            guard payload.count == summaryEnd + trailer,
-                  let title = String(bytes: payload[titleStart..<titleEnd], encoding: .utf8),
+            if generation == .v1 {
+                guard payload.count == summaryEnd + 1 || (payload.count == summaryEnd + 2 && payload.last == 0),
+                      payload[summaryEnd] == 0x01 else { return false }
+                isBoolean = payload[2] == 0x02
+            } else {
+                guard payload.count == summaryEnd else { return false }
+                isBoolean = payload[3] == 1
+            }
+            guard let title = String(bytes: payload[titleStart..<titleEnd], encoding: .utf8),
                   String(bytes: payload[(titleEnd + 1)..<summaryEnd], encoding: .utf8) != nil else { return false }
             identifiedGeneralSlots.insert(slot)
             if isBoolean, title == "SIDETONE_SETTING" {

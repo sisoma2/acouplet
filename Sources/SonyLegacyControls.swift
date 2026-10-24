@@ -179,6 +179,17 @@ struct SonyLegacyConnectionQuality: Equatable, Sendable {
         return setPayload(SonyConnectionMode(rawValue: payload[3])) == payload
     }
 
+    mutating func invalidateRead(_ query: [UInt8]) {
+        switch query {
+        case [0xE0, 0x01]: settingType = nil
+        case [0xE2, 0x01]: available = nil
+        case [0xE6, 0x01]:
+            parameterSettingType = nil
+            mode = nil
+        default: break
+        }
+    }
+
     @discardableResult
     mutating func update(_ payload: [UInt8]) -> Bool {
         guard isSupported, payload.count >= 3, payload[1] == 0x01 else { return false }
@@ -280,25 +291,15 @@ struct SonyLegacyControls: Equatable, Sendable {
     private(set) var automaticPowerOff: SonyAutomaticPowerOffState?
 
     mutating func invalidateSystemRead(_ query: [UInt8]) {
+        connectionQuality.invalidateRead(query)
         wearingControl.invalidateRead(query)
         automaticPowerOff?.invalidateRead(query)
-    }
-
-    /// MDR v1 functions a model reports but whose changes have not been confirmed on that
-    /// model's hardware. They are left out of `supportedFunctions` so the controls stay hidden.
-    static func unverifiedFunctions(for model: SonyDeviceModel) -> Set<UInt8> {
-        switch model {
-        // WH-1000XM4, firmware 3.0.1: the Custom button change was acknowledged but not applied,
-        // and NC Optimizer and the sound quality connection mode were not exercised.
-        case .whXM4: [0x81, 0xE1, 0xF6]
-        default: []
-        }
     }
 
     init?(supportPayload: [UInt8], model: SonyDeviceModel = .unknown) {
         guard supportPayload.count >= 3, supportPayload.prefix(2) == [0x07, 0x00],
               supportPayload.count == 3 + Int(supportPayload[2]) else { return nil }
-        supportedFunctions = Set(supportPayload.dropFirst(3)).subtracting(Self.unverifiedFunctions(for: model))
+        supportedFunctions = Set(supportPayload.dropFirst(3)).subtracting(model == .whXM4 ? [0xF6] : [])
         dsee = SonyLegacyDSEE(isSupported: supportedFunctions.contains(0xE2))
         connectionQuality = SonyLegacyConnectionQuality(isSupported: supportedFunctions.contains(0xE1))
         wearingControl = SonyLegacyWearingControl(isSupported: supportedFunctions.contains(0xF3))

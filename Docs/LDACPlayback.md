@@ -232,12 +232,13 @@ Setup and compatibility combines bundled/installed/loaded driver revisions, rest
 state, capture access, controller readiness, Sound Quality, advertised stereo rates,
 model-specific multipoint restrictions and runtime ownership checks. Reading this
 view is passive. Explicit support rediscovery uses the existing guarded playback
-sequence and can interrupt ordinary audio. Bluetooth log access must be established
-before selecting the handoff output; unique signaling/media ownership evidence is
-still required before transmission. Unknown future OS versions fail preflight.
+sequence and can interrupt ordinary audio. Playback uses matching ACL and channel
+callbacks to establish ownership before transmission. It does not read Bluetooth
+daemon logs. Unknown future OS versions fail preflight.
 
-Standard-account playback remains a research milestone. Removing log access or
-running an always-root playback owner is not implemented as a workaround. A future
-replacement must demonstrate callback-derived ACL identity and unique channel
-ownership across stale handles, reconnects, competing sources and abrupt exits;
-until that evidence exists the current administrator/log guards stay in place.
+Playback uses the signed app and its owner worker without requiring administrator
+access to Bluetooth logs. Installing or replacing the system audio driver still
+requires administrator authorization. The offline connection, signaling, media and
+session fixtures cover stale handles, reconnects, competing sources, callback
+identity and abrupt exits. Live hardware playback after integrating this upstream
+transport still needs qualification.

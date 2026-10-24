@@ -18,6 +18,7 @@ For installation and everyday use, start with the [project README](../README.md)
 | [Bluetooth airtime priority](BluetoothPriority.md) | Private API investigations, live trial results and measurement limits. |
 | [Hardware qualification](HardwareQualification.md) | Preparing and recording manual playback, call and recovery scenarios. |
 | [Validation history](ValidationHistory.md) | Recorded macOS 26.7.1 test results and remaining qualification limits. |
+| [Upstream PR deliveries](UpstreamPRs.md) | Integration baseline, isolated feature branches and review order. |
 
 Run shell commands in these guides from the repository root. After editing Swift
 or other app code, follow [Install and run local changes](Development.md#install-and-run-local-changes)

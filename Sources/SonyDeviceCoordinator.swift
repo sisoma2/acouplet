@@ -76,15 +76,14 @@ final class SonyDeviceCoordinator: NSObject, ObservableObject {
     private var updateScheduled = false
     private var earbudFindingTerminationObserver: AnyCancellable?
     private var earbudFindingTerminationSessions = Set<UUID>()
+    private var terminationDrainID: UUID?
 
     var discoveryTimer: Timer?
-    var bluetoothAuthorizationManager: CBCentralManager?
-    /// Última autorización de Bluetooth conocida. `CBManager.authorization` es una IPC síncrona a TCC, así que se
-    /// consulta al arrancar, al despertar y en `centralManagerDidUpdateState`, no en cada sondeo del inventario.
     var cachedBluetoothAuthorization: CBManagerAuthorization = .notDetermined
     var connectNotification: IOBluetoothUserNotification?
     var inventoryNotificationCount = 0
     var disconnectNotifications: [String: IOBluetoothUserNotification] = [:]
+    var bluetoothAuthorizationManager: CBCentralManager?
     var discoveryGeneration: UInt64 = 0
     @Published var isDiscovering = false
     @Published var isSystemSleeping = false
@@ -155,7 +154,6 @@ final class SonyDeviceCoordinator: NSObject, ObservableObject {
             isDiscovering = false
             discoveryTimer?.invalidate()
             discoveryTimer = nil
-            stopInventoryNotifications()
             for controller in controllers {
                 controller.stop()
                 controller.reportBluetoothAuthorization(authorization)
@@ -205,8 +203,6 @@ final class SonyDeviceCoordinator: NSObject, ObservableObject {
         return true
     }
 
-    /// Forbids new RFCOMM channels on every controller, including ones created while quitting.
-    /// Safe to call repeatedly; call it before LDAC restoration reconnects the ACL.
     func beginTermination() {
         isTerminating = true
         for controller in terminationControllers { controller.beginTermination() }
@@ -214,24 +210,29 @@ final class SonyDeviceCoordinator: NSObject, ObservableObject {
 
     func cancelTermination() {
         isTerminating = false
+        terminationDrainID = nil
         for controller in terminationControllers { controller.cancelTermination() }
     }
 
-    /// Closes every control channel and waits (bounded) for in-flight opens and closes.
-    /// Returns `true` when `completion` will run later; `false` when nothing was pending.
     func drainRFCOMMForTermination(completion: @escaping @MainActor () -> Void) -> Bool {
+        beginTermination()
+        guard terminationDrainID == nil else { return true }
+        let identifier = UUID()
+        terminationDrainID = identifier
         var remaining = 0
-        var finished = false
-        var waiting = false
-        let leave: @MainActor () -> Void = {
+        let leave: @MainActor () -> Void = { [weak self] in
+            guard let self, self.terminationDrainID == identifier else { return }
             remaining -= 1
-            if remaining == 0, waiting, !finished { finished = true; completion() }
+            if remaining == 0 {
+                self.terminationDrainID = nil
+                completion()
+            }
         }
         for controller in terminationControllers {
             remaining += 1
             if !controller.drainRFCOMMForTermination(completion: leave) { remaining -= 1 }
         }
-        waiting = true
+        if remaining == 0 { terminationDrainID = nil }
         return remaining > 0
     }
 

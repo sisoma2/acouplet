@@ -220,6 +220,7 @@ final class Controller: ObservableObject {
     var deferredConnectionModes: [String: UUID] = [:]
     var preferenceRestoreTasks: [String: Task<Void, Never>] = [:]
     var sessionID = UUID()
+    func cancelMultipointRequest() {}
     var state = LDACState.connecting
     var targetAddress: String? = "02:00:00:00:00:01"
     var requestedAddress: String? = "02:00:00:00:00:01"

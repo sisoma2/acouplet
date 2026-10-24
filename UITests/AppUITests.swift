@@ -1798,6 +1798,7 @@ final class AppUITests: XCTestCase {
             if !dashboard.waitUntilExists(timeout: 3) { status.click() }
             XCTAssertTrue(dashboard.waitUntilExists(timeout: 3))
             XCTAssertTrue(app.images["device.artwork.case"].exists)
+            XCTAssertFalse(app.scrollViews["headphones.controlsScroll"].exists)
             XCTAssertTrue(app.buttons["menu.settings"].isHittable)
             XCTAssertTrue(app.popUpButtons["audio.dsee"].isHittable)
             let hierarchy = XCTAttachment(string: app.debugDescription)

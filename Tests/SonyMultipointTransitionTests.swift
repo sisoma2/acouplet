@@ -510,7 +510,6 @@ final class SonyMultipointTransitionTests: XCTestCase {
         XCTAssertNil(newRequest.expectedPayload)
     }
 
-    // Replies captured from a WH-1000XM4 (MDR v1, firmware 3.0.1).
     private static let legacyTouchPanel: [UInt8] = [0xD1, 0xD1, 0x02, 0x13] + Array("TOUCH_PANEL_SETTING".utf8) + [0x00, 0x01, 0x00]
     private static let legacyMultipoint: [UInt8] = [0xD1, 0xD2, 0x02, 0x12] + Array("MULTIPOINT_SETTING".utf8)
         + [0x1A] + Array("MULTIPOINT_SETTING_SUMMARY".utf8) + [0x01, 0x00]
@@ -540,11 +539,32 @@ final class SonyMultipointTransitionTests: XCTestCase {
         XCTAssertNil(model.multipointSetPayload(enabled: true))
 
         var malformed = SonySystemFeatures(legacyGeneralSettings: [0xD2])
-        XCTAssertFalse(malformed.update(Array(Self.legacyMultipoint.dropLast())))
         XCTAssertFalse(malformed.update(Array(Self.legacyMultipoint.dropLast(2))))
         var modern = SonySystemFeatures(supportedFunctions: [0xD2])
         XCTAssertFalse(modern.update(Self.legacyMultipoint))
         XCTAssertNil(modern.multipointSlot)
+    }
+
+    func testLegacyBooleanCapabilitiesAcceptCanonicalAndCapturedPadding() {
+        let canonical = Array(Self.legacyMultipoint.dropLast())
+        for payload in [canonical, Self.legacyMultipoint] {
+            var model = SonySystemFeatures(legacyGeneralSettings: [0xD2])
+            XCTAssertTrue(model.update(payload))
+            XCTAssertEqual(model.multipointSlot, 0xD2)
+            XCTAssertTrue(model.generalSettingsAreIdentified)
+            XCTAssertTrue(model.update([0xD3, 0xD2, 0x00]))
+            XCTAssertTrue(model.update([0xD7, 0xD2, 0x01, 0x00]))
+            XCTAssertEqual(model.multipointSetPayload(enabled: true), [0xD8, 0xD2, 0x01, 0x01])
+        }
+
+        let titleAndSummary = Array(canonical.dropLast())
+        for trailer: [UInt8] in [[0], [2], [0xFF], [0, 0], [2, 0], [0xFF, 0], [1, 1], [1, 0, 0]] {
+            var model = SonySystemFeatures(legacyGeneralSettings: [0xD2])
+            XCTAssertFalse(model.update(titleAndSummary + trailer))
+            XCTAssertNil(model.multipointSlot)
+            XCTAssertFalse(model.generalSettingsAreIdentified)
+            XCTAssertNil(model.multipointSetPayload(enabled: true))
+        }
     }
 
     func testLegacyMultipointEnableUsesV1SetterAndAcceptsTheLDACWarning() throws {

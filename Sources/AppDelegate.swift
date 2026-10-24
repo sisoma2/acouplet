@@ -261,24 +261,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .terminateLater
         }
         #endif
-        // LDAC restoration needs the control channel to reopen after its ACL reconnect (connection mode
-        // restore goes over MDR), so opens are only blocked once ldac.stop has finished. An open that
-        // the reconnect triggered is in flight by now and the drain below picks it up.
-        // Never exit with an RFCOMM open or close in flight: bluetoothd ignores a close sent while the
-        // open is pending. Bounded to 1.5 s per controller.
-        environment.devices.beginTermination()
-        if environment.devices.drainRFCOMMForTermination(completion: { [weak self] in
-            guard let self else { sender.reply(toApplicationShouldTerminate: true); return }
-            let reply = self.applicationShouldTerminate(sender)
-            if reply != .terminateLater { sender.reply(toApplicationShouldTerminate: reply == .terminateNow) }
-        }) {
-            return .terminateLater
-        }
         let controllers = environment.devices.controllers.filter {
             $0.earTipFitTransition?.canDismiss == false || $0.headGesturePracticeTransition?.canDismiss == false
                 || $0.legacyOptimizerTransition?.canDismiss == false
         }
-        guard !controllers.isEmpty else { return finishTermination() }
+        guard !controllers.isEmpty else { return finishTermination(sender) }
         testTerminationObserver = Publishers.MergeMany(controllers.map { $0.objectWillChange.eraseToAnyPublisher() })
             .receive(on: DispatchQueue.main)
             .first { _ in controllers.allSatisfy {
@@ -306,7 +293,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.isSystemTerminating = false
                     self?.restartsAfterTermination = false
                 }
-                sender.reply(toApplicationShouldTerminate: interrupted == nil && (self?.finishTermination() ?? .terminateNow) == .terminateNow)
+                if interrupted != nil {
+                    sender.reply(toApplicationShouldTerminate: false)
+                } else {
+                    let reply = self?.finishTermination(sender) ?? .terminateNow
+                    if reply != .terminateLater { sender.reply(toApplicationShouldTerminate: reply == .terminateNow) }
+                }
             }
         for headphones in controllers {
             if let transition = headphones.earTipFitTransition { headphones.cancelEarTipFit(id: transition.id) }
@@ -316,7 +308,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .terminateLater
     }
 
-    private func finishTermination() -> NSApplication.TerminateReply {
+    private func finishTermination(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        environment.devices.beginTermination()
+        if environment.devices.drainRFCOMMForTermination(completion: { [weak self] in
+            guard let self else { sender.reply(toApplicationShouldTerminate: true); return }
+            let reply = self.applicationShouldTerminate(sender)
+            if reply != .terminateLater { sender.reply(toApplicationShouldTerminate: reply == .terminateNow) }
+        }) {
+            return .terminateLater
+        }
         #if !DEBUG && !ACOUPLET_PUBLIC_APIS_ONLY
         if retriesBackgroundServiceMigration {
             retriesBackgroundServiceMigration = false

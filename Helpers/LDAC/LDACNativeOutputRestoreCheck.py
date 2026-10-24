@@ -31,9 +31,9 @@ priority = source[
     )
 ]
 priority_state = source[
-    source.index("    private nonisolated static func priorityState(") : source.index(
-        "    private nonisolated static func read<T>("
-    )
+    source.index(
+        "    private nonisolated static func validatePriority("
+    ) : source.index("    private nonisolated static func read<T>(")
 ]
 lease_state = source[
     source.index("    private nonisolated static func leaseIsOwned(") : source.index(
@@ -145,15 +145,11 @@ enum SonyBLEIdentity {
     }
 }
 __LATENCY_TYPES__
-struct LDACPriorityControl: Sendable {
-    struct State: Sendable { let phase: String; let error: String? }
-    let request: @Sendable (Bool, Bool) throws -> Void
-    let state: @Sendable () throws -> State
+__PRIORITY_TYPES__
+struct LDACNativeSession {
+__DIAGNOSTIC_TYPE__
 }
-struct LDACPriorityCleanupError: LocalizedError, Sendable {
-    let message: String
-    var errorDescription: String? { message }
-}
+__OWNER_ERROR__
 @MainActor
 enum CBManager {
     enum Authorization { case allowedAlways, denied }
@@ -172,7 +168,8 @@ final class IOBluetoothDevice {
 }
 struct OutputError: LocalizedError {
     let message: String
-    init(_ message: String, userFacing: String? = nil) { self.message = userFacing ?? message }
+    let diagnosticDescription: String
+    init(_ message: String, userFacing: String? = nil) { self.message = userFacing ?? message; diagnosticDescription = message }
     var errorDescription: String? { message }
 }
 
@@ -516,6 +513,7 @@ __CLAIM__
 __HANDOFF__
 __VERIFY__
 __PRIORITY__
+__DIAGNOSTIC_DESCRIPTION__
 __PRIORITY_STATE__
 __LEASE_STATE__
 __HAL_WRITE__
@@ -532,6 +530,28 @@ enum Check {
     @MainActor
     static func main() async {
         typealias Output = LDACNativeOutput
+        let priorityFailures: [(String, Bool?)] = [("preparation-failed", false), ("cleanup-required", true), ("cleanup-required", nil)]
+        for (phase, sent) in priorityFailures {
+            Output.reset()
+            Output.priorityReply = ["phase": phase, "address": Output.targetUID,
+                "error": "Audio-host connection was interrupted."]
+            if let sent { Output.priorityReply["prioritySent"] = sent }
+            let output = Output()
+            do {
+                _ = try output.priorityControl()
+                preconditionFailure("Failed priority preparation was accepted")
+            } catch {
+                precondition((error is LDACPriorityCleanupError) == (phase == "cleanup-required"))
+                let forwarded = LDACOwnerError(error)
+                let encoded = try! JSONEncoder().encode(forwarded)
+                let decoded = try! JSONDecoder().decode(LDACOwnerError.self, from: encoded)
+                precondition(decoded.diagnostic?.detail == "phase=\(phase); priority-sent=\(sent.map { String($0) } ?? "unknown"); error=Audio-host connection was interrupted.")
+                precondition(decoded.diagnostic?.isFailure == true)
+            }
+            output.isSelected = false
+            _ = await output.restoreAndRelease()
+            precondition(!output.ownsLease && Output.writes.isEmpty)
+        }
         let arguments = Foundation.ProcessInfo.processInfo.arguments
         if arguments.count == 3 {
             Output.routeDirectory = arguments[2]
@@ -952,7 +972,8 @@ enum Check {
             ["phase": "cleanup-required", "address": "not-an-address"],
             ["phase": "cleanup-required", "address": 42],
             ["phase": "invalid", "address": Output.previousAddress],
-            ["phase": "cleanup-required", "address": Output.previousAddress, "error": 42]
+            ["phase": "cleanup-required", "address": Output.previousAddress, "error": 42],
+            ["phase": "cleanup-required", "address": Output.previousAddress, "prioritySent": 1]
         ]
         for invalid in invalidReplies {
             Output.reset()
@@ -1173,6 +1194,42 @@ enum Check {
     .replace("__HAL_WRITE__", hal_write)
     .replace("__ROUTE_OWNER__", route_owner)
     .replace("__SET_LEASE__", set_lease)
+)
+
+owner = (Path(__file__).resolve().parents[2] / "Sources/LDACOwner.swift").read_text()
+fixture = (
+    fixture.replace(
+        "__PRIORITY_TYPES__",
+        native[
+            native.index("struct LDACPriorityControl:") : native.index(
+                "final class LDACNativeSession:"
+            )
+        ],
+    )
+    .replace(
+        "__DIAGNOSTIC_TYPE__",
+        native[
+            native.index("    struct Diagnostic:") : native.index(
+                "    struct Completion:"
+            )
+        ],
+    )
+    .replace(
+        "__OWNER_ERROR__",
+        owner[
+            owner.index("struct LDACOwnerError:") : owner.index(
+                "/// A `configure` request"
+            )
+        ],
+    )
+    .replace(
+        "__DIAGNOSTIC_DESCRIPTION__",
+        source[
+            source.index("    static func diagnosticDescription(") : source.index(
+                "    struct OutputError:"
+            )
+        ],
+    )
 )
 
 fixture = fixture.replace("__LATENCY__", latency).replace(

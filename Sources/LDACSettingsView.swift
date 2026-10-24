@@ -136,7 +136,6 @@ struct LDACSetupStatusView: View {
         LabeledContent("Headphone controls", value: headphones.isReady ? String(localized: "Ready") : String(localized: "Not ready"))
         LabeledContent("Sound Quality mode", value: headphones.connectionMode == .soundQuality ? String(localized: "Enabled") : String(localized: "Checked during startup"))
         LabeledContent("System audio access", value: ldac.audioCaptureAccess.displayName)
-        LabeledContent("Bluetooth log access", value: ldac.runtimeStatus.logAccessVerified ? String(localized: "Verified") : String(localized: "Checked before audio handoff"))
         LabeledContent("Bluetooth ownership observations", value: ldac.runtimeStatus.ownershipObservationsVerified ? String(localized: "Verified") : String(localized: "Checked during connection"))
         if let message = ldac.runtimeStatus.message { Text(message).font(.caption) }
         ForEach(LDACSampleRate.allCases, id: \.self) { rate in

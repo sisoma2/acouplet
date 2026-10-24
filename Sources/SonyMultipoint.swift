@@ -106,25 +106,15 @@ struct SonyMultipointInventory: Equatable, Sendable {
         return devices.first { $0.connectionID == playbackRightID }
     }
 
-    /// Parses the v2 inventory (`37 02`) or, with `legacy`, the MDR v1 list (`37 01`). The v1 entries
-    /// have no device-class bytes and the state byte is 0 for a saved device and 1 for a connected one.
-    /// The trailing byte is the playback right in v2; v1 sends a constant `01` that carries no source.
-    /// The v1 byte is a connection state, not an ID: every connected device reports 1. Connected v1
-    /// devices therefore get synthetic IDs (1, 2, ... in list order) so they stay unique; saved ones get 0.
     fileprivate init?(payload: [UInt8], legacy: Bool = false) {
         guard payload.count >= 4 else { return nil }
         let classLength = legacy ? 0 : 3
         var offset = 3
-        var syntheticID: UInt8 = 0
         var receivedDevices: [SonyMultipointDevice] = []
         for _ in 0..<payload[2] {
             guard offset + 19 + classLength < payload.count,
                   let address = multipointAddress(payload[offset..<(offset + 17)]) else { return nil }
-            var connectionID = payload[offset + 17]
-            if legacy, connectionID != 0 {
-                syntheticID += 1
-                connectionID = syntheticID
-            }
+            let connectionID = payload[offset + 17]
             let classOfDevice = legacy ? 0 : UInt32(payload[offset + 18]) << 16
                 | UInt32(payload[offset + 19]) << 8 | UInt32(payload[offset + 20])
             let nameLength = Int(payload[offset + 18 + classLength])
@@ -138,7 +128,7 @@ struct SonyMultipointInventory: Equatable, Sendable {
         let connectedIDs = receivedDevices.filter(\.isConnected).map(\.connectionID)
         guard offset + 1 == payload.count,
               Set(receivedDevices.map(\.address)).count == receivedDevices.count,
-              Set(connectedIDs).count == connectedIDs.count else { return nil }
+              legacy || Set(connectedIDs).count == connectedIDs.count else { return nil }
         devices = receivedDevices
         playbackRightID = legacy ? 0 : payload[offset]
     }
@@ -252,8 +242,6 @@ struct SonyPeripheralActionResult: Equatable, Sendable {
 struct SonyMultipoint: Equatable, Sendable {
     let supportsInventory: Bool
     let supportsSourceControl: Bool
-    /// MDR v1 headphones announce function 0x38 only while multipoint is on; they then answer `0E 36 01`
-    /// with a read-only device list. They have no capacity, pairing mode or source control.
     let supportsLegacyInventory: Bool
     private(set) var maxPairedDevices: UInt8?
     private(set) var maxConnectedDevices: UInt8?
@@ -347,8 +335,7 @@ struct SonyMultipoint: Equatable, Sendable {
             }
             inventory = receivedInventory
             inventoryIsStale = false
-        case (0x37, 0x01) where supportsLegacyInventory:
-            guard payload.count > 3 else { return false }
+        case (0x37, 0x01) where supportsLegacyInventory, (0x39, 0x01) where supportsLegacyInventory:
             guard let receivedInventory = SonyMultipointInventory(payload: payload, legacy: true) else {
                 inventoryIsStale = true
                 return false

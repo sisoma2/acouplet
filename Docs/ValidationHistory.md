@@ -2,6 +2,39 @@
 
 # Validation history
 
+## Upstream integration and first feature PR
+
+On 2026-10-24–25, `integration/upstream-sync` reconciled the fork with original
+upstream commit `0033a4b253302c26158ce351b909d050f37f65fa` on macOS 26.7.1
+(25G241). The integration uses upstream's callback-owned LDAC transport and
+control transmission ordering while retaining the fork's battery, connection,
+media lifetime, capture recovery and LDAC settings behavior.
+
+The full unit suite passed 1,397 tests with zero failures and 27 skips. Compiler
+string extraction, localization, Sparkle, battery helper and LDAC CLI bundle
+checks passed. The 16 selected LDAC fixture suites passed, including all 62
+session ownership cases. Native driver and battery checks passed without
+installing a driver or accessing Bluetooth hardware. Packaging fixtures,
+including all 107 local installer cases, passed in the integration audit.
+
+The native signaling and media transport suite passed after reconciling the
+fork's encoded queue with upstream's ownership checks. Its 90-second independent
+source test observed bitrate recovery after congestion with exact PCM accounting
+and no skipped frames. Deterministic replays covered every quality step at
+44.1, 48, 88.2 and 96 kHz. Isolated drain jitter now subtracts its observed time
+from recovery progress; it no longer erases the whole healthy interval.
+
+The first isolated contribution is
+[draft PR #10](https://github.com/baglayan/acouplet/pull/10), with three files and
+no integration merge history. Its new native battery expiry regression fails
+against upstream's helper and passes with the fix. All 58 publisher unit tests
+and the native battery self-test script pass on that PR branch.
+
+Driver revision remains 8 at the user's request. Driver revision and installer
+compatibility updates are deferred. Live LDAC playback with the combined transport
+still requires separate hardware qualification. See the
+[PR delivery plan](UpstreamPRs.md).
+
 ## Morning reconnect and battery expiry recovery
 
 On 2026-10-22, WF-1000XM5 logs showed ordinary A2DP audio reconnecting during

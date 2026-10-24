@@ -11,10 +11,13 @@ healthy transport before each quality increase. Repeated drain delays above the
 larger of 12 ms and a packet's audio duration lower quality after 60 ms of observed
 congestion. A 40 ms packet age or unsent audio queue lowers it immediately on the
 next packet drain. Source starvation and scheduler gaps above 20 ms suppress these
-decisions. Quality increases also require an empty unsent queue, low packet age
-and timely pacing; draining a backlog cannot count faster than elapsed time.
+decisions. Quality increases also require at most one packet's audio in the unsent queue,
+low packet age and timely pacing; draining a backlog cannot count faster than elapsed time.
 After congestion, the healthy interval becomes 30 seconds and doubles after a
-failed quality probe, up to 120 seconds. These are local transport observations,
+failed quality probe, up to 120 seconds. Isolated drain jitter subtracts its observed
+time from promotion progress instead of erasing the whole interval. Sustained
+delay, source starvation and scheduler stalls still reset that progress.
+These are local transport observations,
 not receiver delivery or signal strength measurements. Fixed quality modes retain
 their explicit bitrate. The adaptive replay and media queue fixtures cover these
 decisions and packet integrity; room-to-room range still needs hardware testing.

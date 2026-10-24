@@ -81,7 +81,7 @@ final class SonyConnectionControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testDiagnosticsOmitRenamedDevicesAndIdentitiesWhilePreservingControlState() {
+    func testDiagnosticsOmitRenamedDevicesAndIdentitiesWhilePreservingControlState() throws {
         let identifier = UUID()
         let address = "02:00:00:00:59:01"
         let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
@@ -106,6 +106,7 @@ final class SonyConnectionControllerTests: XCTestCase {
         XCTAssertTrue(report.contains("Firmware: \(controller.firmwareVersion!)"))
         XCTAssertTrue(report.contains("Capabilities:"))
         controller.connectBluetoothLE()
+        try XCTUnwrap(controller.simulatedPreparingBLETransport?.onPrepared)()
         XCTAssertTrue(controller.usesBluetoothLE)
         XCTAssertEqual(controller.linkState, .opening)
         let privateIssue = "Could not connect to Private renamed earbuds (\(identifier.uuidString), \(address))"
@@ -122,12 +123,126 @@ final class SonyConnectionControllerTests: XCTestCase {
         controller.simulateDeviceConnection(named: "Private renamed earbuds", peripheralIdentifier: identifier,
             simulatedAddress: address, galleryModel: .wfXM5)
         controller.connectBluetoothLE()
+        try XCTUnwrap(controller.simulatedPreparingBLETransport?.onPrepared)()
         XCTAssertEqual(controller.linkState, .opening)
         let timeout = "The headphone connection timed out."
         controller.simulateBLEDisconnect(timeout)
         XCTAssertTrue(controller.diagnosticReport.contains("Sony control: \(timeout)"))
         XCTAssertTrue(controller.diagnosticReport.contains("Last LE connection issue: \(timeout)"))
         XCTAssertTrue(controller.diagnosticReport.contains("Last error: \(timeout)"))
+    }
+
+    @MainActor
+    func testManualBLEPreflightFailureAndCancelPreserveClassicControls() throws {
+        for cancel in [false, true] {
+            let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+            defer { controller.simulateControlLoss() }
+            controller.simulateDeviceConnection(named: "WF-1000XM5")
+            let session = controller.simulatedControlSession
+            let batteries = controller.batteries
+            let hash = controller.bluetoothLEHash
+            controller.connectBluetoothLE()
+            let transport = try XCTUnwrap(controller.simulatedPreparingBLETransport)
+            let prepared = try XCTUnwrap(transport.onPrepared)
+            let disconnected = try XCTUnwrap(transport.onDisconnect)
+            XCTAssertTrue(controller.isPreparingBluetoothLE)
+            XCTAssertTrue(controller.hasPendingManualBLEConnection)
+            XCTAssertTrue(controller.isReady)
+            XCTAssertFalse(controller.usesBluetoothLE)
+            XCTAssertNil(controller.simulatedBLETransport)
+            controller.connectBluetoothLE()
+            XCTAssertTrue(controller.simulatedPreparingBLETransport === transport)
+            controller.toggleNoiseControl()
+            XCTAssertNotNil(controller.simulatedPendingFrame)
+            let pending = controller.simulatedPendingFrame
+            if cancel { controller.cancelBluetoothLEPreparation() }
+            else { transport.simulateFailure("No E20 control service") }
+            XCTAssertFalse(controller.isPreparingBluetoothLE)
+            XCTAssertTrue(controller.isReady)
+            XCTAssertFalse(controller.usesBluetoothLE)
+            XCTAssertEqual(controller.simulatedControlSession, session)
+            XCTAssertEqual(controller.batteries, batteries)
+            XCTAssertEqual(controller.bluetoothLEHash, hash)
+            XCTAssertEqual(controller.simulatedPendingFrame, pending)
+            XCTAssertNil(controller.lastErrorMessage)
+            XCTAssertEqual(controller.bluetoothLEError, cancel ? nil : "No E20 control service")
+            prepared()
+            disconnected("Late failure")
+            XCTAssertEqual(controller.simulatedControlSession, session)
+            XCTAssertTrue(controller.isReady)
+        }
+    }
+
+    @MainActor
+    func testManualBLEPreflightIsCancelledOnDisconnectReplacementAndSleep() throws {
+        for interruption in ["disconnect", "replacement", "sleep"] {
+            let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+            defer { controller.simulateControlLoss() }
+            controller.simulateDeviceConnection(named: "WF-1000XM5")
+            controller.connectBluetoothLE()
+            let transport = try XCTUnwrap(controller.simulatedPreparingBLETransport)
+            let prepared = try XCTUnwrap(transport.onPrepared)
+            let disconnected = try XCTUnwrap(transport.onDisconnect)
+            if interruption == "disconnect" { controller.simulateControlLoss() }
+            else if interruption == "replacement" { controller.simulateDeviceConnection(named: "WH-1000XM5") }
+            else { controller.systemWillSleep() }
+            XCTAssertFalse(controller.isPreparingBluetoothLE)
+            XCTAssertFalse(transport.isWaitingForConnection)
+            let session = controller.simulatedControlSession
+            let state = controller.linkState
+            prepared()
+            disconnected("Late failure")
+            XCTAssertEqual(controller.simulatedControlSession, session)
+            XCTAssertEqual(controller.linkState, state)
+            XCTAssertNil(controller.simulatedBLETransport)
+        }
+    }
+
+    @MainActor
+    func testPreparedBLEWaitsForClassicRetirementAndIgnoresLateCompletionAfterFailureOrCancel() async throws {
+        for finish in ["promote", "fail", "cancel"] {
+            let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+            defer { controller.simulateControlLoss() }
+            controller.simulateDeviceConnection(named: "WF-1000XM5")
+            controller.rfcommCloseCompletion.enter()
+            controller.connectBluetoothLE()
+            let transport = try XCTUnwrap(controller.simulatedPreparingBLETransport)
+            try XCTUnwrap(transport.onPrepared)()
+            XCTAssertTrue(controller.isPreparingBluetoothLE)
+            XCTAssertFalse(controller.usesBluetoothLE)
+            XCTAssertNil(controller.simulatedBLETransport)
+            XCTAssertEqual(controller.linkState, .opening)
+            controller.simulateAutomaticRefresh()
+            XCTAssertEqual(controller.linkState, .opening)
+            XCTAssertNil(controller.simulatedPendingFrame)
+            let disconnected = try XCTUnwrap(transport.onDisconnect)
+            if finish != "promote" {
+                if finish == "fail" { transport.simulateFailure("Eligibility deadline expired") }
+                else { controller.cancelBluetoothLEPreparation() }
+                XCTAssertFalse(controller.isPreparingBluetoothLE)
+                XCTAssertEqual(controller.rfcommCloseCompletion.wait(timeout: .now()), .timedOut)
+                controller.simulateDeviceConnection(named: "WH-1000XM5")
+            }
+            let session = controller.simulatedControlSession
+            controller.rfcommCloseCompletion.leave()
+            let retired = expectation(description: "Classic retirement callback")
+            controller.rfcommCloseCompletion.notify(queue: .main) { retired.fulfill() }
+            await fulfillment(of: [retired], timeout: 2)
+            XCTAssertFalse(controller.isPreparingBluetoothLE)
+            XCTAssertEqual(controller.simulatedControlSession, session)
+            if finish != "promote" {
+                disconnected("Late failure after Classic replacement")
+                XCTAssertEqual(controller.simulatedControlSession, session)
+                XCTAssertTrue(controller.isReady)
+                XCTAssertFalse(controller.usesBluetoothLE)
+                XCTAssertNil(controller.simulatedBLETransport)
+            } else {
+                XCTAssertTrue(controller.usesBluetoothLE)
+                XCTAssertTrue(controller.simulatedBLETransport === transport)
+                XCTAssertEqual(controller.linkState, .opening)
+                XCTAssertNotNil(controller.simulatedBLEIdentityTarget)
+            }
+        }
     }
 
     @MainActor
@@ -158,10 +273,45 @@ final class SonyConnectionControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testClassicOpeningTimeoutDoesNotReleaseUnresolvedRetirement() async {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        let device = ServiceDiscoveryDevice()
+        let oldChannel = DeferredRFCOMMChannel()
+        oldChannel.deliversCloseNotification = false
+        device.service = ServiceDiscoveryRecord()
+        device.channel = oldChannel
+        controller.simulateSonyLink(to: device)
+        controller.simulateHandshakeTimeout()
+        await fulfillment(of: [oldChannel.closeFinished], timeout: 2)
+        XCTAssertEqual(device.discoveryCallbacks.count, 1)
+        device.channel = nil
+        device.complete()
+        let discoveryDrained = expectation(description: "Fresh discovery callback drained")
+        DispatchQueue.main.async { discoveryDrained.fulfill() }
+        await fulfillment(of: [discoveryDrained], timeout: 2)
+        XCTAssertEqual(device.openedChannels, [7])
+        XCTAssertEqual(controller.linkState, .opening)
+        controller.simulateHandshakeTimeout()
+        let timeoutDrained = expectation(description: "Replacement timeout drained")
+        DispatchQueue.main.async { timeoutDrained.fulfill() }
+        await fulfillment(of: [timeoutDrained], timeout: 2)
+        guard case .failed = controller.linkState else { return XCTFail("Unresolved retirement must not leave controls opening") }
+        XCTAssertEqual(controller.rfcommCloseCompletion.wait(timeout: .now()), .timedOut)
+        controller.classicChannelOpenComplete(oldChannel, status: kIOReturnNotOpen)
+        let retired = expectation(description: "Failed old opening retired")
+        controller.rfcommCloseCompletion.notify(queue: .main) { retired.fulfill() }
+        await fulfillment(of: [retired], timeout: 2)
+        XCTAssertEqual(device.openedChannels, [7])
+        controller.simulateSonyLink(to: device)
+        XCTAssertEqual(device.openedChannels, [7, 7])
+        controller.simulateControlLoss()
+    }
+
+    @MainActor
     func testPausedClassicWriteKeepsMainQueueResponsiveAndTimesOut() async throws {
         let channel = DeferredRFCOMMChannel()
         let controller = await openClassicController(channel: channel)
-        defer { channel.finishWrite(); controller.simulateControlLoss() }
+        defer { channel.finishWrite(); controller.simulateControlLoss(); controller.classicChannelClosed(channel) }
         let write = try XCTUnwrap(channel.writes.first)
         XCTAssertEqual(SonyFrameCodec.decode(write)?.payload, [0x00, 0x00])
         XCTAssertEqual(controller.linkState, .handshaking)
@@ -191,7 +341,7 @@ final class SonyConnectionControllerTests: XCTestCase {
     func testClassicReplyBeforeWriteCompletionPreservesAcknowledgmentAndCommandOrder() async throws {
         let channel = DeferredRFCOMMChannel()
         let controller = await openClassicController(channel: channel)
-        defer { channel.finishWrite(); controller.simulateControlLoss() }
+        defer { channel.finishWrite(); controller.simulateControlLoss(); controller.classicChannelClosed(channel) }
         let acknowledgment = SonyFrameCodec.encode(type: 0x01, sequence: 1, payload: [])
         let reply = SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: [0x01, 0x00, 0x03, 0x00, 0x30, 0x18, 0x00, 0x00])
         let received = acknowledgment + reply
@@ -208,6 +358,100 @@ final class SonyConnectionControllerTests: XCTestCase {
         XCTAssertEqual(frames.prefix(2).map(\.type), [0x0C, 0x01])
         XCTAssertEqual(frames.last?.payload, [0x04, 0x01])
         XCTAssertEqual(controller.simulatedPendingFrame?.payload, [0x04, 0x01])
+    }
+
+    @MainActor
+    func testClassicReplacementWaitsForCloseEventAfterCloseReturns() async {
+        let oldChannel = DeferredRFCOMMChannel(blockOnlyFirst: true)
+        oldChannel.deliversCloseNotification = false
+        let controller = await openClassicController(channel: oldChannel)
+        oldChannel.finishWrite()
+        await waitForClassicWritesToDrain(controller)
+        controller.simulateControlLoss()
+        await fulfillment(of: [oldChannel.closeFinished], timeout: 2)
+
+        let newChannel = DeferredRFCOMMChannel(blockOnlyFirst: true)
+        let device = ServiceDiscoveryDevice()
+        device.service = ServiceDiscoveryRecord()
+        device.channel = newChannel
+        let opened = expectation(description: "Replacement opened after terminal event")
+        var nativeEventReturned = false
+        device.onOpen = {
+            XCTAssertTrue(nativeEventReturned)
+            opened.fulfill()
+        }
+        controller.simulateSonyLink(to: device)
+        let drained = expectation(description: "Main queue drained after native close return")
+        DispatchQueue.main.async { drained.fulfill() }
+        await fulfillment(of: [drained], timeout: 2)
+        XCTAssertTrue(oldChannel.isOpen())
+        XCTAssertTrue(device.openedChannels.isEmpty)
+        XCTAssertEqual(controller.rfcommCloseCompletion.wait(timeout: .now()), .timedOut)
+        oldChannel.deliverCloseNotification()
+        XCTAssertTrue(device.openedChannels.isEmpty)
+        nativeEventReturned = true
+        await fulfillment(of: [opened], timeout: 2)
+        XCTAssertEqual(device.openedChannels, [7])
+        controller.classicChannelOpenComplete(newChannel, status: kIOReturnSuccess)
+        await waitForWrites(newChannel, count: 1)
+        let session = controller.simulatedControlSession
+        oldChannel.deliverCloseNotification()
+        controller.classicChannelOpenComplete(oldChannel, status: kIOReturnSuccess)
+        XCTAssertEqual(controller.simulatedControlSession, session)
+        XCTAssertEqual(controller.linkState, .handshaking)
+        XCTAssertEqual(newChannel.closeCount, 0)
+        newChannel.finishWrite()
+        controller.simulateControlLoss()
+    }
+
+    @MainActor
+    func testRetiredClassicOpeningWaitsForLateSuccessAndItsCloseEvent() async {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        let device = ServiceDiscoveryDevice()
+        let oldChannel = DeferredRFCOMMChannel()
+        oldChannel.deliversCloseNotification = false
+        oldChannel.closeFinished.expectedFulfillmentCount = 2
+        device.service = ServiceDiscoveryRecord()
+        device.channel = oldChannel
+        controller.simulateSonyLink(to: device)
+        controller.simulateControlLoss()
+        await fulfillment(of: [oldChannel.closeStarted], timeout: 2)
+        device.channel = nil
+        let opened = expectation(description: "Replacement admitted after late open closes")
+        device.onOpen = { opened.fulfill() }
+        controller.simulateSonyLink(to: device)
+        XCTAssertEqual(device.openedChannels, [7])
+        controller.classicChannelOpenComplete(oldChannel, status: kIOReturnSuccess)
+        await fulfillment(of: [oldChannel.closeFinished], timeout: 2)
+        XCTAssertEqual(device.openedChannels, [7])
+        XCTAssertEqual(oldChannel.closeCount, 2)
+        oldChannel.deliverCloseNotification()
+        await fulfillment(of: [opened], timeout: 2)
+        XCTAssertEqual(device.openedChannels, [7, 7])
+        controller.simulateControlLoss()
+    }
+
+    @MainActor
+    func testRetiredClassicOpeningFailureUnblocksWithoutCloseCallback() async {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        let device = ServiceDiscoveryDevice()
+        let oldChannel = DeferredRFCOMMChannel()
+        oldChannel.deliversCloseNotification = false
+        device.service = ServiceDiscoveryRecord()
+        device.channel = oldChannel
+        controller.simulateSonyLink(to: device)
+        controller.simulateControlLoss()
+        await fulfillment(of: [oldChannel.closeFinished], timeout: 2)
+        device.channel = nil
+        let opened = expectation(description: "Replacement admitted after failed open")
+        device.onOpen = { opened.fulfill() }
+        controller.simulateSonyLink(to: device)
+        XCTAssertEqual(device.openedChannels, [7])
+        controller.classicChannelOpenComplete(oldChannel, status: kIOReturnNotOpen)
+        await fulfillment(of: [opened], timeout: 2)
+        XCTAssertEqual(device.openedChannels, [7, 7])
+        XCTAssertEqual(oldChannel.closeCount, 1)
+        controller.simulateControlLoss()
     }
 
     @MainActor
@@ -306,7 +550,7 @@ final class SonyConnectionControllerTests: XCTestCase {
             let channel = DeferredRFCOMMChannel()
             if immediate { channel.finishWrite(status: status) }
             let controller = await openClassicController(channel: channel)
-            defer { channel.finishWrite(); controller.simulateControlLoss() }
+            defer { channel.finishWrite(); controller.simulateControlLoss(); controller.classicChannelClosed(channel) }
             XCTAssertEqual(channel.writes.count, 1)
             if !immediate { channel.finishWrite(status: status) }
             await fulfillment(of: [channel.closeFinished], timeout: 2)
@@ -324,7 +568,7 @@ final class SonyConnectionControllerTests: XCTestCase {
             controller.simulateDeviceConnection(named: "WF-1000XM5")
             let channel = DeferredRFCOMMChannel(blockOnlyFirst: true)
             controller.simulateClassicTransport(channel)
-            defer { channel.finishWrite(); controller.simulateControlLoss() }
+            defer { channel.finishWrite(); controller.simulateControlLoss(); controller.classicChannelClosed(channel) }
             let session = controller.simulatedControlSession
             controller.classicChannelData(channel, data: SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: [0xA9, 0x20, 12]))
             await waitForWrites(channel, count: 1)
@@ -336,7 +580,7 @@ final class SonyConnectionControllerTests: XCTestCase {
             XCTAssertEqual(controller.pendingChanges[.playbackVolume], [20])
             if buffered {
                 controller.classicChannelData(channel, data: SonyFrameCodec.encode(type: 0x0C, sequence: 1, payload: [0xA9, 0x20, 13]))
-                XCTAssertEqual(controller.playback.volume, 12)
+                XCTAssertEqual(controller.playback.volume, 13)
             }
             current = false
             channel.finishWrite()
@@ -359,7 +603,7 @@ final class SonyConnectionControllerTests: XCTestCase {
         controller.simulateDeviceConnection(named: "WF-1000XM5")
         let channel = DeferredRFCOMMChannel(blockOnlyFirst: true)
         controller.simulateClassicTransport(channel)
-        defer { channel.finishWrite(); controller.simulateControlLoss() }
+        defer { channel.finishWrite(); controller.simulateControlLoss(); controller.classicChannelClosed(channel) }
         let session = controller.simulatedControlSession
         controller.classicChannelData(channel, data: SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: [0xA9, 0x20, 12]))
         await waitForWrites(channel, count: 1)
@@ -404,7 +648,7 @@ final class SonyConnectionControllerTests: XCTestCase {
                 controller.simulateDeviceConnection(named: "WF-1000XM5")
                 let channel = DeferredRFCOMMChannel(blockOnlyFirst: true)
                 controller.simulateClassicTransport(channel)
-                defer { channel.finishWrite(); controller.simulateControlLoss() }
+                defer { channel.finishWrite(); controller.simulateControlLoss(); controller.classicChannelClosed(channel) }
                 controller.classicChannelData(channel, data: SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: [0xA9, 0x20, 12]))
                 await waitForWrites(channel, count: 1)
                 let oldACK = SonyFrameCodec.encode(type: 0x01, sequence: 1, payload: [])
@@ -440,7 +684,7 @@ final class SonyConnectionControllerTests: XCTestCase {
         controller.simulateDeviceConnection(named: "WF-1000XM5")
         let channel = DeferredRFCOMMChannel()
         controller.simulateClassicTransport(channel)
-        defer { channel.finishWrite(); controller.simulateControlLoss() }
+        defer { channel.finishWrite(); controller.simulateControlLoss(); controller.classicChannelClosed(channel) }
         controller.simulateSameTransportHandshake()
         await waitForWrites(channel, count: 1)
         channel.finishWrite()
@@ -470,7 +714,7 @@ final class SonyConnectionControllerTests: XCTestCase {
                 controller.simulateDeviceConnection(named: "WF-1000XM5")
                 let channel = DeferredRFCOMMChannel(blockOnlyFirst: true)
                 controller.simulateClassicTransport(channel)
-                defer { channel.finishWrite(); controller.simulateControlLoss() }
+                defer { channel.finishWrite(); controller.simulateControlLoss(); controller.classicChannelClosed(channel) }
                 controller.classicChannelData(channel, data: SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: [0xA9, 0x20, 12]))
                 await waitForWrites(channel, count: 1)
                 var current = true
@@ -497,7 +741,7 @@ final class SonyConnectionControllerTests: XCTestCase {
             controller.simulateDeviceConnection(named: "WF-1000XM5")
             let channel = DeferredRFCOMMChannel(blockOnlyFirst: true)
             controller.simulateClassicTransport(channel)
-            defer { channel.finishWrite(); controller.simulateControlLoss() }
+            defer { channel.finishWrite(); controller.simulateControlLoss(); controller.classicChannelClosed(channel) }
             controller.classicChannelData(channel, data: SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: [0xA9, 0x20, 12]))
             await waitForWrites(channel, count: 1)
             controller.setPlaybackVolume(20)
@@ -519,7 +763,7 @@ final class SonyConnectionControllerTests: XCTestCase {
         controller.simulateDeviceConnection(named: "WF-1000XM5")
         let channel = DeferredRFCOMMChannel(blockOnlyFirst: true)
         controller.simulateClassicTransport(channel)
-        defer { channel.finishWrite(); controller.simulateControlLoss() }
+        defer { channel.finishWrite(); controller.simulateControlLoss(); controller.classicChannelClosed(channel) }
         controller.classicChannelData(channel, data: SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: [0xA9, 0x20, 12]))
         await waitForWrites(channel, count: 1)
         var current = true
@@ -563,7 +807,7 @@ final class SonyConnectionControllerTests: XCTestCase {
         controller.simulateDeviceConnection(named: "WF-1000XM5")
         let channel = DeferredRFCOMMChannel(blockOnlyFirst: true)
         controller.simulateClassicTransport(channel)
-        defer { channel.finishWrite(); controller.simulateControlLoss() }
+        defer { channel.finishWrite(); controller.simulateControlLoss(); controller.classicChannelClosed(channel) }
         var current = true
         controller.setPlaybackVolume(20) { current }
         let frame = try XCTUnwrap(controller.simulatedPendingFrame)
@@ -585,6 +829,37 @@ final class SonyConnectionControllerTests: XCTestCase {
         XCTAssertTrue(controller.isReady)
         XCTAssertNil(controller.lastErrorMessage)
         XCTAssertEqual(channel.closeCount, 0)
+    }
+
+    @MainActor
+    func testClassicNotificationStartingBeforeVolumeAdmissionCannotConfirmIt() async throws {
+        let encoded = SonyFrameCodec.encode(type: 0x0C, sequence: 1, payload: [0xA9, 0x20, 20])
+        for split in 1...encoded.count {
+            let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+            controller.simulateDeviceConnection(named: "WF-1000XM5")
+            let channel = DeferredRFCOMMChannel(blockOnlyFirst: true)
+            controller.simulateClassicTransport(channel)
+            defer { channel.finishWrite(); controller.simulateControlLoss(); controller.classicChannelClosed(channel) }
+            controller.classicChannelData(channel, data: SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: [0xA9, 0x20, 12]))
+            await waitForWrites(channel, count: 1)
+            controller.setPlaybackVolume(20)
+            let frame = try XCTUnwrap(controller.simulatedPendingFrame)
+            controller.classicChannelData(channel, data: encoded.prefix(split))
+            channel.finishWrite()
+            await waitForClassicWritesToDrain(controller)
+            if split < encoded.count {
+                controller.classicChannelData(channel, data: encoded.dropFirst(split))
+                await waitForClassicWritesToDrain(controller)
+            }
+            XCTAssertEqual(controller.playback.volume, 20)
+            XCTAssertEqual(controller.pendingChanges[.playbackVolume], [20])
+            XCTAssertEqual(controller.simulatedPendingFrame, frame)
+            controller.classicChannelData(channel, data: SonyFrameCodec.encode(type: 0x01, sequence: 1 - frame.sequence, payload: []))
+            controller.classicChannelData(channel, data: SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: [0xA9, 0x20, 20]))
+            await waitForClassicWritesToDrain(controller)
+            XCTAssertNil(controller.pendingChanges[.playbackVolume])
+            XCTAssertNil(controller.simulatedPendingFrame)
+        }
     }
 
     @MainActor
@@ -638,8 +913,10 @@ final class SonyConnectionControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testTerminationWaitsForPendingOpenThenClosesTheChannel() async {
+    func testTerminationWaitsForPendingOpenAndItsCloseNotification() async {
         let channel = DeferredRFCOMMChannel()
+        channel.deliversCloseNotification = false
+        channel.closeFinished.expectedFulfillmentCount = 2
         let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
         defer { controller.simulateControlLoss() }
         let device = ServiceDiscoveryDevice()
@@ -648,24 +925,40 @@ final class SonyConnectionControllerTests: XCTestCase {
         controller.simulateSonyLink(to: device)
         XCTAssertEqual(device.openedChannels, [7])
 
+        controller.simulateHandshakeTimeout()
         controller.beginTermination()
+        var finished = false
         let drained = expectation(description: "Drain finished")
-        XCTAssertTrue(controller.drainRFCOMMForTermination { drained.fulfill() })
-        try? await Task.sleep(for: .milliseconds(100))
-        XCTAssertEqual(channel.closeCount, 0, "An in-flight open cannot be closed before it completes")
+        XCTAssertTrue(controller.drainRFCOMMForTermination {
+            finished = true
+            drained.fulfill()
+        })
+        XCTAssertTrue(controller.drainRFCOMMForTermination { XCTFail("An existing drain owns the completion") })
+        XCTAssertFalse(controller.simulatedHandshakeTimeoutPending)
+        await fulfillment(of: [channel.closeStarted], timeout: 2)
+        XCTAssertFalse(finished)
 
         controller.classicChannelOpenComplete(channel, status: kIOReturnSuccess)
-        await fulfillment(of: [channel.closeFinished, drained], timeout: 2, enforceOrder: true)
-        XCTAssertEqual(channel.closeCount, 1)
+        await fulfillment(of: [channel.closeFinished], timeout: 2)
+        XCTAssertEqual(channel.closeCount, 2)
+        XCTAssertFalse(finished)
+        XCTAssertEqual(controller.rfcommCloseCompletion.wait(timeout: .now()), .timedOut)
         XCTAssertTrue(channel.writes.isEmpty, "A terminating app must not start the handshake")
+        channel.deliverCloseNotification()
+        await fulfillment(of: [drained], timeout: 2)
+        XCTAssertEqual(controller.rfcommCloseCompletion.wait(timeout: .now()), .success)
         XCTAssertFalse(controller.drainRFCOMMForTermination { XCTFail("Nothing left to drain") })
     }
 
     @MainActor
     func testTerminationDrainGivesUpWhenTheOpenNeverCompletes() async {
         let channel = DeferredRFCOMMChannel()
+        channel.deliversCloseNotification = false
         let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
-        defer { controller.simulateControlLoss() }
+        defer {
+            controller.classicChannelOpenComplete(channel, status: kIOReturnNotOpen)
+            controller.simulateControlLoss()
+        }
         let device = ServiceDiscoveryDevice()
         device.service = ServiceDiscoveryRecord()
         device.channel = channel
@@ -675,6 +968,141 @@ final class SonyConnectionControllerTests: XCTestCase {
         let drained = expectation(description: "Drain gave up")
         XCTAssertTrue(controller.drainRFCOMMForTermination { drained.fulfill() })
         await fulfillment(of: [drained], timeout: 2)
+        XCTAssertEqual(controller.rfcommCloseCompletion.wait(timeout: .now()), .timedOut)
+        XCTAssertFalse(controller.drainRFCOMMForTermination { XCTFail("An expired drain must not restart") })
+    }
+
+    @MainActor
+    func testTerminationDrainFinishesWhenPendingChannelClosesWithoutOpening() async {
+        let channel = DeferredRFCOMMChannel()
+        channel.deliversCloseNotification = false
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        let device = ServiceDiscoveryDevice()
+        device.service = ServiceDiscoveryRecord()
+        device.channel = channel
+        controller.simulateSonyLink(to: device)
+        controller.terminationDrainTimeout = 5
+        let drained = expectation(description: "Closed pending channel drained")
+        XCTAssertTrue(controller.drainRFCOMMForTermination { drained.fulfill() })
+        controller.classicChannelClosed(channel)
+        await fulfillment(of: [channel.closeFinished, drained], timeout: 2, enforceOrder: true)
+        XCTAssertEqual(channel.closeCount, 1)
+        XCTAssertTrue(channel.writes.isEmpty)
+    }
+
+    @MainActor
+    func testCompletedTerminationDrainTimeoutCannotExpireAnotherQuit() async throws {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        controller.terminationDrainTimeout = 0.2
+        controller.rfcommCloseCompletion.enter()
+        let firstDrain = expectation(description: "First drain finished")
+        XCTAssertTrue(controller.drainRFCOMMForTermination { firstDrain.fulfill() })
+        controller.rfcommCloseCompletion.leave()
+        await fulfillment(of: [firstDrain], timeout: 2)
+        controller.cancelTermination()
+
+        controller.terminationDrainTimeout = 2
+        controller.rfcommCloseCompletion.enter()
+        var secondFinished = false
+        let secondDrain = expectation(description: "Second drain finished")
+        XCTAssertTrue(controller.drainRFCOMMForTermination {
+            secondFinished = true
+            secondDrain.fulfill()
+        })
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(secondFinished)
+        controller.rfcommCloseCompletion.leave()
+        await fulfillment(of: [secondDrain], timeout: 2)
+    }
+
+    @MainActor
+    func testCancelledTerminationDrainTimeoutCannotExpireAnotherQuit() async throws {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        controller.terminationDrainTimeout = 0.2
+        controller.rfcommCloseCompletion.enter()
+        XCTAssertTrue(controller.drainRFCOMMForTermination { XCTFail("The quit was cancelled") })
+        controller.cancelTermination()
+
+        controller.terminationDrainTimeout = 2
+        var finished = false
+        let drained = expectation(description: "Second drain finished")
+        XCTAssertTrue(controller.drainRFCOMMForTermination {
+            finished = true
+            drained.fulfill()
+        })
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(finished)
+        controller.rfcommCloseCompletion.leave()
+        await fulfillment(of: [drained], timeout: 2)
+    }
+
+    @MainActor
+    func testExpiredTerminationDrainCloseCannotFinishAnotherPendingOpen() async {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        controller.terminationDrainTimeout = 0.01
+        controller.rfcommCloseCompletion.enter()
+        let firstDrain = expectation(description: "First drain expired")
+        XCTAssertTrue(controller.drainRFCOMMForTermination { firstDrain.fulfill() })
+        await fulfillment(of: [firstDrain], timeout: 2)
+        controller.cancelTermination()
+
+        let channel = DeferredRFCOMMChannel()
+        channel.deliversCloseNotification = false
+        channel.closeFinished.expectedFulfillmentCount = 2
+        let device = ServiceDiscoveryDevice()
+        device.service = ServiceDiscoveryRecord()
+        device.channel = channel
+        let oldCloseDrained = expectation(description: "Old close notification drained")
+        controller.rfcommCloseCompletion.notify(queue: .main) { oldCloseDrained.fulfill() }
+        controller.rfcommCloseCompletion.leave()
+        controller.simulateSonyLink(to: device)
+        controller.terminationDrainTimeout = 2
+        var secondFinished = false
+        let secondDrain = expectation(description: "Second drain finished")
+        XCTAssertTrue(controller.drainRFCOMMForTermination {
+            secondFinished = true
+            secondDrain.fulfill()
+        })
+        await fulfillment(of: [oldCloseDrained], timeout: 2)
+        XCTAssertFalse(secondFinished)
+        controller.classicChannelOpenComplete(channel, status: kIOReturnSuccess)
+        await fulfillment(of: [channel.closeFinished], timeout: 2)
+        XCTAssertFalse(secondFinished)
+        channel.deliverCloseNotification()
+        await fulfillment(of: [secondDrain], timeout: 2)
+    }
+
+    @MainActor
+    func testCancellingTerminationAllowsNewOpenAfterRetirement() async {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        let channel = DeferredRFCOMMChannel()
+        channel.deliversCloseNotification = false
+        channel.closeFinished.expectedFulfillmentCount = 2
+        let device = ServiceDiscoveryDevice()
+        device.service = ServiceDiscoveryRecord()
+        device.channel = channel
+        controller.simulateSonyLink(to: device)
+        XCTAssertTrue(controller.drainRFCOMMForTermination { XCTFail("The quit was cancelled") })
+        controller.cancelTermination()
+        XCTAssertFalse(controller.isTerminating)
+        XCTAssertFalse(controller.simulatedHandshakeTimeoutPending)
+        device.channel = DeferredRFCOMMChannel()
+        let opened = expectation(description: "Replacement opened after cancelled quit")
+        device.onOpen = { opened.fulfill() }
+        controller.simulateSonyLink(to: device)
+        XCTAssertEqual(device.openedChannels, [7])
+        controller.classicChannelOpenComplete(channel, status: kIOReturnSuccess)
+        await fulfillment(of: [channel.closeFinished], timeout: 2)
+        XCTAssertEqual(device.openedChannels, [7])
+        channel.deliverCloseNotification()
+        await fulfillment(of: [opened], timeout: 2)
+        XCTAssertEqual(device.openedChannels, [7, 7])
+        XCTAssertTrue(controller.simulatedHandshakeTimeoutPending)
     }
 
     @MainActor
@@ -792,42 +1220,86 @@ final class SonyConnectionControllerTests: XCTestCase {
         controller.simulateSonyLink(to: device)
         XCTAssertTrue(device.discoveryCallbacks.isEmpty)
         XCTAssertEqual(device.openedChannels, [7])
+        XCTAssertEqual(device.serviceLookups, 1)
     }
 
     @MainActor
-    func testSonyServiceLookupPrefersCurrentServiceAndFallsBackToLegacySerialService() throws {
-        let current = Data(SonyHeadphonesController.sonyServiceUUIDs[0])
-        let legacy = Data(SonyHeadphonesController.sonyServiceUUIDs[1])
-        XCTAssertEqual(current.prefix(4), Data([0x95, 0x6C, 0x7B, 0x26]))
-        XCTAssertEqual(legacy, Data([0x96, 0xCC, 0x20, 0x3E, 0x50, 0x68, 0x46, 0xAD,
-                                     0xB3, 0x2D, 0xE3, 0x16, 0xF5, 0xE0, 0x69, 0xBA]))
-
-        let both = ServiceDiscoveryDevice()
-        both.service = ServiceDiscoveryRecord()
-        XCTAssertEqual(try XCTUnwrap(SonyHeadphonesController.sonyServiceRecord(on: both)).uuid, Array(current))
-        XCTAssertEqual(both.lookedUpUUIDs, [current])
-
-        let legacyOnly = ServiceDiscoveryDevice()
-        legacyOnly.service = ServiceDiscoveryRecord()
-        legacyOnly.serviceUUID = legacy
-        XCTAssertEqual(try XCTUnwrap(SonyHeadphonesController.sonyServiceRecord(on: legacyOnly)).uuid, Array(legacy))
-        XCTAssertEqual(legacyOnly.lookedUpUUIDs, [current, legacy])
-
-        let neither = ServiceDiscoveryDevice()
-        XCTAssertNil(SonyHeadphonesController.sonyServiceRecord(on: neither))
-        XCTAssertEqual(neither.lookedUpUUIDs, [current, legacy])
-    }
-
-    @MainActor
-    func testLegacySerialServiceOpensWithoutAnotherDiscovery() {
+    func testInvalidPrimarySonyServiceDoesNotHideValidSecondaryService() {
         let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
         defer { controller.simulateControlLoss() }
         let device = ServiceDiscoveryDevice()
-        device.service = ServiceDiscoveryRecord()
-        device.serviceUUID = Data(SonyHeadphonesController.sonyServiceUUIDs[1])
+        device.service = ServiceDiscoveryRecord(status: kIOReturnNotFound)
+        device.additionalServices[Data([
+            0x96, 0xCC, 0x20, 0x3E, 0x50, 0x68, 0x46, 0xAD,
+            0xB3, 0x2D, 0xE3, 0x16, 0xF5, 0xE0, 0x69, 0xBA,
+        ])] = ServiceDiscoveryRecord(channelID: 9)
         controller.simulateSonyLink(to: device)
+        XCTAssertEqual(device.openedChannels, [9])
+        XCTAssertEqual(device.serviceLookups, 2)
         XCTAssertTrue(device.discoveryCallbacks.isEmpty)
+        XCTAssertEqual(controller.linkState, .opening)
+    }
+
+    @MainActor
+    func testInvalidCachedSonyServiceGetsOneFreshDiscovery() async {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        let device = ServiceDiscoveryDevice()
+        device.service = ServiceDiscoveryRecord(status: kIOReturnNotFound)
+        controller.simulateSonyLink(to: device)
+        XCTAssertTrue(device.openedChannels.isEmpty)
+        XCTAssertEqual(device.discoveryCallbacks.count, 1)
+        device.complete()
+        for _ in 0..<4 { await Task.yield() }
+        XCTAssertTrue(device.openedChannels.isEmpty)
+        XCTAssertEqual(device.discoveryCallbacks.count, 1)
+        XCTAssertEqual(controller.linkState, .failed(String(localized: "Could not connect to the headphones’ controls.")))
+    }
+
+    @MainActor
+    func testRFCOMMOpeningTimeoutDoesNotReportAnUnansweredSonyRequest() async {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        let device = ServiceDiscoveryDevice()
+        controller.simulateSonyLink(to: device)
+        device.service = ServiceDiscoveryRecord()
+        device.complete()
+        for _ in 0..<4 { await Task.yield() }
         XCTAssertEqual(device.openedChannels, [7])
+        XCTAssertEqual(controller.linkState, .opening)
+        XCTAssertTrue(controller.simulatedTransmittedFrames.isEmpty)
+
+        controller.simulateHandshakeTimeout()
+        for _ in 0..<4 { await Task.yield() }
+        XCTAssertEqual(controller.linkState, .failed(String(localized: "Could not connect to the headphones’ controls.")))
+        XCTAssertTrue(controller.simulatedTransmittedFrames.isEmpty)
+        XCTAssertTrue(controller.diagnosticReport.contains("control transport open timeout"))
+        XCTAssertFalse(controller.diagnosticReport.contains("handshake timeout; stage="))
+    }
+
+    @MainActor
+    func testProtocolInitializationHasThirtySecondsSeparateFromOpening() async throws {
+        for protocolInfo: [UInt8] in [[0x01, 0, 0x40, 0], [0x01, 0, 3, 0, 0x30, 0x18, 0, 0]] {
+            let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+            defer { controller.simulateControlLoss() }
+            let device = ServiceDiscoveryDevice()
+            device.service = ServiceDiscoveryRecord()
+            let openingStart = DispatchTime.now().uptimeNanoseconds
+            controller.simulateSonyLink(to: device)
+            let openingDeadline = try XCTUnwrap(controller.simulatedHandshakeTimeoutDeadline).uptimeNanoseconds
+            XCTAssertEqual(Double(openingDeadline - openingStart) / 1_000_000_000, 10, accuracy: 1)
+            let initializationStart = DispatchTime.now().uptimeNanoseconds
+            controller.simulateProtocolData(Data(), beginConnection: true)
+            let initializationDeadline = try XCTUnwrap(controller.simulatedHandshakeTimeoutDeadline).uptimeNanoseconds
+            XCTAssertEqual(Double(initializationDeadline - initializationStart) / 1_000_000_000, 30, accuracy: 1)
+            deliver(protocolInfo, to: controller)
+            XCTAssertNotNil(controller.protocolInformation)
+            XCTAssertEqual(controller.simulatedHandshakeTimeoutDeadline?.uptimeNanoseconds, initializationDeadline)
+            controller.simulateHandshakeTimeout()
+            for _ in 0..<4 { await Task.yield() }
+            XCTAssertEqual(controller.linkState, .failed(String(localized: "The headphones did not respond.")))
+            XCTAssertTrue(controller.diagnosticReport.contains("handshake timeout; stage="))
+        }
     }
 
     @MainActor
@@ -911,15 +1383,19 @@ final class SonyConnectionControllerTests: XCTestCase {
                 device.service = ServiceDiscoveryRecord()
                 device.openStatus = failure == "immediate" ? kIOReturnNotOpen : kIOReturnSuccess
                 device.channel = oldChannel
-                let queried = expectation(description: "Fresh service query started")
-                device.onDiscovery = { queried.fulfill() }
                 controller.simulateSonyLink(to: device)
                 if failure == "callback" { controller.classicChannelOpenComplete(oldChannel, status: kIOReturnNotOpen) }
                 if failure == "timeout" { controller.simulateHandshakeTimeout() }
-                await fulfillment(of: [queried], timeout: 2)
+                await fulfillment(of: [oldChannel.closeFinished], timeout: 2)
+                if failure == "timeout" {
+                    XCTAssertTrue(controller.diagnosticReport.contains("control transport open timeout; waitingForRetirement=false"))
+                    XCTAssertFalse(controller.diagnosticReport.contains("handshake timeout;"))
+                } else if failure == "callback" {
+                    XCTAssertTrue(controller.diagnosticReport.contains("RFCOMM open callback; status=\(kIOReturnNotOpen); current=true"))
+                }
+                XCTAssertTrue(controller.diagnosticReport.contains("RFCOMM retirement requested; opening=true"))
                 XCTAssertEqual(device.discoveryCallbacks.count, 1, failure)
                 guard !device.discoveryCallbacks.isEmpty else { continue }
-                await fulfillment(of: [oldChannel.closeFinished], timeout: 2)
                 device.service = ServiceDiscoveryRecord(channelID: 9)
                 device.openStatus = freshOpenSucceeds ? kIOReturnSuccess : kIOReturnNotOpen
                 device.channel = nil
@@ -934,6 +1410,10 @@ final class SonyConnectionControllerTests: XCTestCase {
         }
     }
 
+
+
+
+
     @MainActor
     func testCachedServiceTimeoutDuringTerminationWaitsForOpenCompletion() async {
         let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
@@ -946,12 +1426,13 @@ final class SonyConnectionControllerTests: XCTestCase {
         controller.beginTermination()
         let drained = expectation(description: "Pending open drained after completion")
         XCTAssertTrue(controller.drainRFCOMMForTermination { drained.fulfill() })
+        await fulfillment(of: [channel.closeFinished], timeout: 2)
         controller.simulateHandshakeTimeout()
         for _ in 0..<10 { await Task.yield() }
-        XCTAssertEqual(channel.closeCount, 0)
+        XCTAssertEqual(channel.closeCount, 1)
         XCTAssertTrue(device.discoveryCallbacks.isEmpty)
         controller.classicChannelOpenComplete(channel, status: kIOReturnNotOpen)
-        await fulfillment(of: [drained, channel.closeFinished], timeout: 2)
+        await fulfillment(of: [drained], timeout: 2)
         XCTAssertTrue(device.discoveryCallbacks.isEmpty)
         XCTAssertEqual(device.openedChannels, [7])
     }
@@ -1383,11 +1864,54 @@ final class SonyConnectionControllerTests: XCTestCase {
             let session = controller.simulatedControlSession
             controller.simulateSystemReadTimeout(query)
             for _ in 0..<4 { await Task.yield() }
-            XCTAssertFalse(controller.isReady)
-            XCTAssertGreaterThan(controller.simulatedControlSession, session)
-            controller.simulateProtocolMessage([0xE9, 1, 0, 1], session: session)
-            XCTAssertNil(controller.connectionMode)
+            XCTAssertTrue(controller.isReady)
+            XCTAssertEqual(controller.simulatedControlSession, session)
+            XCTAssertFalse(controller.canChangeConnectionMode)
+            XCTAssertNotNil(controller.noiseControlMode)
         }
+    }
+
+    @MainActor
+    func testExpiredLegacyQualityReplyCannotRewindNotificationOrConfirmLaterChange() async {
+        let controller = preparedLegacyQualityController()
+        defer { controller.simulateControlLoss() }
+        for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+        acknowledgeAll(controller)
+        let session = controller.simulatedControlSession
+        controller.simulateSystemReadTimeout([0xE6, 1])
+        for _ in 0..<10 { await Task.yield() }
+        deliver([0xE9, 1, 0, 1], to: controller)
+        XCTAssertEqual(controller.connectionMode, .stableConnection)
+        XCTAssertTrue(controller.canChangeConnectionMode)
+        controller.setConnectionMode(.soundQuality)
+        acknowledgeAll(controller)
+        XCTAssertEqual(controller.connectionTransition?.phase, .awaitingResponse)
+        deliver([0xE7, 1, 0, 0], to: controller)
+        XCTAssertEqual(controller.connectionMode, .stableConnection)
+        XCTAssertEqual(controller.connectionTransition?.phase, .awaitingResponse)
+        acknowledgeAll(controller)
+        deliver([0xE7, 1, 0, 0], to: controller)
+        XCTAssertEqual(controller.connectionMode, .soundQuality)
+        XCTAssertEqual(controller.connectionTransition?.phase, .confirmed)
+        XCTAssertTrue(controller.isReady)
+        XCTAssertEqual(controller.simulatedControlSession, session)
+        XCTAssertEqual(controller.simulatedTransmittedFrames.filter { $0.payload.first == 0xE8 }.count, 1)
+    }
+
+    @MainActor
+    func testLegacyQualityReadTimeoutDuringModeChangeStillRecovers() async {
+        let controller = preparedLegacyQualityController()
+        defer { controller.simulateControlLoss() }
+        controller.setConnectionMode(.stableConnection)
+        acknowledgeAll(controller)
+        let session = controller.simulatedControlSession
+        controller.simulateSystemReadTimeout([0xE6, 1])
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertFalse(controller.isReady)
+        XCTAssertGreaterThan(controller.simulatedControlSession, session)
+        XCTAssertEqual(controller.connectionTransition?.phase, .recovering)
+        XCTAssertNotNil(controller.retrySecondsRemaining)
+        XCTAssertEqual(controller.simulatedTransmittedFrames.filter { $0.payload.first == 0xE8 }.count, 1)
     }
 
     @MainActor
@@ -1653,6 +2177,74 @@ final class SonyConnectionControllerTests: XCTestCase {
         defaults.set([identity.classicAddress: ["hash": "invalid"]], forKey: SonyBLEIdentity.savedDevicesKey)
         let malformed = SonyHeadphonesController(startAutomatically: false, simulated: true, identityDefaults: defaults)
         XCTAssertNil(malformed.simulatedSavedIdentity)
+    }
+
+    @MainActor
+    func testVerifiedBLEEndpointRotatesWithoutReplacingCanonicalIdentity() throws {
+        let suite = "dev.baglayan.Acouplet.ble-endpoint-tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let canonical = UUID()
+        let identity = try XCTUnwrap(SonyBLEIdentity.VerifiedDevice(classicAddress: "02:53:4F:4E:59:01", model: .wfXM5,
+            hash: "ABCDEF12", peripheralIdentifier: canonical))
+        SonyBLEIdentity.save(identity, in: defaults)
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true, identityDefaults: defaults)
+        defer { controller.simulateControlLoss() }
+        let device = ServiceDiscoveryDevice()
+        device.reportedName = "WF-1000XM5"
+        device.reportedAddress = identity.classicAddress
+        device.classicPeer = ConnectionPeerFixture(canonical)
+        controller.simulateSelectedDevice(device)
+        var expectedIdentity = identity
+        for hash in [identity.hash, "12345678", identity.hash] {
+            controller.connectBluetoothLE()
+            XCTAssertEqual(controller.simulatedBLEIdentityTarget,
+                .verified(hash: identity.hash, peripheralIdentifier: expectedIdentity.blePeripheralIdentifier))
+            let endpoint = UUID()
+            controller.simulateProtocolMessage([0x01, 0, 3, 0, 0x30, 0x18, 0, 0],
+                beginConnection: true, expectedBLEHash: identity.hash, connectedPeripheralID: endpoint)
+            acknowledgeAll(controller)
+            deliver([0x07, 0, 1, 0x14, 0], to: controller)
+            acknowledgeAll(controller)
+            XCTAssertEqual(controller.simulatedSavedIdentity, expectedIdentity)
+            deliver([0x11, 0x04] + Array("00:11:22:33:44:55\(hash)".utf8), to: controller)
+            if hash == identity.hash {
+                expectedIdentity = try XCTUnwrap(SonyBLEIdentity.VerifiedDevice(classicAddress: identity.classicAddress,
+                    model: identity.model, hash: hash, peripheralIdentifier: canonical, blePeripheralIdentifier: endpoint))
+                XCTAssertTrue(controller.isReady)
+            } else {
+                XCTAssertFalse(controller.isReady)
+            }
+            XCTAssertEqual(controller.simulatedSavedIdentity, expectedIdentity)
+            XCTAssertEqual(SonyBLEIdentity.savedDevices(in: defaults)[identity.classicAddress], expectedIdentity)
+            XCTAssertEqual(controller.verifiedIdentity(for: device), expectedIdentity)
+        }
+    }
+
+    @MainActor
+    func testClassicIdentityRefreshPreservesBLEEndpointOnlyForTheSameVerifiedIdentity() throws {
+        let suite = "dev.baglayan.Acouplet.classic-identity-tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let canonical = UUID()
+        let endpoint = UUID()
+        let identity = try XCTUnwrap(SonyBLEIdentity.VerifiedDevice(classicAddress: "02:53:4F:4E:59:01", model: .wfXM5,
+            hash: "ABCDEF12", peripheralIdentifier: canonical, blePeripheralIdentifier: endpoint))
+        SonyBLEIdentity.save(identity, in: defaults)
+        let controller = preparedController(identityDefaults: defaults)
+        defer { controller.simulateControlLoss() }
+        XCTAssertFalse(controller.usesBluetoothLE)
+        XCTAssertEqual(controller.simulatedSavedIdentity, identity)
+        controller.simulateProtocolMessage([0x01, 0, 3, 0, 0x30, 0x18, 0, 0], beginConnection: true)
+        acknowledgeAll(controller)
+        deliver([0x07, 0, 1, 0x14, 0], to: controller)
+        acknowledgeAll(controller)
+        deliver([0x11, 0x04] + Array("00:11:22:33:44:5512345678".utf8), to: controller)
+        let updated = try XCTUnwrap(controller.simulatedSavedIdentity)
+        XCTAssertEqual(updated.hash, "12345678")
+        XCTAssertEqual(updated.peripheralIdentifier, canonical)
+        XCTAssertNil(updated.blePeripheralIdentifier)
+        XCTAssertEqual(SonyBLEIdentity.savedDevices(in: defaults)[identity.classicAddress], updated)
     }
 
     @MainActor
@@ -2102,6 +2694,33 @@ final class SonyConnectionControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testModeNotificationStartingBeforeSetterCannotConfirmAfterTransmission() {
+        for legacy in [false, true] {
+            let payload: [UInt8] = legacy ? [0xE9, 1, 0, 1] : [0xE9, 5, 1, 0]
+            let bytes = SonyFrameCodec.encode(type: 0x0C, sequence: 1, payload: payload)
+            for split in 1..<bytes.count {
+                let controller = legacy ? preparedLegacyQualityController() : preparedController()
+                defer { controller.simulateControlLoss() }
+                acknowledgeAll(controller)
+                controller.simulateProtocolData(SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: [0xFE]))
+                controller.simulateProtocolData(bytes.prefix(split))
+                controller.defersSimulatedWrites = true
+                controller.setConnectionMode(.stableConnection)
+                controller.completeSimulatedWrite()
+                XCTAssertEqual(controller.connectionTransition?.phase, .awaitingResponse)
+
+                controller.simulateProtocolData(bytes.dropFirst(split))
+                XCTAssertEqual(controller.connectionTransition?.phase, .awaitingResponse, "Legacy \(legacy), split \(split)")
+                controller.completeSimulatedWrite()
+                controller.defersSimulatedWrites = false
+                acknowledgeAll(controller)
+                controller.simulateProtocolData(SonyFrameCodec.encode(type: 0x0C, sequence: 0, payload: payload))
+                XCTAssertEqual(controller.connectionTransition?.phase, .confirmed, "Legacy \(legacy), split \(split)")
+            }
+        }
+    }
+
+    @MainActor
     func testAutomaticUISimulationCancelsThenConfirmsWithoutChangingCodec() throws {
         let controller = SonyHeadphonesController(startAutomatically: false, simulatedReady: true)
         controller.setConnectionMode(.stableConnection)
@@ -2286,6 +2905,47 @@ final class SonyConnectionControllerTests: XCTestCase {
 
     #if !ACOUPLET_PUBLIC_APIS_ONLY
     @MainActor
+    func testAutomaticBLEStartupRetriesAfterTransientFailuresRespectBackoff() async throws {
+        let suite = "dev.baglayan.Acouplet.ble-startup-retry-tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true, identityDefaults: defaults)
+        defer { controller.simulateControlLoss() }
+        let identifier = UUID()
+        let device = ServiceDiscoveryDevice()
+        device.reportedName = "WF-1000XM5"
+        device.reportedAddress = "02:53:4F:4E:59:01"
+        device.classicPeer = ConnectionPeerFixture(identifier)
+        for attempt in 0..<3 {
+            controller.simulateInventoryRefresh([device], shouldOpenLink: true)
+            XCTAssertEqual(device.discoveryCallbacks.count, attempt + 1)
+            device.complete(attempt)
+            for _ in 0..<4 { await Task.yield() }
+            XCTAssertTrue(controller.usesBluetoothLE, "Startup attempt \(attempt + 1)")
+            XCTAssertFalse(controller.simulatedBLEWaitsForConnection)
+            XCTAssertEqual(device.classicOpenCount, 0)
+            if attempt < 2 {
+                controller.simulateBLEDisconnect("Transient startup failure")
+                XCTAssertFalse(controller.isReady)
+                XCTAssertEqual(controller.retrySecondsRemaining, attempt == 0 ? 2 : 4)
+                controller.simulateInventoryRefresh([device], shouldOpenLink: true)
+                XCTAssertEqual(device.discoveryCallbacks.count, attempt + 1)
+                XCTAssertFalse(controller.usesBluetoothLE)
+                controller.simulateRetryDeadlineReached()
+            }
+        }
+        controller.simulateBluetoothLEReady(identifier: identifier, name: "LE_WF-1000XM5")
+        deliver([0x01, 0, 3, 0, 0x30, 0x18, 0, 1], to: controller)
+        acknowledgeAll(controller)
+        deliver([0x07, 0, 1, 0x14, 0], to: controller)
+        acknowledgeAll(controller)
+        deliver([0x11, 0x04] + Array("00:11:22:33:44:55ABCDEF12".utf8), to: controller)
+        XCTAssertTrue(controller.isReady)
+        XCTAssertNil(controller.retrySecondsRemaining)
+        XCTAssertEqual(controller.simulatedSavedIdentity?.peripheralIdentifier, identifier)
+    }
+
+    @MainActor
     func testExplicitLEAndConnectedClassicServiceFallbackAllowIdentityBoundBootstrap() async {
         for explicit in [false, true] {
             let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
@@ -2390,6 +3050,75 @@ final class SonyConnectionControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testAutomaticBLEWaitResumesClassicControlsWhenSelectedDeviceReconnects() throws {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        let device = ServiceDiscoveryDevice()
+        device.connected = false
+        device.reportedName = "WF-1000XM5"
+        device.reportedAddress = "02:53:4F:4E:59:01"
+        device.service = ServiceDiscoveryRecord()
+        device.channel = DeferredRFCOMMChannel()
+        controller.simulateSelectedDevice(device)
+        XCTAssertTrue(controller.simulateBLEReconnectWait(automatic: true, priorBluetoothLE: true, classicConnected: false))
+        let transport = try XCTUnwrap(controller.simulatedBLETransport)
+        let ready = try XCTUnwrap(transport.onReady)
+        let disconnected = try XCTUnwrap(transport.onDisconnect)
+        for _ in 0..<3 { controller.simulateInventoryRefresh([device], shouldOpenLink: true) }
+        XCTAssertTrue(controller.simulatedBLETransport === transport)
+        XCTAssertTrue(device.openedChannels.isEmpty)
+        XCTAssertFalse(controller.isDeviceConnected)
+
+        device.connected = true
+        for _ in 0..<3 { controller.simulateInventoryRefresh([device], shouldOpenLink: true) }
+        XCTAssertNil(controller.simulatedBLETransport)
+        XCTAssertFalse(transport.isWaitingForConnection)
+        XCTAssertTrue(controller.isDeviceConnected)
+        XCTAssertFalse(controller.usesBluetoothLE)
+        XCTAssertEqual(device.openedChannels, [7])
+        XCTAssertEqual(device.classicOpenCount, 0)
+        XCTAssertEqual(controller.linkState, .opening)
+        let session = controller.simulatedControlSession
+        ready(UUID(), "LE_WF-1000XM5")
+        disconnected("Retired connection")
+        XCTAssertEqual(controller.simulatedControlSession, session)
+        XCTAssertEqual(controller.linkState, .opening)
+        XCTAssertNil(controller.simulatedPendingFrame)
+        XCTAssertNil(controller.lastErrorMessage)
+        XCTAssertEqual(device.openedChannels, [7])
+    }
+
+    @MainActor
+    func testClassicRefreshPreservesManualBLESetupGATTSetupAndConnectedFallback() throws {
+        let scenarios = [
+            (automatic: false, classicConnected: false, waiting: true),
+            (automatic: true, classicConnected: false, waiting: false),
+            (automatic: true, classicConnected: true, waiting: true),
+        ]
+        for scenario in scenarios {
+            let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+            defer { controller.simulateControlLoss() }
+            let device = ServiceDiscoveryDevice()
+            device.connected = scenario.classicConnected
+            device.reportedName = "WF-1000XM5"
+            device.reportedAddress = "02:53:4F:4E:59:01"
+            device.service = ServiceDiscoveryRecord()
+            controller.simulateSelectedDevice(device)
+            XCTAssertTrue(controller.simulateBLEReconnectWait(automatic: scenario.automatic, priorBluetoothLE: true,
+                classicConnected: scenario.classicConnected))
+            let transport = try XCTUnwrap(controller.simulatedBLETransport)
+            transport.simulateWaitingForConnection(scenario.waiting)
+            let session = controller.simulatedControlSession
+            device.connected = true
+            for _ in 0..<3 { controller.simulateInventoryRefresh([device], shouldOpenLink: true) }
+            XCTAssertTrue(controller.simulatedBLETransport === transport)
+            XCTAssertEqual(controller.simulatedControlSession, session)
+            XCTAssertTrue(controller.usesBluetoothLE)
+            XCTAssertTrue(device.openedChannels.isEmpty)
+        }
+    }
+
+    @MainActor
     func testDisablingAutomaticReconnectPreservesManualBLEAttempt() {
         for automatic in [false, true] {
             let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
@@ -2400,6 +3129,7 @@ final class SonyConnectionControllerTests: XCTestCase {
                 controller.simulateBLEReconnectWait(automatic: true, priorBluetoothLE: true, classicConnected: false)
             } else {
                 controller.connectBluetoothLE()
+                controller.simulatedPreparingBLETransport?.onPrepared?()
             }
             XCTAssertEqual(controller.linkState, .opening)
             XCTAssertTrue(controller.usesBluetoothLE)
@@ -2861,18 +3591,23 @@ final class SonyConnectionControllerTests: XCTestCase {
 private final class ServiceDiscoveryRecord: SonyServiceRecord {
     let channelID: BluetoothRFCOMMChannelID
 
-    init(channelID: BluetoothRFCOMMChannelID = 7) {
+    let status: IOReturn
+
+    init(channelID: BluetoothRFCOMMChannelID = 7, status: IOReturn = kIOReturnSuccess) {
         self.channelID = channelID
+        self.status = status
     }
 
     func getRFCOMMChannelID(_ channelID: UnsafeMutablePointer<BluetoothRFCOMMChannelID>!) -> IOReturn {
         channelID.pointee = self.channelID
-        return kIOReturnSuccess
+        return status
     }
 }
 
 private final class ServiceDiscoveryDevice: NSObject, SonyBluetoothDevice, @unchecked Sendable {
     var connected = true
+    var paired = true
+    var pairingQueries = 0
     var reportedName: String?
     var reportedAddress: String?
     @objc var classicPeer: NSObject?
@@ -2880,20 +3615,22 @@ private final class ServiceDiscoveryDevice: NSObject, SonyBluetoothDevice, @unch
     var closeCount = 0
     var closeStatus = kIOReturnSuccess
     var service: (any SonyServiceRecord)?
+    var additionalServices: [Data: any SonyServiceRecord] = [:]
+    var serviceUUID = Data([
+        0x95, 0x6C, 0x7B, 0x26, 0xD4, 0x9A, 0x4B, 0xA8,
+        0xB0, 0x3F, 0xB1, 0x7D, 0x39, 0x3C, 0xB6, 0xE2,
+    ])
     var channel: (any RFCOMMChannel)?
     var openStatus = kIOReturnSuccess
     var discoveryStartStatus = kIOReturnSuccess
     var discoveryCallbacks: [any SonyServiceDiscoveryDelegate] = []
     var openedChannels: [BluetoothRFCOMMChannelID] = []
     var serviceLookups = 0
-    var lookedUpUUIDs: [Data] = []
-    /// When set, only this service UUID resolves, to model devices that publish just one Sony service.
-    var serviceUUID: Data?
     var onOpen: (() -> Void)?
     var onDiscovery: (() -> Void)?
 
     func isClassicConnected() -> Bool { connected }
-    func isPaired() -> Bool { true }
+    func isPaired() -> Bool { pairingQueries += 1; return paired }
     var name: String! { reportedName }
     var addressString: String! { reportedAddress }
 
@@ -2910,10 +3647,7 @@ private final class ServiceDiscoveryDevice: NSObject, SonyBluetoothDevice, @unch
 
     func sonyServiceRecord(for uuid: IOBluetoothSDPUUID) -> (any SonyServiceRecord)? {
         serviceLookups += 1
-        let bytes = Data(bytes: uuid.bytes, count: Int(uuid.length))
-        lookedUpUUIDs.append(bytes)
-        if let serviceUUID, serviceUUID != bytes { return nil }
-        return service
+        return uuid as Data == serviceUUID ? service : additionalServices[uuid as Data]
     }
 
     func performSonySDPQuery(_ target: any SonyServiceDiscoveryDelegate) -> IOReturn {
@@ -2924,6 +3658,7 @@ private final class ServiceDiscoveryDevice: NSObject, SonyBluetoothDevice, @unch
 
     func openSonyRFCOMMChannel(withChannelID channelID: BluetoothRFCOMMChannelID, delegate: Any) -> (IOReturn, (any RFCOMMChannel)?) {
         openedChannels.append(channelID)
+        (channel as? DeferredRFCOMMChannel)?.delegate = delegate as? SonyHeadphonesController
         onOpen?()
         return (openStatus, channel)
     }
@@ -2946,6 +3681,7 @@ private final class DeferredRFCOMMChannel: RFCOMMChannel, @unchecked Sendable {
     private var recordedWrites: [Data] = []
     private var writeStatuses: [IOReturn] = []
     private var completedCloses = 0
+    private var nativeClosed = false
     private let writeRelease = DispatchSemaphore(value: 0)
     private let blockOnlyFirst: Bool
     var writes: [Data] { lock.withLock { recordedWrites } }
@@ -2953,12 +3689,20 @@ private final class DeferredRFCOMMChannel: RFCOMMChannel, @unchecked Sendable {
     let closeStarted = XCTestExpectation(description: "Native close started")
     let closeFinished = XCTestExpectation(description: "Native close finished")
     var closeRelease: DispatchSemaphore?
+    var deliversCloseNotification = true
+    weak var delegate: SonyHeadphonesController?
 
     init(blockOnlyFirst: Bool = false) {
         self.blockOnlyFirst = blockOnlyFirst
     }
 
-    func isOpen() -> Bool { closeCount == 0 }
+    func isOpen() -> Bool { lock.withLock { !nativeClosed } }
+
+    @MainActor
+    func deliverCloseNotification() {
+        lock.withLock { nativeClosed = true }
+        delegate?.classicChannelClosed(self)
+    }
     func getMTU() -> BluetoothRFCOMMMTU { 1024 }
     func isTransmissionPaused() -> Bool { true }
 
@@ -2992,10 +3736,11 @@ private final class DeferredRFCOMMChannel: RFCOMMChannel, @unchecked Sendable {
 
     func close() -> IOReturn {
         XCTAssertFalse(Thread.isMainThread)
-        closeStarted.fulfill()
+        if closeCount == 0 { closeStarted.fulfill() }
         if let closeRelease { XCTAssertEqual(closeRelease.wait(timeout: .now() + 5), .success) }
         lock.withLock { completedCloses += 1 }
         closeFinished.fulfill()
+        if deliversCloseNotification { DispatchQueue.main.async { self.deliverCloseNotification() } }
         return kIOReturnSuccess
     }
 }

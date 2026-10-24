@@ -42,6 +42,15 @@ that playback is untouched while the app runs, normal shutdown pauses once,
 and workers exit after handling the parent. Live music and browser playback still
 need manual confirmation with a player that supports macOS media controls.
 
+`Helpers/LDAC/LDACLogFreeConnectionCheck.py` and
+`Helpers/LDAC/LDACLogFreeTransportCheck.py` exercise callback-derived connection
+and channel ownership without Bluetooth hardware or daemon logs. Transport checks
+also cover packet integrity, full PCM rings, cancellation, scheduling stalls and
+quality recovery with an independently clocked source. The adaptive playback
+case runs for 90 seconds to observe the 30-second recovery interval. Avoid running
+these timing-sensitive checks alongside a separate Xcode build. Deterministic
+adaptive replays separately verify all quality steps at all four sample rates.
+
 ```sh
 Packaging/fetch-sparkle.sh
 python3 Packaging/check-all.py

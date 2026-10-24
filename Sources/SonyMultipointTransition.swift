@@ -28,7 +28,6 @@ struct SonyMultipointTransition: Equatable, Sendable {
     private var receivedAlertCount = 0
     private var soundQualityWarningConfirmed = false
 
-    /// The setter in the headphones' own protocol generation, fixed when the change is requested.
     let requestPayload: [UInt8]
 
     init?(enabled: Bool, model: SonySystemFeatures, session: UInt64, requestID: UUID = UUID()) {

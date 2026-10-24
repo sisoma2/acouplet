@@ -34,12 +34,14 @@ __LIFETIME__
 #include <signal.h>
 #include <string.h>
 #include <sys/event.h>
+#include <time.h>
 #include <unistd.h>
 @class ConnectionObserver;
 @interface FixtureDevice : NSObject
 @property BOOL paired, connected;
 @property BluetoothConnectionHandle connectionHandle;
 @property NSUInteger closes, opens;
+- (id)classicPeer;
 + (FixtureDevice *)deviceWithAddressString:(NSString *)address;
 - (BOOL)isPaired;
 - (BOOL)isConnected;
@@ -78,14 +80,29 @@ static BOOL ParentExited(int descriptor) { return NO; }
 static int PriorityIdle(NSString *uid) { return 1; }
 static int NativeOutputState(NSString *address) { return publishAt >= 0 && elapsed >= publishAt ? 1 : fixtureNative; }
 static BOOL FixtureConnected(FixtureDevice *device) { return device.connected; }
+@interface FixturePeer : NSObject
+- (id)sendInternalSyncMsg:(int)message args:(id)arguments;
+@end
+@implementation FixturePeer
+- (id)sendInternalSyncMsg:(int)message args:(id)arguments {
+    assert(message == 0x2f && arguments == nil);
+    return @{@"kCBMsgArgState": @{@"kCBMsgArgInternalState": @(fixtureDevice.connected ? 2 : 0)}};
+}
+@end
 #define IOBluetoothDevice FixtureDevice
 #define SonyClassicIsConnected FixtureConnected
 """
+    + source[
+        source.index("static int FreshACLState(") : source.index(
+            "static NSString *NormalizeAddress("
+        )
+    ]
     + normalize
     + observer
     + r"""
 @implementation FixtureDevice
 + (FixtureDevice *)deviceWithAddressString:(NSString *)address { return fixtureDevice; }
+- (id)classicPeer { return [FixturePeer new]; }
 - (BOOL)isPaired { return self.paired; }
 - (BOOL)isConnected { return self.connected; }
 - (IOReturn)closeConnection { self.closes++; if (closeStatus == 0 && self.closes > reconnectingCloses) self.connected = NO; return closeStatus; }
@@ -98,7 +115,7 @@ static void Complete(void) {
 }
 """
     + watch
-    + "static int Cancel(FixtureDevice *device, ConnectionObserver *observer) { BOOL cancelled = YES;\n"
+    + "static int Cancel(FixtureDevice *device, ConnectionObserver *observer) { BOOL cancelled = YES; int acquisitionFailure = 0;\n"
     + cancel
     + "\nreturn 8; }\n"
     + main
@@ -137,7 +154,7 @@ int main(int argc, const char **argv) {
         int rejected = Invoke(connect, NO, 0, 0);
         assert(rejected == 3 && fixtureDevice.opens == 1 && fixtureDevice.closes == 0);
         acquisitionStatus = kIOReturnSuccess;
-        cancelAtCheck = 2;
+        cancelAtCheck = 3;
         int after = Invoke(connect, NO, 0, 0);
         assert(after == 0 && fixtureDevice.opens == 1 && fixtureDevice.closes == 0);
         cancelAtCheck = -1;

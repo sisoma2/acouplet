@@ -68,6 +68,7 @@ struct DiagnosticsSettingsView: View {
                     Spacer()
                     Button("Copy Diagnostics") { copyDiagnostics() }
                 }
+                #if DEBUG
                 if headphones.protocolInformation?.generation != .v1 {
                     HStack {
                         Button("Connect Controls with Bluetooth LE") { headphones.connectBluetoothLE() }
@@ -80,6 +81,7 @@ struct DiagnosticsSettingsView: View {
                         }
                     }
                 }
+                #endif
                 if let error = headphones.bluetoothLEError {
                     Text(error).font(.caption).foregroundStyle(.primary)
                 }

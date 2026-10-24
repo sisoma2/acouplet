@@ -6,17 +6,15 @@ from pathlib import Path
 source_path = Path(__file__).resolve().parents[1] / "Sources/SonyBLETransport.swift"
 source = source_path.read_text()
 buffer = source[
-    source.index("struct SonyBLEWriteBuffer {") : source.index(
-        "\n@MainActor\nfinal class SonyBLETransport"
-    )
+    source.index("struct SonyBLEWriteBuffer {") : source.index("\n@MainActor")
 ]
 write_start = source.index("    @discardableResult\n    func write(")
-write = source[
-    write_start : source.index("\n    func centralManagerDidUpdateState", write_start)
-]
+write = source[write_start : source.index("\n    func handleCentralState", write_start)]
 drain_start = source.index("    private func drain() {")
-drain = source[drain_start : source.index("\n    private func fail(", drain_start)]
-fail_start = source.index("    private func fail(", drain_start)
+drain = source[
+    drain_start : source.index("\n    func centralManagerDidUpdateState", drain_start)
+]
+fail_start = source.index("    private func fail(_ message: String)", drain_start)
 fail = source[fail_start : source.rindex("\n}")]
 assert "Task.sleep(for: .seconds(5))" in drain
 fixture = (
@@ -51,7 +49,9 @@ final class TransportFixture {
     var sessionID: UUID? = UUID()
     var writeTimeout: Task<Void, Never>?
     var onDisconnect: ((String?) -> Void)?
+    var onDiagnostic: ((String) -> Void)?
     var diagnosticError: String?
+    var connectionStage = "ready"
 
     init(_ peripheral: FakePeripheral) { self.peripheral = peripheral }
 
@@ -65,6 +65,11 @@ final class TransportFixture {
     }
 
     func flush() { drain() }
+
+    private func retryVerifiedIdentity() -> Bool {
+        precondition(isReady)
+        return false
+    }
 
 WRITE
 DRAIN
@@ -126,6 +131,8 @@ struct Check {
         let blockedPeripheral = FakePeripheral()
         let blocked = TransportFixture(blockedPeripheral)
         var blockedFailures = 0
+        var blockedDiagnostics: [String] = []
+        blocked.onDiagnostic = { blockedDiagnostics.append($0) }
         blocked.onDisconnect = { message in
             precondition(message == String(localized: "Sending the headphone command timed out. Try again."))
             blockedFailures += 1
@@ -171,14 +178,12 @@ struct Check {
         print("PASS revoked unsent frame: real five-second timeout, no readiness callback, no writes, one cancellation, no disconnect")
         precondition(blockedFailures == 1 && blockedPeripheral.chunks.isEmpty && !blocked.isReady)
         precondition(blocked.diagnosticError == String(localized: "Sending the headphone command timed out. Try again."))
+        precondition(blockedDiagnostics == ["LE ready failed: \\(blocked.diagnosticError!)"])
         print("PASS valid blocked frame: real five-second timeout still disconnects exactly once")
         precondition(replacementCancelled == 1 && replacementFailures == 0 && replacement.isReady && !replacement.writes.isEmpty)
         print("PASS cancellation callback: blocked replacement survives the old timeout")
 
-        let replacementDeadline = ContinuousClock.now.advanced(by: .seconds(10))
-        while replacementFailures == 0, ContinuousClock.now < replacementDeadline {
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        try await Task.sleep(for: .milliseconds(5000))
         precondition(replacementFailures == 1 && replacementPeripheral.chunks.isEmpty && !replacement.isReady)
         print("PASS replacement frame: receives its own real five-second timeout")
         print("PASS no CoreBluetooth import, manager, service calls, or hardware access")
@@ -197,14 +202,7 @@ with tempfile.TemporaryDirectory(prefix="acouplet-sony-ble-write-") as directory
     environment["ACOUPLET_TESTING"] = "1"
     environment["CFFIXED_USER_HOME"] = str(root / "home")
     Path(environment["CFFIXED_USER_HOME"]).mkdir()
-    environment.setdefault(
-        "CLANG_MODULE_CACHE_PATH",
-        str(source_path.parents[1] / ".build/check-all/ModuleCache"),
-    )
-    if not environment.get("SDKROOT"):
-        environment["SDKROOT"] = subprocess.check_output(
-            ["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True
-        ).strip()
+    environment["CLANG_MODULE_CACHE_PATH"] = str(root / "module-cache")
     binary = root / "check"
     subprocess.run(
         [

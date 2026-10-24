@@ -6,6 +6,50 @@ final class SonyDeviceCoordinatorTests: XCTestCase {
     private let secondAddress = "02:53:4F:4E:59:02"
 
     @MainActor
+    func testTerminationDrainsEveryControllerAndBlocksNewlyDiscoveredDevices() async throws {
+        let fallback = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        let coordinator = SonyDeviceCoordinator(fallbackController: fallback) { device in
+            SonyHeadphonesController(startAutomatically: false, simulated: true, pinnedAddress: device.address)
+        }
+        let first = try device(firstAddress, name: "WF-1000XM5", model: .wfXM5)
+        let second = try device(secondAddress, name: "WH-1000XM6", model: .whXM6)
+        coordinator.reconcileConnectedDevices([first])
+        let controller = try XCTUnwrap(coordinator.controller(for: firstAddress))
+        defer {
+            fallback.simulateControlLoss()
+            coordinator.controllers.forEach { $0.simulateControlLoss() }
+        }
+        fallback.rfcommCloseCompletion.enter()
+        controller.rfcommCloseCompletion.enter()
+        var finished = false
+        let drained = expectation(description: "All controllers drained")
+        XCTAssertTrue(coordinator.drainRFCOMMForTermination {
+            finished = true
+            drained.fulfill()
+        })
+        XCTAssertTrue(coordinator.drainRFCOMMForTermination { XCTFail("An existing drain owns the completion") })
+        XCTAssertTrue(fallback.isTerminating)
+        XCTAssertTrue(controller.isTerminating)
+
+        coordinator.reconcileConnectedDevices([first, second])
+        let discovered = try XCTUnwrap(coordinator.controller(for: secondAddress))
+        XCTAssertTrue(discovered.isTerminating)
+        controller.rfcommCloseCompletion.leave()
+        let controllerDrained = expectation(description: "First controller drained")
+        controller.rfcommCloseCompletion.notify(queue: .main) { controllerDrained.fulfill() }
+        await fulfillment(of: [controllerDrained], timeout: 2)
+        XCTAssertFalse(finished)
+        fallback.rfcommCloseCompletion.leave()
+        await fulfillment(of: [drained], timeout: 2)
+        XCTAssertFalse(coordinator.drainRFCOMMForTermination { XCTFail("Nothing left to drain") })
+
+        coordinator.cancelTermination()
+        XCTAssertFalse(coordinator.isTerminating)
+        XCTAssertFalse(fallback.isTerminating)
+        XCTAssertTrue(coordinator.controllers.allSatisfy { !$0.isTerminating })
+    }
+
+    @MainActor
     func testDevicePickerLabelsDistinguishSameModelWithoutChangingRouting() throws {
         let first = try device(firstAddress, name: "WF-1000XM5", model: .wfXM5)
         let second = try device(secondAddress, name: "WF-1000XM5", model: .wfXM5)

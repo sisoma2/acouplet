@@ -333,8 +333,6 @@ final class SonyMultipointTests: XCTestCase {
         }
     }
 
-    // MDR v1 `37 01` list: [address][state][name length][name] per entry plus a trailing 01, no class bytes.
-    // Addresses and names are invented; the byte layout follows a WH-1000XM4 capture (firmware 3.0.1).
     private func legacyListPacket(_ entries: [(String, UInt8, String)]) -> [UInt8] {
         var packet: [UInt8] = [0x37, 0x01, UInt8(entries.count)]
         for (address, state, name) in entries {
@@ -367,12 +365,54 @@ final class SonyMultipointTests: XCTestCase {
         ])))
         XCTAssertFalse(multipoint.inventoryIsStale)
         XCTAssertEqual(multipoint.devices.map(\.isConnected), [true, true, false])
-        XCTAssertEqual(Set(multipoint.devices.filter(\.isConnected).map(\.connectionID)).count, 2)
+        XCTAssertEqual(multipoint.devices.map(\.connectionID), [1, 1, 0])
+        XCTAssertEqual(Set(multipoint.devices.map(\.id)).count, 3)
         XCTAssertNil(multipoint.selectedSource)
+    }
+
+    func testLegacyListNotificationsRefreshConnectionsAndMalformedNotificationsMarkTheListStale() {
+        var multipoint = SonyMultipoint(legacySupportedFunctions: [0x38])
+        XCTAssertTrue(multipoint.update(legacyListPacket([(firstAddress, 1, "Test Laptop"), (secondAddress, 0, "Test Phone")])))
+        var notification = legacyListPacket([(firstAddress, 0, "Test Laptop"), (secondAddress, 1, "Test Phone")])
+        notification[0] = 0x39
+        XCTAssertTrue(multipoint.update(notification))
+        XCTAssertEqual(multipoint.devices.map(\.isConnected), [false, true])
+        XCTAssertNil(multipoint.selectedSource)
+        XCTAssertNil(multipoint.keeping)
+        XCTAssertNil(multipoint.lastKeepingResult)
+        XCTAssertFalse(multipoint.canManageDevices)
+        XCTAssertFalse(multipoint.canControlSources)
+        let inventory = multipoint.inventory
+        XCTAssertFalse(multipoint.update(Array(notification.dropLast(2))))
+        XCTAssertTrue(multipoint.inventoryIsStale)
+        XCTAssertEqual(multipoint.inventory, inventory)
+        XCTAssertTrue(multipoint.update(notification))
+        XCTAssertFalse(multipoint.inventoryIsStale)
+    }
+
+    func testLegacyListParsesTheCapturedWH1000XM4EightRecordLayout() {
+        let records: [(String, UInt8, String)] = [
+            ("02:00:00:00:00:B1", 1, "Test Mac 01"), ("02:00:00:00:00:B2", 2, "Test Pad"),
+            ("02:00:00:00:00:B3", 0, "Test Desktop PC"), ("02:00:00:00:00:B4", 0, "Test Mac"),
+            ("02:00:00:00:00:B5", 0, "Test Workstation 005"), ("02:00:00:00:00:B6", 0, "Test Mac 02"),
+            ("02:00:00:00:00:B7", 0, "Test Pad2"), ("02:00:00:00:00:B8", 0, "Test TV1"),
+        ]
+        XCTAssertEqual(records.map { $0.2.utf8.count }, [0x0B, 0x08, 0x0F, 0x08, 0x14, 0x0B, 0x09, 0x08])
+        var multipoint = SonyMultipoint(legacySupportedFunctions: [0x38])
+        XCTAssertTrue(multipoint.update(legacyListPacket(records)))
+        XCTAssertEqual(multipoint.devices.count, 8)
+        XCTAssertEqual(multipoint.devices.map(\.isConnected), [true, true, false, false, false, false, false, false])
+        XCTAssertEqual(multipoint.devices.map(\.address), records.map { $0.0 })
+        XCTAssertEqual(multipoint.devices.map(\.name), records.map { $0.2 })
+        XCTAssertEqual(Set(multipoint.devices.map(\.id)).count, 8)
+        XCTAssertFalse(multipoint.inventoryIsStale)
     }
 
     func testLegacyListRejectsMalformedPacketsAndMarksTheListStale() {
         var multipoint = SonyMultipoint(legacySupportedFunctions: [0x38])
+        XCTAssertTrue(multipoint.update(legacyListPacket([(firstAddress, 1, "Test Laptop")])))
+        XCTAssertFalse(multipoint.update([0x37, 0x01]))
+        XCTAssertTrue(multipoint.inventoryIsStale)
         XCTAssertTrue(multipoint.update(legacyListPacket([(firstAddress, 1, "Test Laptop")])))
         var truncated = legacyListPacket([(firstAddress, 1, "Test Laptop")])
         truncated.removeLast(3)
@@ -388,6 +428,9 @@ final class SonyMultipointTests: XCTestCase {
         var without = SonyMultipoint(legacySupportedFunctions: [0x30])
         XCTAssertTrue(without.queryPayloads.isEmpty)
         XCTAssertFalse(without.update(legacyListPacket([(firstAddress, 1, "Test Laptop")])))
+        var notification = legacyListPacket([(firstAddress, 1, "Test Laptop")])
+        notification[0] = 0x39
+        XCTAssertFalse(without.update(notification))
         XCTAssertTrue(without.devices.isEmpty)
 
         var v2 = SonyMultipoint(supportedFunctions: [0x31, 0x32])
@@ -395,7 +438,11 @@ final class SonyMultipointTests: XCTestCase {
         XCTAssertEqual(v2.queryPayloads, [[0x30, 0x02], [0x32, 0x02], [0x36, 0x02], [0x36, 0x01]])
         XCTAssertTrue(v2.update([0x37, 0x01, 0]))
         XCTAssertEqual(v2.keeping, true)
+        XCTAssertTrue(v2.update([0x39, 0x01, 1, 2]))
+        XCTAssertEqual(v2.keeping, false)
+        XCTAssertEqual(v2.lastKeepingResult, .callInProgress)
         XCTAssertFalse(v2.update(legacyListPacket([(firstAddress, 1, "Test Laptop")])))
+        XCTAssertFalse(v2.update(notification))
         XCTAssertTrue(v2.devices.isEmpty)
     }
 

@@ -14,11 +14,7 @@ types = native[
     native.index("struct LDACFormat:") : native.index("final class LDACNativeSession:")
 ]
 child = native[native.index("final class LDACNativeChild {") : native.rindex("#endif")]
-events = native[
-    native.index("    enum Event:") : native.index(
-        "    private static let daemonEventExpression"
-    )
-]
+events = native[native.index("    enum Event:") : native.index("    let id: UUID")]
 volume = output[
     output.index("struct LDACNativeVolume:") : output.index(
         "@MainActor\nfinal class LDACNativeOutput"
@@ -80,6 +76,8 @@ final class LDACNativeOutput {
     var restoringOwner = false
     static var muteWrites: [UInt32] = []
     static var missing = false
+    let id: UUID
+    static func diagnosticDescription(_ error: Error) -> String { error.localizedDescription }
     var device: AudioObjectID = 5
     let address: String
     var model = ""
@@ -95,7 +93,7 @@ final class LDACNativeOutput {
     var renewTask: Task<Void, Never>?
     var leaseActivity: NSObjectProtocol?
     __SELECTORS__
-    init(id: UUID, address: String, changed: @escaping (Result<LDACNativeVolume, Error>) -> Void) { self.address = address }
+    init(id: UUID, address: String, changed: @escaping (Result<LDACNativeVolume, Error>) -> Void) { self.id = id; self.address = address }
     func claim(model: String, targetAddress: String, sampleRate: LDACSampleRate, recovering: LDACRouteRecovery? = nil) async throws {
         self.model = model
         restoringOwner = recovering != nil

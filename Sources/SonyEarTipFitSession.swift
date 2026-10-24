@@ -62,14 +62,14 @@ final class SonyEarTipFitSession: ObservableObject {
         }
     }
 
-    func transmitted(_ payload: [UInt8], session: UInt64) {
-        transition?.transmitted(payload, session: session)
+    func transmitted(_ payload: [UInt8], session: UInt64, transmissionOrdinal: UInt64 = 0) {
+        transition?.transmitted(payload, session: session, transmissionOrdinal: transmissionOrdinal)
     }
 
-    func receive(_ payload: [UInt8], session: UInt64) -> Reception? {
+    func receive(_ payload: [UInt8], session: UInt64, transmissionOrdinal: UInt64 = .max) -> Reception? {
         guard payload.count >= 2, payload[1] == 0x06 || payload[1] == 0x07,
               [0xF1, 0xF3, 0xF5, 0xF7, 0xF9, 0xFB, 0xFD].contains(payload[0]) else { return nil }
-        let owned = transition?.accepts(payload, session: session) == true
+        let owned = transition?.accepts(payload, session: session, transmissionOrdinal: transmissionOrdinal) == true
         let parsed = owned && model.update(payload)
         if parsed { transition?.receive(payload, model: model) }
         return Reception(owned: owned, parsed: parsed)

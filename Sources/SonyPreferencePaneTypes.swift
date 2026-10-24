@@ -172,27 +172,19 @@ enum SonyPreferencePaneWire {
     static let maximumFrameSize = 65_536
     static let socketName = "sony-pane.sock"
     static let hostRequirement = "anchor apple and (identifier \"com.apple.systempreferences.legacyLoader.arm64\" or identifier \"com.apple.systempreferences.legacyLoader.x86_64\")"
-    static let defaultAppTeam = "5743Y47SC7"
-    /// Info.plist key where the pane builder records the team that signed the app and the pane.
-    static let appTeamInfoKey = "AcoupletAppTeam"
-
-    /// Requirement the app must meet before a pane talks to it. A missing or malformed team keeps the original team.
-    static func appRequirement(team: String?) -> String {
-        let team = team.flatMap { $0.range(of: "\\A[A-Z0-9]{10}\\z", options: .regularExpression) == nil ? nil : $0 } ?? defaultAppTeam
+    static func appRequirement(team: String?) throws -> String {
+        guard let team, team.range(of: "\\A[A-Z0-9]{10}\\z", options: .regularExpression) != nil else {
+            throw failure("The preference pane’s signing team is missing or invalid.")
+        }
         return "anchor apple generic and identifier \"dev.baglayan.Acouplet\" and certificate leaf[subject.OU] = \"\(team)\""
     }
 
-    /// Where the app listens for the device panes (G11). The sandboxed App Store build keeps the socket in its
-    /// container's `tmp`; the direct build has no container and uses `~/Library/Application Support/Acouplet`,
-    /// so nothing is created in the home folder. The panes try both, container first, so one pane works with
-    /// either distribution. `home` is the user's real home folder, not the container's.
     static func socketPath(sandboxed: Bool, home: String = userHome) -> String {
         sandboxed
             ? home + "/Library/Containers/dev.baglayan.Acouplet/Data/tmp/" + socketName
             : home + "/Library/Application Support/Acouplet/" + socketName
     }
 
-    /// The user's home folder from the user database, which stays the real one inside a sandbox.
     static var userHome: String {
         getpwuid(getuid()).map { String(cString: $0.pointee.pw_dir) } ?? NSHomeDirectory()
     }
