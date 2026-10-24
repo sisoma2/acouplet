@@ -1,10 +1,9 @@
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
-
+from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
 source = (root / "Sources/LDACController.swift").read_text()
@@ -12,13 +11,28 @@ output_source = (root / "Sources/LDACNativeOutput.swift").read_text()
 
 
 def member(name):
-    match = re.search(r"^    (?:private )?(?:func|var) " + name + r"\b", source, re.MULTILINE)
-    end = re.search(r"^    (?:(?:private )?(?:func|var|struct) |#(?:if|endif)\b)", source[match.end():], re.MULTILINE)
-    return re.sub(r"^    private ", "    ", source[match.start():match.end() + end.start()], flags=re.MULTILINE)
+    match = re.search(
+        r"^    (?:private )?(?:func|var) " + name + r"\b", source, re.MULTILINE
+    )
+    end = re.search(
+        r"^    (?:(?:private )?(?:func|var|struct) |#(?:if|endif)\b)",
+        source[match.end() :],
+        re.MULTILINE,
+    )
+    return re.sub(
+        r"^    private ",
+        "    ",
+        source[match.start() : match.end() + end.start()],
+        flags=re.MULTILINE,
+    )
 
 
-volume = output_source[output_source.index("struct LDACNativeVolume:"):output_source.index("\nstruct LDACRouteRecovery")]
-fixture = r'''
+volume = output_source[
+    output_source.index("struct LDACNativeVolume:") : output_source.index(
+        "\nstruct LDACRouteRecovery"
+    )
+]
+fixture = r"""
 import Foundation
 import Combine
 
@@ -223,6 +237,7 @@ final class LDACNativeSession {
     struct Completion { var message: String?; var canRetry = false; var requiresAttention = false; var targetDisconnected = false; var waitForReconnect = false }
     enum Event {
         case diagnostic(Diagnostic)
+        case ldacEndpoint(Bool), capabilities(UInt8, UInt8)
         case handoffReady, connecting, active(LDACFormat), formatChanged(LDACFormat), gainApplied(Double)
         case audioCaptureAccess(LDACAudioCaptureAccess), failed(String), connectionLost(String), finished(Completion)
     }
@@ -317,6 +332,10 @@ final class Controller: ObservableObject {
     var devices: SonyDeviceCoordinator? = SonyDeviceCoordinator()
     func observeControls(_ headphones: SonyHeadphonesController, devices: SonyDeviceCoordinator) {}
     func recordOutputFailure(_ error: Error) {}
+    var defaults: UserDefaults?
+    var discoveredSupport: [String: LDACCapabilityRecord] = [:]
+    func recordDiscoveredSupport(_ supported: Bool, address: String) {}
+    func capabilityContext(forAddress address: String) -> LDACCapabilityContext { .init() }
     func recordNativeDiagnostic(_ diagnostic: LDACNativeSession.Diagnostic) {}
     func record(_ event: String, reason: String) {}
     __METHODS__
@@ -695,16 +714,51 @@ enum Check {
         print("PASS scope: production controller methods and volume mapping; fake transport, confirmations, observations and native output; no hardware or installation")
     }
 }
-'''
-names = ["needsStopBeforeTermination", "nextRecoveryDelay", "canResumeRecovery", "deviceUnavailableReason", "refreshDriverState", "start", "launch", "hasMusicVolumeForHandoff", "hasOwnedMusicContext",
-         "hasOtherMusicSource", "bindingIsCurrent", "musicControlStatus", "waitForControls", "controlsChanged",
-         "sendPendingVolume", "setOutputGain", "fail", "beginRecovery", "scheduleRecovery", "cancelMultipointRequest", "stop", "stopSession",
-         "suspend", "resumeIfReady", "reconcileConnectionPreferences", "forgetConnectionPreference", "scheduleConnectionPreferenceRestoration", "prepareConnectionMode", "waitForConnectionChange", "restoreConnectionMode",
-         "restoreConnectionPreference", "finish", "completeStop"]
+"""
+names = [
+    "needsStopBeforeTermination",
+    "nextRecoveryDelay",
+    "canResumeRecovery",
+    "deviceUnavailableReason",
+    "refreshDriverState",
+    "start",
+    "launch",
+    "hasMusicVolumeForHandoff",
+    "hasOwnedMusicContext",
+    "hasOtherMusicSource",
+    "bindingIsCurrent",
+    "musicControlStatus",
+    "waitForControls",
+    "controlsChanged",
+    "sendPendingVolume",
+    "setOutputGain",
+    "fail",
+    "beginRecovery",
+    "scheduleRecovery",
+    "cancelMultipointRequest",
+    "stop",
+    "stopSession",
+    "suspend",
+    "resumeIfReady",
+    "reconcileConnectionPreferences",
+    "forgetConnectionPreference",
+    "scheduleConnectionPreferenceRestoration",
+    "prepareConnectionMode",
+    "waitForConnectionChange",
+    "restoreConnectionMode",
+    "restoreConnectionPreference",
+    "finish",
+    "completeStop",
+]
+fixture = (root / "Sources/LDACSupport.swift").read_text() + fixture
 fixture = fixture.replace("precondition(", "check(")
-fixture = fixture.replace("__VOLUME__", volume).replace("__METHODS__", "\n".join(member(name) for name in names))
+fixture = fixture.replace("__VOLUME__", volume).replace(
+    "__METHODS__", "\n".join(member(name) for name in names)
+)
 
-with tempfile.TemporaryDirectory(prefix="acouplet-ldac-controller-volume-") as directory:
+with tempfile.TemporaryDirectory(
+    prefix="acouplet-ldac-controller-volume-"
+) as directory:
     directory = Path(directory)
     swift = directory / "Check.swift"
     binary = directory / "check"
@@ -714,26 +768,76 @@ with tempfile.TemporaryDirectory(prefix="acouplet-ldac-controller-volume-") as d
     environment["CFFIXED_USER_HOME"] = str(directory / "home")
     Path(environment["CFFIXED_USER_HOME"]).mkdir()
     environment["CLANG_MODULE_CACHE_PATH"] = str(directory / "module-cache")
-    subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), "-o", str(binary)],
-                   env=environment, check=True)
+    subprocess.run(
+        [
+            "xcrun",
+            "swiftc",
+            "-swift-version",
+            "6",
+            "-parse-as-library",
+            str(swift),
+            "-o",
+            str(binary),
+        ],
+        env=environment,
+        check=True,
+    )
     subprocess.run([str(binary)], env=environment, check=True)
     if "--check-mutations" in sys.argv:
         mutations = [
-            ("modern settings refresh", "headphones?.requestCurrentSettings()", "headphones?.refresh()",
-             "Ready modern controls used destructive full refresh"),
-            ("targeted startup refresh", "if IOBluetoothDevice(addressString: address)?.isClassicConnected() == true { headphones.refreshMusicVolume() }",
-             "if IOBluetoothDevice(addressString: address)?.isClassicConnected() == true { headphones.refresh() }",
-             "LDAC startup refreshed unrelated settings or admitted stale volume"),
-            ("raw", "hasMusicVolumeForHandoff && (headphones?.playback.generation != .v1 || transportFormat != nil)",
-             "hasMusicVolumeForHandoff", "Legacy raw ownership admitted before active"),
-            ("status", "&& headphones.musicStatusReadbackID != nil && headphones.musicStatusReadbackID != initialStatusReadbackID",
-             "", "Volume without post-admission status admitted legacy LDAC"),
+            (
+                "modern settings refresh",
+                "headphones?.requestCurrentSettings()",
+                "headphones?.refresh()",
+                "Ready modern controls used destructive full refresh",
+            ),
+            (
+                "targeted startup refresh",
+                "if IOBluetoothDevice(addressString: address)?.isClassicConnected() == true { headphones.refreshMusicVolume() }",
+                "if IOBluetoothDevice(addressString: address)?.isClassicConnected() == true { headphones.refresh() }",
+                "LDAC startup refreshed unrelated settings or admitted stale volume",
+            ),
+            (
+                "raw",
+                "hasMusicVolumeForHandoff && (headphones?.playback.generation != .v1 || transportFormat != nil)",
+                "hasMusicVolumeForHandoff",
+                "Legacy raw ownership admitted before active",
+            ),
+            (
+                "status",
+                "&& headphones.musicStatusReadbackID != nil && headphones.musicStatusReadbackID != initialStatusReadbackID",
+                "",
+                "Volume without post-admission status admitted legacy LDAC",
+            ),
         ]
         for name, before, after, failure in mutations:
             assert fixture.count(before) == 1
             swift.write_text(fixture.replace(before, after))
-            subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", str(swift), "-o", str(binary)],
-                           env=environment, check=True)
-            result = subprocess.run([str(binary)], env=environment, capture_output=True, text=True)
-            assert result.returncode == 1 and failure in result.stderr, (name, result.returncode, result.stdout, result.stderr)
+            subprocess.run(
+                [
+                    "xcrun",
+                    "swiftc",
+                    "-swift-version",
+                    "6",
+                    "-parse-as-library",
+                    str(swift),
+                    "-o",
+                    str(binary),
+                ],
+                env=environment,
+                check=True,
+            )
+            result = subprocess.run(
+                [str(binary)],
+                check=False,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 1 and failure in result.stderr, (
+                name,
+                result.returncode,
+                result.stdout,
+                result.stderr,
+            )
             print(f"PASS mutation rejected: missing {name} admission witness")

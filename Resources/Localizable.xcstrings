@@ -1,6 +1,40 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Check LDAC support again": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check LDAC support again"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LDAC desteğini yeniden denetle"
+          }
+        }
+      }
+    },
+    "The headphones did not advertise stereo LDAC at this sample rate.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The headphones did not advertise stereo LDAC at this sample rate."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kulaklıklar bu örnekleme hızında stereo LDAC desteği duyurmadı."
+          }
+        }
+      }
+    },
     "Last reported": {
       "extractionState": "manual",
       "localizations": {

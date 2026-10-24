@@ -180,6 +180,7 @@ struct SettingsView: View {
                     Picker("Sample Rate", selection: $settings.ldacConfiguration.sampleRate) {
                         ForEach(LDACSampleRate.allCases, id: \.self) { rate in
                             Text(rate.displayName).tag(rate)
+                                .disabled(ldac.sampleRateUnavailableReason(rate, forAddress: headphones.address) != nil)
                         }
                     }
                     .disabled(ldac.isSessionRunning || ldac.state == .waitingForDevice)
@@ -193,6 +194,11 @@ struct SettingsView: View {
                     .disabled(ldac.isSessionRunning || ldac.state == .waitingForDevice)
                     .accessibilityIdentifier("ldac.quality")
                     if !ldac.isSessionRunning { LDACDriverGuidance() }
+                    Button("Check LDAC support again") {
+                        ldac.checkSupportAgain(forAddress: headphones.address, configuration: settings.ldacConfiguration)
+                    }
+                    .disabled(ldac.isSessionRunning || ldac.state == .waitingForDevice)
+                    .accessibilityIdentifier("ldac.checkSupportAgain")
                 }
                 if settings.experimentalLDACEnabled, ldac.targetAddress == headphones.address,
                    ldac.audioCaptureAccess == .permissionRequired {

@@ -129,6 +129,8 @@ final class LDACNativeSession: @unchecked Sendable {
         case connecting
         case diagnostic(Diagnostic)
         case handoffReady
+        case capabilities(UInt8, UInt8)
+        case ldacEndpoint(Bool)
         case active(LDACFormat)
         case formatChanged(LDACFormat)
         case gainApplied(Double)
@@ -166,6 +168,7 @@ final class LDACNativeSession: @unchecked Sendable {
     private let priority: LDACPriorityControl?
     private let receive: @MainActor @Sendable (Event) -> Void
     private let lock = NSLock()
+    private var sawLDACEndpoint = false
     private var requestedStop = false
     private var recoveryRequested = false
     private var recoveryReason: String?
@@ -557,6 +560,12 @@ final class LDACNativeSession: @unchecked Sendable {
             if line == "RESTORE_CONNECTED native=1 connected=1" ||
                 line == "RESTORE_PRESERVED native=1 connected=1" { nativeAudioRestored = true }
         } else if source == "probe" {
+            if let values = LDACChannelGate.captures("^LDAC SEID=[0-9]+ rates=([0-9a-f]{2}) modes=([0-9a-f]{2}) supportsStereo=[01]$", line),
+               let rates = UInt8(values[0], radix: 16), let modes = UInt8(values[1], radix: 16) {
+                if !sawLDACEndpoint { emit(.ldacEndpoint(true)) }
+                sawLDACEndpoint = true
+                emit(.capabilities(rates, modes))
+            }
             if line == "STOP_COMPLETE protocolCleanup=1", lock.withLock({ requestedStop }) {
                 signalingStopConfirmed = true
             }
@@ -570,6 +579,7 @@ final class LDACNativeSession: @unchecked Sendable {
                 try launch("disconnect", executable: helpers.connection, arguments: ["--address", address, "--disconnect"])
                 deadline = DispatchTime.now() + 45
             } else if line == "LDAC_UNAVAILABLE rate=\(configuration.sampleRate.rawValue) channels=2" && !shouldStop {
+                if !sawLDACEndpoint { emit(.ldacEndpoint(false)) }
                 failForUser(String(localized: "The headphones did not offer a compatible LDAC stream. Check their audio settings, then retry."))
             } else if line == "PREPARE_MEDIA" && !shouldStop {
                 diagnose("peer requested media preparation", stage: "media")

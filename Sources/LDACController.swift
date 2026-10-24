@@ -17,6 +17,7 @@ final class LDACController: ObservableObject {
             }
         }
     }
+    @Published private(set) var discoveredSupport: [String: LDACCapabilityRecord]
     @Published private(set) var targetAddress: String?
     @Published private(set) var isSessionRunning = false
     @Published private(set) var isRecovering = false
@@ -94,6 +95,7 @@ final class LDACController: ObservableObject {
          isClassicConnected: @escaping (String) -> Bool = { IOBluetoothDevice(addressString: $0)?.isClassicConnected() == true }) {
         self.bundle = bundle
         self.defaults = defaults
+        discoveredSupport = LDACSupportStore(defaults: defaults).all
         self.inspectDriver = inspectDriver
         self.isClassicConnected = isClassicConnected
         driverState = inspectDriver(bundle)
@@ -226,14 +228,61 @@ final class LDACController: ObservableObject {
         return nil
     }
 
+    func support(forAddress address: String) -> LDACSupport {
+        LDACSupport.decide(modelImpliesLDAC: devices?.controller(for: address)?.deviceModel.offersLDACOnlyWithoutMultipoint == true,
+                           discovered: SonyBLEIdentity.normalizedAddress(address).flatMap { discoveredSupport[$0]?.observation(in: capabilityContext(forAddress: address)) })
+    }
+
+    private func capabilityContext(forAddress address: String) -> LDACCapabilityContext {
+        let headphones = devices?.controller(for: address)
+        let mode = headphones?.connectionMode
+        return LDACCapabilityContext(firmware: headphones?.firmwareVersion,
+            connectionMode: mode.map { String(describing: $0) }, multipoint: headphones?.systemFeatures.multipoint?.enabled,
+            endpointMayBeHidden: mode == .stableConnection || mode == .lowLatency || headphones?.ldacRequiresMultipointOff == true)
+    }
+
+    func advertisedSampleRates(forAddress address: String) -> Set<Int> {
+        guard let record = discoveredSupport[address], record.observation(in: capabilityContext(forAddress: address)) == true else { return [] }
+        return Set(LDACSampleRate.allCases.filter { record.supports(sampleRate: $0.rawValue) == true }.map(\.rawValue))
+    }
+
+    func sampleRateUnavailableReason(_ rate: LDACSampleRate, forAddress address: String) -> String? {
+        guard let record = discoveredSupport[address], record.observation(in: capabilityContext(forAddress: address)) == true,
+              record.supports(sampleRate: rate.rawValue) == false else { return nil }
+        return String(localized: "The headphones did not advertise stereo LDAC at this sample rate.")
+    }
+
+    func checkSupportAgain(forAddress address: String, configuration: LDACConfiguration) {
+        guard let address = SonyBLEIdentity.normalizedAddress(address), !isSessionRunning,
+              requestedAddress == nil, deviceUnavailableReason(forAddress: address) == nil else { return }
+        let store = LDACSupportStore(defaults: defaults)
+        store.clear(forAddress: address)
+        discoveredSupport.removeValue(forKey: address)
+        setEnabled(true, forAddress: address, configuration: configuration)
+    }
+
+    private func recordDiscoveredSupport(_ supported: Bool, address: String) {
+        let store = LDACSupportStore(defaults: defaults)
+        let context = capabilityContext(forAddress: address)
+        let now = Date()
+        store.record(supported, forAddress: address, context: context, now: now)
+        discoveredSupport[address] = LDACCapabilityRecord(supported: supported, observedAt: now, context: context)
+        record("ldac-support", reason: supported ? "endpoint listed" : "no endpoint listed")
+        if !supported, support(forAddress: address) == .unsupported, requestedAddress == address {
+            requestedAddress = nil
+        }
+    }
+
     func canEnable(forAddress address: String) -> Bool {
-        deviceUnavailableReason(forAddress: address) == nil && helpers.isAvailable && !isSessionRunning
+        support(forAddress: address) != .unsupported && deviceUnavailableReason(forAddress: address) == nil && helpers.isAvailable && !isSessionRunning
             && preferenceRestoreTasks[address] == nil
     }
 
     func setEnabled(_ enabled: Bool, forAddress address: String, configuration: LDACConfiguration? = nil) {
         guard let address = SonyBLEIdentity.normalizedAddress(address) else { return }
         if enabled {
+            guard support(forAddress: address) != .unsupported else { return }
+            if let configuration, sampleRateUnavailableReason(configuration.sampleRate, forAddress: address) != nil { return }
             guard requestedAddress != address || (recoveryPaused && !isSessionRunning) else { return }
             guard multipointShutdownAddress != address else { return }
             guard preferenceRestoreTasks[address] == nil else { return }
@@ -734,6 +783,12 @@ final class LDACController: ObservableObject {
                                        recoveryAttempt: isRecovering, restoringOnly: restoringOnly) { [weak self] event in
             guard let self, self.session?.id == identifier else { return }
             switch event {
+            case let .ldacEndpoint(supported):
+                self.recordDiscoveredSupport(supported, address: address)
+            case let .capabilities(rates, channels):
+                let store = LDACSupportStore(defaults: self.defaults)
+                store.recordCapabilities(rates: rates, channels: channels, forAddress: address, context: self.capabilityContext(forAddress: address))
+                self.discoveredSupport[address] = store.all[address]
             case let .diagnostic(diagnostic):
                 self.recordNativeDiagnostic(diagnostic)
             case .handoffReady:
