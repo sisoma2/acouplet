@@ -2,6 +2,56 @@
 
 # Validation history
 
+## Independent upstream drafts and signed integration update
+
+On 2026-10-25, the independent delivery scopes were extracted into nine draft
+PRs, [#11 through #19](UpstreamPRs.md#independent-deliveries), each with one commit
+based on upstream `0033a4b`. GUI isolation and fixture performance are separate
+contributions. The isolated branches retain upstream's driver revision 9;
+integration validation continues to preserve the installed revision 8 driver.
+
+The media-exit contribution passed all eight process scenarios. Its full unit
+run reported 1,267 passes and nine failing cases on macOS 26.7.1 (25G241). All nine
+test identifiers and failure messages reproduced on unchanged upstream: four
+App Intents crashes and five preference-pane cases requiring macOS 27. These are
+baseline failures, not passing results or regressions attributed to the PR.
+
+Focused isolated-branch XCTest runs passed 166 connection/coordinator/power-off
+tests, 32 noise-control tests, 145 equalizer/protocol tests and 28 capability/LDAC
+tests. The new paired-selection regression and all three new noise regressions
+failed against unchanged upstream production code and passed with their fixes.
+Capture recovery and startup fixtures passed; disabling recovery failed the
+production streaming-loop check. Owner lifecycle and volume fixtures passed,
+including four existing volume mutation checks.
+
+Adaptive policy and encoder replays passed at all four sample rates. The pacing
+fixture rejected its timed-run-loop negative control. Native signaling/media
+checks passed without a competing Xcode build. The 90-second independent source
+scenario sent 9,585 packets, recovered bitrate after congestion, skipped zero PCM
+frames and retained exact PCM accounting. This extraction keeps upstream's
+serialized sender; the encoded queue, buffer presets and packet tracing remain
+separate work. Live sustained playback and reconnect qualification remain open.
+
+Two GUI smoke tests passed in a disposable clone of the prepared macOS VM. The
+clone was removed and its base retained. Offline VM/runner fixtures and the actual
+host rejection guard passed. Cache, worker and runner fixtures passed, as did LDAC
+build fixtures checking fresh signing and version metadata on a repeated build.
+A real standalone helper check passed twice, reusing its compiler output on the
+second run while executing the binary again. The complete GUI gallery was not
+rerun. Evidence is saved locally under `.build/follow-up-prs/`.
+
+Signed integration Release build **216** (version 0.32.0, source revision
+`c9a111a`) was installed with the local installer and launched from
+`/Applications/Acouplet.app`. Strict signature verification confirmed the existing
+private certificate. The installed executable, transport, connection and battery
+helpers matched the Release products. Only the installed main app and its expected
+media watcher were running, with no Debug copy. The driver binary was unchanged
+and reported `current`; no driver installation or Core Audio restart occurred.
+The temporary signing keychain was removed and the original search list restored.
+The installed app remains the combined integration build. Isolated upstream
+branches were built and tested separately. Audible playback qualification remains
+open for this update.
+
 ## Upstream integration and first feature PR
 
 On 2026-10-24–25, `integration/upstream-sync` reconciled the fork with original

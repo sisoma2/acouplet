@@ -59,6 +59,30 @@ Independent fixes can proceed while another PR is reviewed.
 | F16 | `perf/isolated-test-runners`: isolate GUI checks and improve fixture execution | Independent; split as below |
 | F17 | `build/release-packaging`: deliver packaging and release improvements | F13–F14 for installer changes; F16 for CI |
 
+### Independent deliveries
+
+The independent scopes have been extracted into separate branches from upstream
+`0033a4b`. F16 is split into GUI isolation and fixture execution. Each delivery is
+a draft, with hardware and broader qualification limits recorded in its PR body.
+
+| Scope | Draft PR | Isolated validation |
+| --- | --- | --- |
+| F01: pause media on exit | [#11](https://github.com/baglayan/acouplet/pull/11) | Eight exit scenarios; 1,267 unit passes. The nine failing cases match unchanged upstream exactly on macOS 26.7.1. |
+| F02: silent capture recovery | [#12](https://github.com/baglayan/acouplet/pull/12) | Recovery and startup fixtures, helper syntax check, and a negative control that fails when restart is disabled. |
+| F04: paired connect/disconnect | [#13](https://github.com/baglayan/acouplet/pull/13) | 166 selected unit tests pass. LDAC disconnect coordination remains separate. |
+| F05: noise confirmation | [#14](https://github.com/baglayan/acouplet/pull/14) | 32 selected unit tests pass. Existing upstream recovery is retained; audible feedback is separate. |
+| F06: equalizer user slots | [#15](https://github.com/baglayan/acouplet/pull/15) | 145 selected unit tests pass. |
+| F07: capability observations | [#18](https://github.com/baglayan/acouplet/pull/18) | 28 selected unit tests, owner lifecycle and volume fixtures pass, including four mutation checks. |
+| F12: adaptive quality and pacing | [#19](https://github.com/baglayan/acouplet/pull/19) | Policy/rate replays, pacing negative control and native transport checks pass. The 90-second source test recovers bitrate with zero skipped PCM frames and exact accounting. Live playback remains a qualification gate. |
+| F16: GUI isolation | [#16](https://github.com/baglayan/acouplet/pull/16) | Two GUI smoke tests pass in a disposable VM; offline lifecycle and runner checks pass; the host guard rejects automation. |
+| F16: fixture execution and caching | [#17](https://github.com/baglayan/acouplet/pull/17) | Worker/cache/runner and LDAC build fixtures pass; a real helper check passes twice while reusing only its compiler output. |
+
+The GUI contribution uses a dedicated `Packaging/check-ui.py` entry point so it
+does not depend on replacing the ordinary test runner. The performance contribution
+retains upstream driver revision 9. F12 keeps upstream's serialized sender and
+contributes adaptive recovery and monotonic pacing; the fork's encoded queue,
+buffer presets and packet tracing remain separate work.
+
 ### First wave: small fixes and headphone controls
 
 **F01 — Pause media when Acouplet exits.** Start with `ae2abd6`, adapting the
@@ -285,7 +309,8 @@ or validation claims as upstream project policy.
    dependency links, isolated-branch test results and remaining hardware limits.
    Keep only a small review queue instead of opening the entire roadmap at once.
 
-Start by extracting **F01 and F02**. While those are reviewed, prepare **F03**
-against PR #10's eventual merged baseline, then **F04–F06**. Reassess the LDAC
-wave after these smaller contributions land. This document plans follow-ups;
-only PR #10 is currently open, and no other PRs have been created by this plan.
+Review **F01 and F02** first, followed by the headphone-control fixes. Prepare
+**F03** against PR #10's eventual merged baseline. Refresh each remaining delivery
+after its prerequisites land, reconciling shared documentation and project-file
+changes as needed. Keep the driver and automatic-default decisions separate from
+these independent drafts.
