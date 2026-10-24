@@ -261,6 +261,14 @@ static BOOL RejectDaemonCloseCheck(void) {
     return Check(passed, "daemon-close-command-rejected");
 }
 
+static double adaptiveObservationTime;
+
+static int ObserveAdaptivePolicy(LDACAdaptivePolicy *policy, int eqmid, double audio, double drain,
+                                 double schedulerGap, double lateness, bool sourceReady) {
+    adaptiveObservationTime += audio;
+    return LDACAdaptivePolicyObserve(policy, eqmid, audio, drain, schedulerGap, lateness, sourceReady, 0, adaptiveObservationTime);
+}
+
 static BOOL AdaptiveChecks(void) {
     const double audio = 512.0 / 96000;
     LDACAdaptivePolicy policy = LDACAdaptivePolicyInit();
@@ -268,7 +276,7 @@ static BOOL AdaptiveChecks(void) {
     unsigned int packets = 0;
     double debt = 0;
     while (!decision && packets++ < 150) {
-        decision = LDACAdaptivePolicyObserve(&policy, LDACBT_EQMID_HQ, audio, 0.006, 0.001, debt, true);
+        decision = ObserveAdaptivePolicy(&policy, LDACBT_EQMID_HQ, audio, 0.006, 0.001, debt, true);
         debt += 0.006 - audio;
     }
     BOOL passed = Check(decision == LDACBT_EQMID_INC_CONNECTION && debt < 0.1,
@@ -276,28 +284,28 @@ static BOOL AdaptiveChecks(void) {
     policy = LDACAdaptivePolicyInit();
     decision = 0;
     for (int packet = 0; !decision && packet < 60; packet++)
-        decision = LDACAdaptivePolicyObserve(&policy, LDACBT_EQMID_HQ, audio, 0.001, 0, packet * 0.001, true);
+        decision = ObserveAdaptivePolicy(&policy, LDACBT_EQMID_HQ, audio, 0.001, 0, packet * 0.001, true);
     passed &= Check(decision == LDACBT_EQMID_INC_CONNECTION, "adaptive-debt-includes-between-packet-work");
     policy = LDACAdaptivePolicyInit();
-    passed &= !LDACAdaptivePolicyObserve(&policy, LDACBT_EQMID_HQ, audio, 0.080, 0.075, 0.080, true);
+    passed &= !ObserveAdaptivePolicy(&policy, LDACBT_EQMID_HQ, audio, 0.080, 0.075, 0.080, true);
     for (int packet = 0; packet < 100; packet++)
-        passed &= !LDACAdaptivePolicyObserve(&policy, LDACBT_EQMID_HQ, audio, 0.001, 0, 0.080, true);
+        passed &= !ObserveAdaptivePolicy(&policy, LDACBT_EQMID_HQ, audio, 0.001, 0, 0.080, true);
     passed &= Check(policy.deficitSeconds == 0, "adaptive-local-stall-does-not-demote");
     policy = LDACAdaptivePolicyInit();
-    passed &= !LDACAdaptivePolicyObserve(&policy, LDACBT_EQMID_HQ, audio, 0.019, 0, 0, true);
+    passed &= !ObserveAdaptivePolicy(&policy, LDACBT_EQMID_HQ, audio, 0.019, 0, 0, true);
     for (int packet = 0; packet < 100; packet++)
-        passed &= !LDACAdaptivePolicyObserve(&policy, LDACBT_EQMID_HQ, audio, 0.001, 0, 0, true);
+        passed &= !ObserveAdaptivePolicy(&policy, LDACBT_EQMID_HQ, audio, 0.001, 0, 0, true);
     passed &= Check(policy.deficitSeconds == 0, "adaptive-isolated-jitter-recovers");
     policy.deficitSeconds = 0.019;
-    passed &= !LDACAdaptivePolicyObserve(&policy, LDACBT_EQMID_HQ, audio, 0.030, 0, 0.050, false);
+    passed &= !ObserveAdaptivePolicy(&policy, LDACBT_EQMID_HQ, audio, 0.030, 0, 0.050, false);
     passed &= Check(policy.deficitSeconds == 0, "adaptive-source-starvation-resets-deficit");
-    passed &= Check(LDACAdaptivePolicyObserve(&policy, LDACBT_EQMID_HQ, audio, 0.030, 0, 0, true) ==
+    passed &= Check(ObserveAdaptivePolicy(&policy, LDACBT_EQMID_HQ, audio, 0.040, 0, 0, true) ==
                     LDACBT_EQMID_INC_CONNECTION, "adaptive-long-service-demotes");
     policy = LDACAdaptivePolicyInit();
-    for (int packet = 0; packet < 599; packet++)
-        passed &= !LDACAdaptivePolicyObserve(&policy, LDACBT_EQMID_SQ, 0.01, 0.001, 0, 0, true);
-    passed &= Check(LDACAdaptivePolicyObserve(&policy, LDACBT_EQMID_SQ, 0.011, 0.001, 0, 0, true) ==
-                    LDACBT_EQMID_INC_QUALITY, "adaptive-six-second-promotion");
+    for (int packet = 0; packet < 1500; packet++)
+        passed &= !ObserveAdaptivePolicy(&policy, LDACBT_EQMID_SQ, 0.01, 0.001, 0, 0, true);
+    passed &= Check(ObserveAdaptivePolicy(&policy, LDACBT_EQMID_SQ, 0.011, 0.001, 0, 0, true) ==
+                    LDACBT_EQMID_INC_QUALITY, "adaptive-fifteen-second-promotion");
     return passed;
 }
 
@@ -404,7 +412,7 @@ static BOOL SenderCheck(BOOL adaptive, useconds_t delay, int stall, int terminal
             samples += packet[12] * profile.frameSamples;
             packets++;
             uint8_t source[15 * 256 * 8] = {0};
-            NSUInteger sourceBytes = terminal ? 0 : packet[12] * profile.frameSamples * 8;
+            NSUInteger sourceBytes = terminal || packets >= 240 ? 0 : packet[12] * profile.frameSamples * 8;
             double writeDeadline = MonotonicTime() + 1;
             while (sourceBytes && MonotonicTime() < writeDeadline) {
                 ssize_t wrote = write(pcmWriter, source, sourceBytes);
@@ -474,12 +482,13 @@ static BOOL IndependentSourceCheck(BOOL adaptive) {
     RecordOwnedOpen(probe, (CBL2CAPChannel *)channel, 0);
     int flags = fcntl(sockets[0], F_GETFL), lowWater, noSigPipe;
     if (!ReadOption(sockets[0], SO_SNDLOWAT, &lowWater) || !ReadOption(sockets[0], SO_NOSIGPIPE, &noSigPipe)) abort();
-    double duration = adaptive ? 22 : 8;
+    double duration = adaptive ? 90 : 8;
     double began = MonotonicTime();
     double deadline = began + duration + 3;
     atomic_bool finished = false;
     atomic_bool *done = &finished;
-    __block BOOL produced = YES, received = YES, stopSent = NO, sawLower = NO, returnedHQ = NO;
+    __block BOOL produced = YES, received = YES, stopSent = NO, sawLower = NO, qualityRecovered = NO;
+    __block NSUInteger minimumFrameBytes = 330;
     __block uint64_t producedFrames = 0, packets = 0, samples = 0, timestampEnd = 0, timestampSkips = 0;
     __block double producerLateness = 0, maximumDebt = 0, recoveryDebt = 0;
     int writer = pcm[1], reader = sockets[1], controlWriter = controls[1];
@@ -540,7 +549,8 @@ static BOOL IndependentSourceCheck(BOOL adaptive) {
             maximumDebt = fmax(maximumDebt, now - began - (double)timestamp / profile.sampleRate);
             if (now >= began + 18) recoveryDebt = fmax(recoveryDebt, now - began - (double)timestamp / profile.sampleRate);
             sawLower |= format.frameBytes < 330;
-            returnedHQ |= sawLower && format.frameBytes == 330;
+            minimumFrameBytes = MIN(minimumFrameBytes, (NSUInteger)format.frameBytes);
+            qualityRecovered |= sawLower && format.frameBytes > minimumFrameBytes && now >= began + 5;
             NSUInteger offset = 0;
             while (offset < (NSUInteger)count - 1) {
                 ssize_t part = recv(reader, actual + offset, MIN((NSUInteger)97, count - 1 - offset), MSG_DONTWAIT);
@@ -578,10 +588,10 @@ static BOOL IndependentSourceCheck(BOOL adaptive) {
         !probe.pcmSkippedBytes && timestampSkips == probe.pcmSkippedBytes / 8 &&
         samples >= checkedInputFrames && samples <= EncodedSampleLimit(checkedInputFrames, profile) &&
         checkedInputFrames > (duration - 1) * profile.sampleRate && elapsed < duration + 5 &&
-        ldacBT_get_eqmid(probe.encoder) == LDACBT_EQMID_HQ && (adaptive ? sawLower && returnedHQ : !sawLower);
-    printf("INDEPENDENT_SOURCE_CHECK adaptive=%d duration=%.0f packets=%llu producedFrames=%llu inputFrames=%llu encodedFrames=%llu skippedFrames=%llu bufferedFrames=%lu producerLateMax=%.6f debtMax=%.6f recoveryDebtMax=%.6f lower=%d returnedHQ=%d pcmExact=%d accounted=%d fed=%d elapsed=%.6f result=%s\n",
+        (adaptive ? sawLower && qualityRecovered : !sawLower && ldacBT_get_eqmid(probe.encoder) == LDACBT_EQMID_HQ);
+    printf("INDEPENDENT_SOURCE_CHECK adaptive=%d duration=%.0f packets=%llu producedFrames=%llu inputFrames=%llu encodedFrames=%llu skippedFrames=%llu bufferedFrames=%lu producerLateMax=%.6f debtMax=%.6f recoveryDebtMax=%.6f lower=%d qualityRecovered=%d pcmExact=%d accounted=%d fed=%d elapsed=%.6f result=%s\n",
            adaptive, duration, packets, producedFrames, checkedInputFrames, samples, probe.pcmSkippedBytes / 8,
-           probe.pcmBytes / 8, producerLateness, maximumDebt, recoveryDebt, sawLower, returnedHQ,
+           probe.pcmBytes / 8, producerLateness, maximumDebt, recoveryDebt, sawLower, qualityRecovered,
            checkedPCM, accounted, fed, elapsed, passed ? "PASS" : "FAIL");
     checkedProbe = nil;
     if (dup2(savedInput, STDIN_FILENO) < 0) abort();

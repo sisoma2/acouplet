@@ -6,6 +6,8 @@
 #include "LDACParentLifetime.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <mach/mach.h>
+#include <mach/mach_time.h>
 #include <sys/event.h>
 #include <sys/socket.h>
 #include <limits.h>
@@ -59,6 +61,19 @@ static void RunLoopFor(NSTimeInterval seconds) {
 
 static double MonotonicTime(void) {
     return (double)clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000000000.0;
+}
+
+static uint32_t MachTicks(double seconds) {
+    static mach_timebase_info_data_t timebase;
+    if (!timebase.denom) mach_timebase_info(&timebase);
+    return (uint32_t)llround(seconds * 1000000000.0 * timebase.denom / timebase.numer);
+}
+
+static void WaitForSenderService(double seconds) {
+    if (seconds <= 0) return;
+    uint64_t deadline = mach_absolute_time() + MachTicks(seconds);
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true);
+    while (mach_absolute_time() < deadline && mach_wait_until(deadline) == KERN_ABORTED) {}
 }
 
 static const char *RefreshOwnedPeer(CBClassicPeer *peer, CBClassicManager *manager) {
@@ -1215,7 +1230,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                         }
                     }
                     RecordSenderStage(&timing, SenderPacing);
-                    RunLoopFor(0.001);
+                    WaitForSenderService(0.001);
                     RecordSenderStage(&timing, SenderOther);
                 }
                 if (probe.stopRequested) continue;
@@ -1289,7 +1304,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                 RecordSenderStage(&timing, SenderPCM);
                 [probe pollPCM];
                 RecordSenderStage(&timing, SenderPacing);
-                RunLoopFor(0.001);
+                WaitForSenderService(fmin(0.001, fmax(0, due - MonotonicTime())));
                 RecordSenderStage(&timing, SenderOther);
             }
             double now = MonotonicTime();
@@ -1358,7 +1373,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                 PollLiveControls(probe);
                 [probe pollInput];
                 [probe pollPCM];
-                RunLoopFor(0);
+                CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true);
                 if (probe.closed || probe.failed || probe.inputEnded || owned.socketFD != fd) break;
                 if (continuous && !probe.stopRequested && !finishing && [probe checkDegradation]) break;
                 double pollAt = MonotonicTime();
@@ -1449,7 +1464,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                 if (profile.adaptive && !finishing && !probe.stopRequested) {
                     int priority = LDACAdaptivePolicyObserve(&adaptivePolicy, ldacBT_get_eqmid(probe.encoder),
                         (double)packetSamples / profile.sampleRate, now - beforeSend, maximumSchedulerGap,
-                        lateness, adaptiveSourceReady && adaptiveSkippedBytes == probe.pcmSkippedBytes);
+                        lateness, adaptiveSourceReady && adaptiveSkippedBytes == probe.pcmSkippedBytes, 0, now);
                     if (priority) {
                         if (ldacBT_alter_eqmid_priority(probe.encoder, priority) != 0) {
                             printf("ENCODER_FAILED reason=adaptive-quality code=%d\n", ldacBT_get_error_code(probe.encoder));

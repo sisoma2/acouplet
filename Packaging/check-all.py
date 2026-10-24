@@ -3,6 +3,8 @@ import json, os, plistlib, subprocess, sys, tempfile
 
 repo = Path(__file__).resolve().parent.parent
 python_checks = (
+    'Helpers/LDAC/LDACSenderTimingCheck.py',
+    'Helpers/LDAC/LDACAdaptivePolicyCheck.py',
     'Packaging/check-localizations-check.py',
     'Packaging/check-no-sony-artwork.py',
     'Packaging/check-sparkle.py',
