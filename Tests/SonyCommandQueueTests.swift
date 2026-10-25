@@ -313,18 +313,21 @@ final class SonyCommandQueueTests: XCTestCase {
 
     @MainActor
     func testObservedReadTimeoutRetriesIdenticalFrameOnceWithoutResettingSession() async throws {
-        for query: [UInt8] in [[0xF6, 0x0F], [0xF6, 0x0C], [0x22, 0x05], [0xF2, 0x05], [0xA6, 0x01]] {
+        for query: [UInt8] in [[0xF6, 0x0F], [0xF6, 0x0C], [0x22, 0x05], [0xF2, 0x05], [0xA6, 0x01],
+                                [0x62, 0x17], [0x66, 0x17]] {
             let controller = try controllerWithPendingRead(query)
             defer { controller.simulateControlLoss() }
             let frame = try XCTUnwrap(controller.simulatedPendingFrame)
             let session = controller.simulatedControlSession
             let noise = controller.noiseControlDisplayState
+            let noiseDeadline = controller.simulatedNoiseReadTimeoutID(query)
             let count = controller.simulatedTransmittedFrames.filter { $0 == frame }.count
             controller.simulateAcknowledgmentTimeout()
             for _ in 0..<4 { await Task.yield() }
             XCTAssertTrue(controller.isReady)
             XCTAssertEqual(controller.simulatedControlSession, session)
             XCTAssertEqual(controller.noiseControlDisplayState, noise)
+            XCTAssertEqual(controller.simulatedNoiseReadTimeoutID(query), noiseDeadline)
             XCTAssertEqual(controller.simulatedPendingFrame, frame)
             XCTAssertEqual(controller.simulatedTransmittedFrames.filter { $0 == frame }.count, count + 1)
             controller.simulateAcknowledgmentTimeout()
@@ -335,6 +338,39 @@ final class SonyCommandQueueTests: XCTestCase {
             XCTAssertEqual(controller.lastErrorMessage, "Headphones did not acknowledge a command.")
             XCTAssertEqual(controller.simulatedTransmittedFrames.filter { $0 == frame }.count, count + 1)
         }
+    }
+
+    @MainActor
+    func testReadyNoiseReadRetryWaitsForACKWithoutReopeningConsumedStatus() async throws {
+        let query: [UInt8] = [0x66, 0x17]
+        let controller = try controllerWithPendingRead(query)
+        defer { controller.simulateControlLoss() }
+        let frame = try XCTUnwrap(controller.simulatedPendingFrame)
+        let session = controller.simulatedControlSession
+        controller.simulateProtocolMessage([0x67, 0x17, 1, 1, 1, 0, 12])
+        controller.simulateProtocolMessage([0x69, 0x17, 1, 1, 0, 0, 12])
+        let noise = controller.noiseControlDisplayState
+        controller.simulateAcknowledgmentTimeout()
+        for _ in 0..<4 { await Task.yield() }
+        XCTAssertTrue(controller.isReady)
+        XCTAssertEqual(controller.simulatedControlSession, session)
+        XCTAssertEqual(controller.simulatedPendingFrame, frame)
+        XCTAssertEqual(controller.simulatedTransmittedFrames.filter { $0 == frame }.count, 2)
+        XCTAssertNil(controller.simulatedNoiseReadTimeoutID(query))
+        controller.simulateProtocolMessage([0x67, 0x17, 1, 1, 1, 0, 12])
+        XCTAssertEqual(controller.noiseControlDisplayState, noise)
+        controller.setNoiseControl(.anc)
+        XCTAssertFalse(controller.simulatedTransmittedFrames.contains { $0.payload.first == 0x68 })
+        let acknowledgment = SonyFrameCodec.encode(type: 0x01, sequence: 1 - frame.sequence, payload: [])
+        controller.simulateProtocolData(acknowledgment)
+        let next = controller.simulatedPendingFrame
+        XCTAssertNotEqual(next, frame)
+        controller.simulateProtocolData(acknowledgment)
+        XCTAssertEqual(controller.simulatedPendingFrame, next)
+        acknowledgeSimulatedCommands(controller)
+        XCTAssertEqual(controller.simulatedTransmittedFrames.filter { $0.payload.first == 0x68 }.count, 1)
+        XCTAssertTrue(controller.isReady)
+        XCTAssertEqual(controller.simulatedControlSession, session)
     }
 
     @MainActor
@@ -415,7 +451,7 @@ final class SonyCommandQueueTests: XCTestCase {
             controller.simulateDeviceConnection(named: "WF-1000XM5")
             defer { controller.simulateControlLoss() }
             if setter { controller.setNoiseControl(.anc) }
-            else { controller.refresh() }
+            else { XCTAssertTrue(controller.refreshMusicVolume()) }
             let frame = try XCTUnwrap(controller.simulatedPendingFrame)
             let count = controller.simulatedTransmittedFrames.count
             controller.simulateAcknowledgmentTimeout()
@@ -455,7 +491,8 @@ final class SonyCommandQueueTests: XCTestCase {
     @MainActor
     private func controllerWithPendingRead(_ query: [UInt8]) throws -> SonyHeadphonesController {
         let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
-        controller.simulateDeviceConnection(named: "WF-1000XM5")
+        let noiseRead = [[0x62, 0x17], [0x66, 0x17]].contains(query)
+        controller.simulateDeviceConnection(named: "WF-1000XM5", galleryModel: noiseRead ? .wfXM5 : nil)
         if query == [0xF2, 0x05] {
             controller.simulateProtocolMessage([1, 0, 3, 0, 0x30, 0x18, 0, 0], beginConnection: true)
             acknowledgeSimulatedCommands(controller)

@@ -5869,18 +5869,19 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
 
     private func scheduleAcknowledgmentTimeout(_ frame: SonyFrame, identifier: UUID, session: UInt64, allowRetry: Bool) {
         let isStartupRead = frame.type == 0x0C && (
-            [[0x00, 0x00], [0x04, 0x01], [0x04, 0x03], [0x06, 0x00], [0x10, 0x04]].contains(frame.payload)
-                || (stage == .noiseControl && frame.payload.count == 2
-                    && [0x60, 0x62, 0x66].contains(frame.payload[0])
-                    && [0x02, 0x15, 0x17, 0x19, 0x21, 0x22].contains(frame.payload[1])))
+            [[0x00, 0x00], [0x04, 0x01], [0x04, 0x03], [0x06, 0x00], [0x10, 0x04]].contains(frame.payload))
             || (frame.type == 0x0E && frame.payload == [0x06, 0x00])
+        let isNoiseRead = frame.type == 0x0C && frame.payload.count == 2
+            && [0x60, 0x62, 0x66].contains(frame.payload[0])
+            && [0x02, 0x15, 0x17, 0x19, 0x21, 0x22].contains(frame.payload[1])
+            && (stage == .noiseControl || stage == .ready)
         let timeout = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 guard let self, self.transmissionID == identifier else { return }
                 let payload = frame.payload.prefix(4).map { String(format: "%02X", $0) }.joined(separator: " ")
                 let isBatteryRead = frame.type == 0x0C && (self.batteryReads[frame.payload]?.transmitted == true
                     || self.legacyControls?.batteryQueries.contains(frame.payload) == true)
-                if allowRetry, isStartupRead || isBatteryRead || (self.protocolInformation?.generation == .v2 && frame.type == 0x0C
+                if allowRetry, isStartupRead || isNoiseRead || isBatteryRead || (self.protocolInformation?.generation == .v2 && frame.type == 0x0C
                     && [[0xF6, 0x0F], [0xF6, 0x0C], [0x22, 0x05], [0xF2, 0x05], [0xA6, 0x01]].contains(frame.payload)) {
                     let command = frame.payload.prefix(2).map { String(format: "%02X", $0) }.joined(separator: " ")
                     Self.logger.notice("Retrying unacknowledged read; sequence=\(frame.sequence) session=\(session) command=\(command, privacy: .public) payload=\(payload, privacy: .private)")
