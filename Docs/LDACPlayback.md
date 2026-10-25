@@ -143,6 +143,13 @@ the newly selected device's automatic profile after cleanup. Acouplet's Disconne
 and Power Off actions cancel immediately. Physical power-off, returning earbuds to
 their case, and disconnecting through macOS use the reconnect grace period because
 their connection loss cannot reliably be distinguished from a temporary dropout.
+When active LDAC playback loses its connection, stops unexpectedly, or the user
+disconnects or powers off the headphones in Acouplet, the app requests Pause from
+the current macOS media player before cleanup restores audio routes. Reconnecting
+or falling back to ordinary Bluetooth audio after a transport failure, including
+at fixed 990 kbps quality, does not resume music automatically. Players must support
+macOS media controls to respond. Deliberately turning LDAC off, changing playback
+settings and microphone handoffs keep their existing playback behavior.
 Microphone handoff can wait for a longer call while the same headphones remain
 connected; losing that connection starts the same 60-second deadline. Expiry clears
 only the pending request, leaving the device's automatic profile and Manual Off

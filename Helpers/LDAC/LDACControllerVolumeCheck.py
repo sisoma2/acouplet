@@ -409,6 +409,7 @@ final class Controller: ObservableObject {
     var volumeRange: ClosedRange<Int>?
     var transportFormat: LDACFormat?
     var usable = false
+    var pausePlayback: () -> Void = {}
     var requestedOutputGain = 0.0
     var volumeError: String?
     var stopCompletions: [@MainActor () -> Void] = []
@@ -500,6 +501,36 @@ enum Check {
     @MainActor
     static func main() async throws {
         precondition(ProcessInfo.processInfo.environment["ACOUPLET_TESTING"] == "1")
+        let (interrupted, _, interruptedOutput, interruptedRaw) = try await active()
+        var interruptionPauses = 0
+        interrupted.pausePlayback = {
+            precondition(interruptedOutput.ready, "Playback was paused after the LDAC output was released")
+            interruptionPauses += 1
+        }
+        interruptedRaw.emit(.connectionLost("990 kbps transport could not keep up"))
+        precondition(interruptionPauses == 1, "LDAC fallback did not pause the media player immediately")
+        interruptedRaw.emit(.connectionLost("duplicate transport failure"))
+        interruptedRaw.emit(.finished(.init(message: nil, canRetry: true, targetDisconnected: false, waitForReconnect: false)))
+        try await waitUntil { !interrupted.isSessionRunning }
+        precondition(interruptionPauses == 1, "Fallback cleanup paused the player more than once")
+        interrupted.stop()
+
+        let (departed, departedDevice, _, departedRaw) = try await active()
+        var departurePauses = 0
+        departed.pausePlayback = { departurePauses += 1 }
+        departedDevice.isDeviceConnected = false
+        departedRaw.emit(.finished(.init(message: nil, canRetry: true, targetDisconnected: true, waitForReconnect: true)))
+        precondition(departurePauses == 1, "A disconnected session completion did not pause playback")
+        try await waitUntil { !departed.isSessionRunning }
+        departed.stop()
+
+        let (manualOff, _, _, _) = try await active()
+        var manualPauses = 0
+        manualOff.pausePlayback = { manualPauses += 1 }
+        try await stop(manualOff)
+        precondition(manualPauses == 0, "Deliberately turning LDAC off paused playback")
+        print("PASS LDAC interruption pauses playback before fallback, once per interruption; disconnected completion pauses, while manual Off keeps playback")
+
         for generation in [Generation.v1, .v2] {
             let direct = Controller()
             let device = SonyHeadphonesController()
@@ -1071,6 +1102,7 @@ names = [
     "setOutputGain",
     "fail",
     "beginRecovery",
+    "pausePlaybackForDisconnection",
     "scheduleRecovery",
     "endRetryWait",
     "cancelAutomaticRetry",

@@ -123,6 +123,7 @@ final class LDACController: ObservableObject {
     private var volumeRange: ClosedRange<Int>?
     private var transportFormat: LDACFormat?
     private var usable = false
+    private var pausePlayback: () -> Void = { MacMediaPlayback.pause() }
     private var requestedOutputGain = 0.0
     private var volumeError: String?
     private var stopCompletions: [@MainActor () -> Void] = []
@@ -233,6 +234,7 @@ final class LDACController: ObservableObject {
                     self.multipointConflictConfiguration = nil
                 }
                 if self.targetAddress == address || self.requestedAddress == address {
+                    self.pausePlaybackForDisconnection()
                     self.stop(restoreAudio: false, reason: "user disconnected or powered off headphones")
                 }
             }
@@ -285,10 +287,11 @@ final class LDACController: ObservableObject {
     var simulatedLaunches: [(address: String, restoringOnly: Bool)]?
     var simulatedStarts: [String]?
 
-    func simulateHelpers(retryDelay: Duration = .milliseconds(10)) {
+    func simulateHelpers(retryDelay: Duration = .milliseconds(10), pausePlayback: @escaping () -> Void = {}) {
         simulatedLaunches = []
         simulatedStarts = []
         automaticRetryDelay = retryDelay
+        self.pausePlayback = pausePlayback
     }
 
     func simulateSessionFinished(_ completion: LDACNativeSession.Completion, stableSince: Date? = nil, at date: Date = Date()) {
@@ -1318,6 +1321,7 @@ final class LDACController: ObservableObject {
         }
         playbackSettingsRestartAddress = nil
         if completion.waitForReconnect, completion.canRetry, requestedAddress == address {
+            pausePlaybackForDisconnection()
             suspensionRequested = true
             finish(nil, targetDisconnected: true)
         } else if completion.canRetry, requestedAddress == address, state != .stopping {
@@ -1327,6 +1331,7 @@ final class LDACController: ObservableObject {
             sessionID = UUID()
             launch(address, restoringOnly: true)
         } else {
+            if completion.requiresAttention { pausePlaybackForDisconnection() }
             finish(completion.requiresAttention ? completion.message : nil, targetDisconnected: completion.targetDisconnected)
         }
     }
@@ -1409,10 +1414,6 @@ final class LDACController: ObservableObject {
         } else { finish(nil, targetDisconnected: true) }
     }
 
-    /// Returns the headphones to ordinary Bluetooth audio after a recoverable abort (D1). The first abort of a
-    /// request schedules one LDAC retry after `automaticRetryDelay`; an abort of that retry leaves ordinary audio
-    /// playing and tells the user. When LDAC had disconnected the headphones, the restore helper reconnects them;
-    /// otherwise their ordinary connection is still up and releasing the output is enough.
     private func fallBackToOrdinaryAudio(_ address: String, targetDisconnected: Bool) {
         if recoveryAttempt >= 1 {
             recordRecovery("retry-exhausted", reason: "attempts=\(recoveryAttempt) targetDisconnected=\(targetDisconnected)")
@@ -1815,6 +1816,7 @@ final class LDACController: ObservableObject {
     private func fail(_ message: String) {
         transportHealth.lastReason = LDACDiagnosticReport.redacted(message)
         guard state != .stopping else { return }
+        pausePlaybackForDisconnection()
         record("failed", reason: "\(message); \(musicControlStatus)")
         volumeError = message
         requestedAddress = nil
@@ -1823,6 +1825,7 @@ final class LDACController: ObservableObject {
 
     private func beginRecovery(reason: String, at date: Date = Date()) {
         guard requestedAddress == targetAddress, requestedAddress != nil, state != .stopping else { return }
+        pausePlaybackForDisconnection()
         recordRecovery("recovering", reason: reason)
         if let stableSince, date.timeIntervalSince(stableSince) >= 30 { recoveryAttempt = 0 }
         stableSince = nil
@@ -1842,8 +1845,12 @@ final class LDACController: ObservableObject {
         transportFormat = nil
     }
 
-    /// Waits `automaticRetryDelay` with ordinary audio playing, then lets `resumeIfReady` start the single LDAC
-    /// retry as soon as the headphones, source and Mac output allow it. Every exit clears `recoveryTask` (L10).
+    private func pausePlaybackForDisconnection() {
+        guard case .active = state else { return }
+        pausePlayback()
+        record("playback-paused", reason: "LDAC connection interrupted")
+    }
+
     private func scheduleRecovery(_ address: String) {
         guard recoveryTask == nil else { return }
         let taskID = UUID()
