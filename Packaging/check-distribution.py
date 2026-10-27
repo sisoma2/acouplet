@@ -9,7 +9,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -361,7 +361,7 @@ def inspect_package(package, signatures_only=False, dmg=None):
         if not check["verified"]
     ]
     return {
-        "checked_utc": datetime.now(timezone.utc).isoformat(),
+        "checked_utc": datetime.now(UTC).isoformat(),
         "package": str(package),
         "scope": "App, battery helper, native HUD, Sparkle framework and nested tools, LDAC transport/audio helpers, HAL driver and embedded installer/uninstaller, separately packaged panes and optional DMG. No notarization upload or installed-app modification.",
         "signing_team": team,
