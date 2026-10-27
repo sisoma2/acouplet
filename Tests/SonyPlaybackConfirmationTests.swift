@@ -163,7 +163,7 @@ final class SonyPlaybackConfirmationTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(8_100))
         XCTAssertNotNil(controller.playbackReadError)
         let previousReads = controller.simulatedTransmittedFrames.filter { $0.payload == [0xA6, 0x20] }.count
-        for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+        for _ in 0..<40 { controller.simulateAutomaticRefresh() }
         acknowledgeSimulatedCommands(controller)
         receive([0x67, 0x17, 1, 1, 0, 0, 10], on: controller)
         acknowledgeSimulatedCommands(controller)

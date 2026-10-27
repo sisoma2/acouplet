@@ -11,7 +11,7 @@ streaming = source[
     source.index("static BOOL FeedLive(") : source.index("LiveQueueFree(&sendQueue)")
 ]
 assert "RunLoopFor(" not in streaming
-assert streaming.count("WaitForSenderService(") == 4
+assert streaming.count("WaitForSenderService(") == 5
 fixture = (
     r"""
 #import <Foundation/Foundation.h>

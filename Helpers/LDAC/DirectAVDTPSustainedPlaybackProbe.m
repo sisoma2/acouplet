@@ -547,7 +547,17 @@ static NSData *Query(DirectPlaybackProbe *probe, uint8_t *transaction, uint8_t s
 
 static BOOL EmptyAcceptance(NSData *reply) { return reply != nil && reply.length == 2; }
 
-static BOOL WaitControl(DirectPlaybackProbe *probe, NSString *command) {
+static BOOL IdleControl(DirectPlaybackProbe *probe, NSString *line, uint8_t *transaction, BOOL *suspended) {
+    BOOL suspend = [line isEqualToString:@"media-idle"];
+    if ((!suspend && ![line isEqualToString:@"media-resume"]) || suspend == *suspended) return NO;
+    uint8_t target = probe.selectedSink << 2;
+    if (!EmptyAcceptance(Query(probe, transaction, suspend ? 9 : 7, [NSData dataWithBytes:&target length:1]))) return NO;
+    *suspended = suspend;
+    printf("%s signalingCID=%04X mediaCID=%04X\n", suspend ? "SUSPEND_ACCEPTED" : "RESUME_ACCEPTED", probe.realCID, probe.mediaCID);
+    return YES;
+}
+
+static BOOL WaitControlWithIdle(DirectPlaybackProbe *probe, NSString *command, uint8_t *transaction) {
     NSTimeInterval timeout = [command isEqualToString:@"media-finished"] ? 70 : [command isEqualToString:@"media-ready"] ? 60 : 30;
 #if ACOUPLET_LDAC_PROBE_ONLY
     BOOL continuous = probe.continuous && [command isEqualToString:@"media-finished"];
@@ -557,6 +567,7 @@ static BOOL WaitControl(DirectPlaybackProbe *probe, NSString *command) {
     if (continuous) printf("WAIT_CONTROL %s deadline=unbounded\n", command.UTF8String);
     else printf("WAIT_CONTROL %s deadline=%.0fs\n", command.UTF8String, timeout);
     double deadline = continuous ? INFINITY : MonotonicTime() + timeout;
+    BOOL suspended = NO;
     while (MonotonicTime() < deadline) {
         if (probe.stdinEnded || (probe.stopRequested && ![command isEqualToString:@"media-closed"])) break;
         NSString *line = ReadLine(probe, deadline, ![command isEqualToString:@"media-closed"], continuous ? 0.02 : 0.001);
@@ -581,11 +592,19 @@ static BOOL WaitControl(DirectPlaybackProbe *probe, NSString *command) {
             return YES;
         }
         if ([line isEqualToString:command]) return YES;
+        if (continuous && transaction && ([line isEqualToString:@"media-idle"] || [line isEqualToString:@"media-resume"])) {
+            if (!IdleControl(probe, line, transaction, &suspended)) break;
+            continue;
+        }
         NSData *packet = ConsumeSDU(probe, line, deadline);
         if (!packet || !HandlePeerCommand(probe, packet) || probe.peerStopped) break;
     }
     printf("CONTROL_FAILED expected=%s closed=%d\n", command.UTF8String, probe.closed);
     return NO;
+}
+
+static BOOL WaitControl(DirectPlaybackProbe *probe, NSString *command) {
+    return WaitControlWithIdle(probe, command, NULL);
 }
 
 static BOOL LDACSelection(NSData *reply, uint32_t sampleRate, BOOL *delayReporting) {
@@ -705,7 +724,7 @@ static BOOL PlaybackSequence(DirectPlaybackProbe *probe) {
         started = YES;
         printf("START_ACCEPTED signalingCID=%04X mediaCID=%04X\n", probe.realCID, probe.mediaCID);
         if (probe.stopRequested) break;
-        if (!WaitControl(probe, @"media-finished")) break;
+        if (!WaitControlWithIdle(probe, @"media-finished", &transaction)) break;
         if (!EmptyAcceptance(Query(probe, &transaction, 8, target))) break;
         probe.streamOpened = NO;
         probe.configured = NO;

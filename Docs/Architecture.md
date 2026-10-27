@@ -12,6 +12,13 @@ handling so changes can be tested without opening a Bluetooth connection.
 session. It checks whether a feature may send a command and notifies the feature
 when that command is actually transmitted.
 
+Headset notifications update feature state immediately. The three-second local
+connection check uses a two-minute fallback for full settings reads outside LDAC
+playback. Opening the menu or Settings also refreshes settings, coalesced within
+15 seconds. During LDAC, presentation refreshes retain the narrower noise-control
+and battery reads to avoid disrupting playback. User changes still request their
+own immediate confirmation.
+
 `SonySoundPressureSession` owns listening-level state, pending reads, request
 generations, timeout handling, refresh intervals and automatic-refresh suspension.
 The controller forwards its change notifications and exposes the existing
@@ -34,9 +41,13 @@ handling, diagnostics and the existing read-only feature properties.
 
 ## Native battery publication
 
-Native battery samples expire after 45 seconds. LDAC streaming requests only
-battery readings every 30 seconds, leaving time to refresh those samples before
-expiry without polling the full settings set. The child helper can start
+Native battery samples expire after 45 seconds. Ordinary and LDAC playback track
+the last accepted battery response or notification for each component query.
+The local connection check requests a component once its observation is at least
+30 seconds old; components without an observation use a 30-second fallback.
+Fresh notifications therefore postpone requests without extending sample expiry.
+Malformed, obsolete and timed-out replies cannot renew that observation. A new
+control session clears observation timestamps. The child helper can start
 withdrawing expired entries before its supervisor observes that deadline. The
 supervisor treats the child's validated `components-absent` report as a shutdown
 transition and waits for verified removal, final inventory and process exit.

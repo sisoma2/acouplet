@@ -181,6 +181,20 @@ Acouplet service or login item.
 
 Bluetooth, audio and connection recovery still need testing with real hardware.
 
+`Helpers/LDAC/LDACMediaQueueCheck.py` also exercises idle suspension and buffered
+resume at 48 and 96 kHz with socket and PCM pipes. It shortens only the production
+30-second silence threshold in its temporary source copy. It verifies that queued
+packets drain before suspension, media traffic stops while idle, RTP sequence and
+timestamps remain contiguous after resume, muted gain does not suppress returning
+source audio, and shutdown completes while suspended.
+`LDACSignalingStartupCheck.py` checks Suspend/Start commands and duplicate-state
+rejection. `LDACSessionClosureCheck.py` checks the session's helper command order,
+repeated transitions, invalid events and late acknowledgments during shutdown.
+These fixtures simulate the headset's acknowledgments; live qualification must
+check audible resume and receiver behavior after a long pause.
+`SonyNativeBatterySnapshotTests` covers fresh notifications, the 30-second refresh
+deadline and stale response ownership during ordinary and LDAC playback.
+
 `Helpers/LDAC/LDACCaptureRecoveryCheck.py` exercises the production overload
 watchdog, capture restart and active-source inventory with synthetic clocks and
 Core Audio calls. It covers silence without overloads, initial silence, returning

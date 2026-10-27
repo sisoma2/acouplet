@@ -1597,7 +1597,7 @@ final class SonySystemFeatureOwnershipTests: XCTestCase {
             XCTAssertNotNil(controller.settingErrors[.system(.headGestures)])
             XCTAssertTrue(controller.canSetSystemFeature(.pauseOnRemoval))
             if notification { deliver([0xF9, 0x0F, 0], to: controller) }
-            for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+            for _ in 0..<40 { controller.simulateAutomaticRefresh() }
             acknowledgeSimulatedCommands(controller)
             deliver([0xF7, 0x0F], to: controller)
             acknowledgeSimulatedCommands(controller)

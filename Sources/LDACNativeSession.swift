@@ -499,6 +499,8 @@ final class LDACNativeSession: @unchecked Sendable {
     private var priorityDeadline = DispatchTime.distantFuture
     private var mediaStopDeadline = DispatchTime.distantFuture
     private var active = false
+    private enum IdlePhase { case playing, suspending, suspended, resuming }
+    private var idlePhase = IdlePhase.playing
     private var mediaStopSent = false
     private var mediaStopReady = false
     private var captureStopSent = false
@@ -935,6 +937,16 @@ final class LDACNativeSession: @unchecked Sendable {
                 pcmRead = -1
             } else if line.hasPrefix("OPEN_ACCEPTED") && !shouldStop {
                 try send("media", "open")
+            } else if line.hasPrefix("SUSPEND_ACCEPTED ") && !shouldStop {
+                guard active, idlePhase == .suspending else { throw LDACSessionError("LDAC suspended outside an idle transition.") }
+                idlePhase = .suspended
+                try send("media", "idle-suspended")
+                record("IDLE_SUSPENDED")
+            } else if line.hasPrefix("RESUME_ACCEPTED ") && !shouldStop {
+                guard active, idlePhase == .resuming else { throw LDACSessionError("LDAC resumed outside an idle transition.") }
+                idlePhase = .playing
+                try send("media", "idle-resumed")
+                record("IDLE_PLAYBACK_RESUMED")
             } else if line.hasPrefix("START_ACCEPTED") && !shouldStop {
                 guard readySent, !startAccepted, !mediaCloseSent else { throw LDACSessionError("LDAC Start arrived without independent live media readiness.") }
                 startAccepted = true
@@ -959,6 +971,15 @@ final class LDACNativeSession: @unchecked Sendable {
             if transportHealth.observe(line), DispatchTime.now() >= nextHealthUpdate {
                 emit(.health(transportHealth))
                 nextHealthUpdate = DispatchTime.now() + 1
+            }
+            if line.hasPrefix("IDLE_READY "), !shouldStop {
+                guard active, idlePhase == .playing else { throw LDACSessionError("LDAC requested an invalid idle suspension.") }
+                idlePhase = .suspending
+                try send("probe", "media-idle")
+            } else if line.hasPrefix("IDLE_AUDIO_READY "), !shouldStop {
+                guard active, idlePhase == .suspended else { throw LDACSessionError("LDAC requested an invalid idle resume.") }
+                idlePhase = .resuming
+                try send("probe", "media-resume")
             }
             if line == "PCM_STOP_READY started=0", mediaStopSent, !started, shouldStop { mediaStopReady = true }
             if line == "MEDIA_PREPARED" { mediaPrepared = true }

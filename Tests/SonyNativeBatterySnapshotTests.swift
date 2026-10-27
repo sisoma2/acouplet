@@ -3,6 +3,33 @@ import XCTest
 @testable import Acouplet
 
 final class SonyNativeBatterySnapshotTests: XCTestCase {
+    @MainActor
+    func testAutomaticBatteryReadsUseComponentFreshnessDuringOrdinaryAndLDACPlayback() throws {
+        for streaming in [false, true] {
+            let controller = batteryController(functions: [0x29, 0x2A])
+            defer { controller.simulateControlLoss() }
+            deliverBattery([0x23, 0x09, 73, 0, 84, 0, 20, 20], to: controller)
+            deliverBattery([0x23, 0x0A, 65, 0, 20], to: controller)
+            deliverBattery([0x25, 0x09, 72, 0, 83, 0, 20, 20], to: controller)
+            let observedAt = try XCTUnwrap(controller.lastSyncDate)
+            controller.isLDACStreaming = streaming
+            let pairReads = batteryReadCount(controller, inquiry: 0x09)
+            let caseReads = batteryReadCount(controller, inquiry: 0x0A)
+            for _ in 0..<20 { controller.simulateAutomaticRefresh(at: observedAt.addingTimeInterval(29)) }
+            XCTAssertEqual(batteryReadCount(controller, inquiry: 0x09), pairReads)
+            XCTAssertEqual(batteryReadCount(controller, inquiry: 0x0A), caseReads)
+            controller.simulateAutomaticRefresh(at: observedAt.addingTimeInterval(31))
+            acknowledgeBatteryCommands(controller)
+            XCTAssertEqual(batteryReadCount(controller, inquiry: 0x09), pairReads + 1)
+            XCTAssertEqual(batteryReadCount(controller, inquiry: 0x0A), caseReads + 1)
+            deliverBattery([0x25, 0x09, 71, 0, 82, 0, 20, 20], to: controller)
+            deliverBattery([0x23, 0x09, 70, 0, 81, 0, 20, 20], to: controller)
+            XCTAssertEqual(controller.batteries.left?.level, 71)
+            controller.simulateAutomaticRefresh()
+            XCTAssertEqual(batteryReadCount(controller, inquiry: 0x09), pairReads + 1)
+        }
+    }
+
     func testDiagnosticsOmitNativeNameAndIdentifierWhilePreservingBatteryReadings() {
         let date = Date(timeIntervalSince1970: 1_000)
         let identifier = UUID()
@@ -387,7 +414,7 @@ final class SonyNativeBatterySnapshotTests: XCTestCase {
     }
 
     @MainActor
-    func testMissingOptionalBatteryReplyDoesNotReconnectOrReuseItsOwner() async {
+    func testMissingOptionalBatteryReplyDoesNotReconnectOrReuseItsOwner() async throws {
         let controller = batteryController(functions: [0x29, 0x2A], acknowledgeReads: false)
         defer { controller.simulateControlLoss() }
         let session = controller.simulatedControlSession
@@ -412,7 +439,7 @@ final class SonyNativeBatterySnapshotTests: XCTestCase {
         deliverBattery([0x23, 0x09, 74, 0, 77, 0], to: controller)
         XCTAssertEqual(controller.batteries.left?.level, 73)
         XCTAssertEqual(controller.lastSyncDate, reportedAt)
-        for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+        controller.simulateAutomaticRefresh(at: try XCTUnwrap(reportedAt).addingTimeInterval(31))
         acknowledgeBatteryCommands(controller)
         XCTAssertEqual(batteryReadCount(controller, inquiry: 0x09), reads + 1)
         deliverBattery([0x23, 0x09, 72, 0, 75, 0], to: controller)

@@ -760,6 +760,48 @@ extension LDACNativeSession {
     }
 
     @MainActor
+    static func idlePlaybackCheck(executable: URL) throws {
+        let session = try lossSession(active: true, events: SessionEvents())
+        for name in ["probe", "media"] {
+            session.children[name] = try LDACNativeChild(executable: executable,
+                arguments: ["--fixture", "echo", "READY", "end", "0"], inheritedPCM: nil)
+        }
+        defer { cleanUp(Array(session.children.values)) }
+        for (source, line) in [("probe", "SUSPEND_ACCEPTED signalingCID=0040 mediaCID=0041"),
+                               ("probe", "RESUME_ACCEPTED signalingCID=0040 mediaCID=0041"),
+                               ("media", "IDLE_AUDIO_READY bufferedFrames=12000")] {
+            var rejected = false
+            do { try session.handle(source, line: line) } catch { rejected = true }
+            try require(rejected && session.idlePhase == .playing, "Out-of-order idle event was accepted")
+        }
+        for _ in 0..<2 {
+            try session.handle("media", line: "IDLE_READY drainedPackets=10")
+            try require(session.idlePhase == .suspending, "Media did not request protocol suspension")
+            try session.handle("probe", line: "SUSPEND_ACCEPTED signalingCID=0040 mediaCID=0041")
+            try require(session.idlePhase == .suspended, "Suspension was not confirmed")
+            try session.handle("media", line: "IDLE_AUDIO_READY bufferedFrames=12000")
+            try require(session.idlePhase == .resuming, "Returning audio did not request Start")
+            try session.handle("probe", line: "RESUME_ACCEPTED signalingCID=0040 mediaCID=0041")
+            try require(session.idlePhase == .playing && session.active && !session.shouldStop,
+                "Resume replaced or stopped the playback session")
+        }
+        for (name, expected) in [("probe", ["RX media-idle", "RX media-resume", "RX media-idle", "RX media-resume"]),
+                                 ("media", ["RX idle-suspended", "RX idle-resumed", "RX idle-suspended", "RX idle-resumed"])] {
+            var lines: [String] = []
+            try waitUntil {
+                lines += try session.children[name]!.readLines().filter { $0.hasPrefix("RX ") }
+                return lines.count == expected.count
+            }
+            try require(lines == expected, "Idle commands reached the wrong owner or order")
+        }
+        session.stop(restoreAudio: false)
+        try session.handle("media", line: "IDLE_READY drainedPackets=10")
+        try session.handle("probe", line: "SUSPEND_ACCEPTED signalingCID=0040 mediaCID=0041")
+        try session.handle("probe", line: "RESUME_ACCEPTED signalingCID=0040 mediaCID=0041")
+        try require(session.idlePhase == .playing && session.shouldStop, "Late idle events revived stopped playback")
+    }
+
+    @MainActor
     static func probeFailureCheck(_ line: String, source: String, active: Bool, stopping: Bool) async throws {
         let events = SessionEvents()
         let session = try lossSession(active: active, events: events)
@@ -1156,6 +1198,8 @@ enum LDACSessionClosureCheck {
         }
         if CommandLine.arguments.dropFirst().first == "--fixture" { child() }
         let executable = URL(fileURLWithPath: CommandLine.arguments[0])
+        try LDACNativeSession.idlePlaybackCheck(executable: executable)
+        print("PASS idle playback ownership: repeated Suspend/Start acknowledgments, retained session, invalid events and stop races")
         try LDACNativeSession.updateHandoffCheck(executable: executable)
         for cancelled in [false, true] {
             try LDACNativeSession.playbackRestartCheck(executable: executable, cancelled: cancelled)
@@ -1485,7 +1529,7 @@ int main(void) {
         ) : signaling_source.index("static NSData *Query(")
     ]
     control = signaling_source[
-        signaling_source.index("static BOOL WaitControl(") : signaling_source.index(
+        signaling_source.index("static BOOL IdleControl(") : signaling_source.index(
             "static BOOL LDACSelection("
         )
     ]
@@ -1570,6 +1614,10 @@ static SInt32 ClockRunLoop(CFRunLoopMode mode, CFTimeInterval seconds, Boolean r
 static BOOL HandlePeerCommand(DirectPlaybackProbe *probe, NSData *packet) { abort(); }
 """
         + response
+        + r"""
+static NSData *Query(DirectPlaybackProbe *probe, uint8_t *transaction, uint8_t signal, NSData *payload) { abort(); }
+static BOOL EmptyAcceptance(NSData *reply) { return reply != nil && reply.length == 2; }
+"""
         + control
         + closed
         + r"""

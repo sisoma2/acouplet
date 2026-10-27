@@ -207,7 +207,7 @@ final class SonyLegacySoundEffectControllerTests: XCTestCase {
             XCTAssertTrue(controller.canSetLegacySoundEffect(otherKind))
             XCTAssertEqual(controller.settingErrors[.legacySoundEffect(kind)], "\(kind.title) settings are unavailable.")
             let reads = payloads(controller).filter { $0 == query }.count
-            for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+            for _ in 0..<40 { controller.simulateAutomaticRefresh() }
             acknowledgeAll(controller)
             XCTAssertEqual(payloads(controller).filter { $0 == query }.count, reads)
             deliver(Array(reply.dropLast()), to: controller)

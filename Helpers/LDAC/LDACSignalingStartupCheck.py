@@ -251,7 +251,8 @@ with tempfile.TemporaryDirectory(prefix="acouplet-signaling-startup-") as direct
 @property BOOL configured, configurationSent, streamOpened, delayReporting, peerStopped;
 @property BOOL closed, failed, lastRejected, stdinEnded, stopRequested, protocolCleanup;
 @property uint32_t sampleRate;
-@property uint16_t realCID;
+@property uint16_t realCID, mediaCID;
+@property uint8_t selectedSink;
 @property NSMutableData *pending;
 @end
 @implementation DirectPlaybackProbe
@@ -287,7 +288,7 @@ static NSData *Packet(NSArray<NSNumber *> *bytes) {
 """
         + source[
             source.index("static NSData *ServiceBytes(") : source.index(
-                "static BOOL WaitControl("
+                "static BOOL WaitControlWithIdle("
             )
         ]
         + r"""
@@ -312,6 +313,16 @@ int main(void) {
         probe.streamOpened = YES;
         nextReplies = @[Packet(@[@0x72, @7])];
         assert(EmptyAcceptance(Query(probe, &transaction, 7, Packet(@[@12]))));
+        probe.selectedSink = 3;
+        BOOL suspended = NO;
+        nextReplies = @[Packet(@[@0x82, @9])];
+        assert(IdleControl(probe, @"media-idle", &transaction, &suspended) && suspended);
+        assert([outgoing.lastObject isEqualToData:Packet(@[@0x80, @9, @12])]);
+        assert(!IdleControl(probe, @"media-idle", &transaction, &suspended));
+        nextReplies = @[Packet(@[@0x92, @7])];
+        assert(IdleControl(probe, @"media-resume", &transaction, &suspended) && !suspended);
+        assert([outgoing.lastObject isEqualToData:Packet(@[@0x90, @7, @12])]);
+        assert(!IdleControl(probe, @"media-resume", &transaction, &suspended));
         for (NSNumber *configured in @[@NO, @YES]) {
             probe.configured = configured.boolValue;
             assert([PeerReply(probe, Packet(@[@0x70, @6, @4])) isEqualToData:Packet(@[@0x73, @6, @0x31])]);
@@ -320,7 +331,7 @@ int main(void) {
             assert([PeerReply(probe, Packet(@[@0x70, @6, @4, @0])) isEqualToData:Packet(@[@0x73, @6, @0x11])]);
         }
         probe.configured = YES;
-        nextReplies = @[Packet(@[@0x80, @6, @4]), Packet(@[@0x83, @6, @0x31])];
+        nextReplies = @[Packet(@[@0x80, @6, @4]), Packet(@[@0xA3, @6, @0x31])];
         assert(!Query(probe, &transaction, 6, Packet(@[@12])) && probe.lastRejected);
         assert(!probe.failed && !probe.peerStopped);
         puts("PASS captured WH-1000XM5 startup: delay report and competing Open rejected without aborting local Open/Start; malformed endpoints and local rejection preserved");

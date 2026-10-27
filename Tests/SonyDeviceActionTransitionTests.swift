@@ -410,7 +410,7 @@ final class SonyDeviceActionControllerTests: XCTestCase {
             controller.simulateControlLoss()
         }
         let transmitted = controller.simulatedTransmittedFrames
-        for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+        for _ in 0..<40 { controller.simulateAutomaticRefresh() }
         XCTAssertFalse(controller.isReady)
         XCTAssertNil(controller.simulatedPendingFrame)
         XCTAssertFalse(controller.simulatedHandshakeTimeoutPending)

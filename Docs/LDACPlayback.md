@@ -13,6 +13,30 @@ report revision 8; verify the app and installed driver's certificate fingerprint
 when qualifying a private release. Revision 7 must be replaced, and a loaded
 revision 7 remains restart-required after revision 8 is installed.
 
+## Idle playback and headset battery use
+
+After 30 seconds of digitally silent captured audio, the media sender stops
+encoding at an encoder boundary, drains queued packets, and requests AVDTP
+Suspend. The signaling connection, negotiated codec, media channel and Mac audio
+capture remain available. No media packets are transmitted while suspended.
+Any nonzero captured sample, including quiet audio or a system sound routed to
+LDAC, requests AVDTP Start. A short silent pre-roll and the first returning audio
+remain buffered until Start is confirmed, then the encoder and pacing resume.
+Muting the output gain does not make a playing source count as idle.
+
+The normal capture ring bounds the audio retained during a resume. Protocol
+rejection, a transition timeout or buffer overflow uses the existing failure and
+ordinary-audio recovery path. Quit, microphone handoff and disconnection keep
+their normal shutdown ownership checks, including when playback is suspended.
+The lifecycle log records `IDLE_SUSPENDED` and `IDLE_PLAYBACK_RESUMED`.
+
+Full settings polling outside LDAC uses a two-minute fallback. Battery requests
+use component observation timestamps, so fresh headset notifications avoid extra
+reads while retaining the existing 45-second expiry for native battery samples.
+See [Native battery publication](Architecture.md#native-battery-publication).
+The idle behavior reduces unnecessary transmission; actual headset battery
+savings and audible resume latency require hardware measurement.
+
 ## Reload the driver without restarting the Mac
 
 After installing a replacement LDAC driver, restarting the Core Audio service

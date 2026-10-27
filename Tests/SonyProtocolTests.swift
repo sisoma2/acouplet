@@ -797,7 +797,7 @@ final class SonyProtocolTests: XCTestCase {
         XCTAssertFalse(controller.simulatedHandshakeTimeoutPending)
         XCTAssertNil(controller.retrySecondsRemaining)
         let frames = controller.simulatedTransmittedFrames
-        for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+        for _ in 0..<40 { controller.simulateAutomaticRefresh() }
         XCTAssertEqual(controller.simulatedTransmittedFrames, frames)
         XCTAssertFalse(frames.contains { $0.payload == [0x06, 0] || $0.payload == [0x04, 1] })
         controller.simulateProtocolMessage([0x07, 0, 1, 0x6D, 1])
@@ -2020,7 +2020,7 @@ final class SonyInitialHandshakeTests: XCTestCase {
                 deliverDiscovery(other.reply, type: other.type, to: controller)
             }
             drain(controller)
-            for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+            for _ in 0..<40 { controller.simulateAutomaticRefresh() }
             let blocker = try XCTUnwrap(controller.simulatedPendingFrame)
             XCTAssertNotEqual([blocker.type] + blocker.payload, [read.type] + read.query)
             controller.simulateDiscoveryReadTimeout(read.query, type: read.type)
@@ -2198,7 +2198,7 @@ final class SonyInitialHandshakeTests: XCTestCase {
             XCTAssertEqual(controller.earTipFitTransition?.phase, .finished)
             controller.dismissEarTipFit(id: fit)
             XCTAssertFalse(controller.isRunningHeadphoneTest)
-            for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+            for _ in 0..<40 { controller.simulateAutomaticRefresh() }
             drain(controller)
             XCTAssertEqual(discoveryTransmissionCount(read.query, type: read.type, on: controller), 2)
             XCTAssertNotNil(controller.simulatedDiscoveryReadTimeoutID(read.query, type: read.type))

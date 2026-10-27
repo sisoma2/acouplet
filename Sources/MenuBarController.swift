@@ -218,7 +218,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let headphones = devices.selectedController
         let identifier = ObjectIdentifier(headphones)
         if headphones.isReady, refreshedNoiseControllers.insert(identifier).inserted {
-            headphones.refreshNoiseControl()
+            headphones.refreshForPresentation()
         }
         guard retriedControllers.insert(identifier).inserted else { return }
         if !headphones.retryControlsIfNeeded() { retriedControllers.remove(identifier) }

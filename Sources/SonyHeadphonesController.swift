@@ -897,11 +897,11 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     private var deviceActionRecoveryAttempts = 0
     private var nextRetryDate: Date?
     private var syncPollCount = 0
-    /// Set by LDACController while LDAC is streaming to these headphones. The full settings refresh every 15 s
-    /// interrupted the stream, so while it is set the poll only reads the battery every `ldacBatteryPollInterval` ticks.
     var isLDACStreaming = false
-    private var ldacBatteryPollCount = 0
-    private static let ldacBatteryPollInterval = 10
+    private var batteryPollCount = 0
+    private static let batteryPollInterval = 10
+    private var batteryObservedAt: [[UInt8]: Date] = [:]
+    private var lastPresentationRefresh: Date?
     private var supportsTable2 = false
     private var supportFunctionsReadTransmitted = false
     @Published private var discoveryReads: [[UInt8]: DiscoveryRead] = [:]
@@ -1274,10 +1274,10 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         finishConnectionModeTimeout()
     }
 
-    func simulateAutomaticRefresh(deviceConnected: Bool? = nil) {
+    func simulateAutomaticRefresh(deviceConnected: Bool? = nil, at date: Date = Date()) {
         guard isSimulated else { return }
         if let deviceConnected, isDeviceConnected != deviceConnected { isDeviceConnected = deviceConnected }
-        poll()
+        poll(at: date)
     }
 
     @discardableResult
@@ -1894,7 +1894,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         }
     }
 
-    private func poll() {
+    private func poll(at date: Date = Date()) {
         guard !isSystemSleeping else { return }
         expireCaseBattery(at: Date())
         updateRetryCountdown()
@@ -1907,27 +1907,34 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         if noiseControl != nil, noiseControl?.canSet != true || unconfirmedChanges[.noiseControl] != nil {
             refreshNoiseControl()
         }
-        if isLDACStreaming {
-            syncPollCount = 0
-            ldacBatteryPollCount += 1
-            if ldacBatteryPollCount >= Self.ldacBatteryPollInterval {
-                ldacBatteryPollCount = 0
-                requestStreamingBattery()
-            }
-            return
-        }
-        ldacBatteryPollCount = 0
+        batteryPollCount += 1
+        let includeUnobserved = batteryPollCount >= Self.batteryPollInterval
+        if includeUnobserved { batteryPollCount = 0 }
+        requestAutomaticBattery(at: date, includeUnobserved: includeUnobserved)
+        guard !isLDACStreaming else { syncPollCount = 0; return }
         syncPollCount += 1
-        if syncPollCount >= 5 {
+        if syncPollCount >= 40 {
             syncPollCount = 0
-            requestCurrentSettings()
+            requestCurrentSettings(refreshBattery: false)
         }
     }
 
-    private func requestStreamingBattery() {
+    private func requestAutomaticBattery(at date: Date, includeUnobserved: Bool) {
         guard powerOffState == nil, !isRunningHeadphoneTest, connectionTransition?.isFinished != false, sourceTransition?.isFinished != false,
               multipointTransition?.isFinished != false, deviceActionTransition?.isFinished != false else { return }
-        requestBattery()
+        requestBattery(onlyIfStaleAt: date, includeUnobserved: includeUnobserved)
+    }
+
+    func refreshForPresentation() {
+        guard isReady, lastPresentationRefresh.map({ Date().timeIntervalSince($0) >= 15 }) ?? true else { return }
+        lastPresentationRefresh = Date()
+        if isLDACStreaming {
+            refreshNoiseControl()
+            requestAutomaticBattery(at: Date(), includeUnobserved: true)
+        } else {
+            requestCurrentSettings(refreshBattery: false)
+            requestAutomaticBattery(at: Date(), includeUnobserved: true)
+        }
     }
 
     func refreshNoiseControl() {
@@ -1938,14 +1945,14 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         requestNoiseControl(asmType)
     }
 
-    private func requestCurrentSettings() {
+    private func requestCurrentSettings(refreshBattery: Bool = true) {
         guard powerOffState == nil, !isRunningHeadphoneTest, stage == .ready, connectionTransition?.isFinished != false, sourceTransition?.isFinished != false,
               multipointTransition?.isFinished != false, deviceActionTransition?.isFinished != false else { return }
         for (key, read) in discoveryReads where read.transmitted && !read.resolved && !read.retried && read.timeout == nil {
             send(Array(key.dropFirst()), type: key[0], retryingDiscovery: true)
         }
         refreshNoiseControl()
-        requestBattery()
+        if refreshBattery { requestBattery() }
         refreshEqualizer()
         if firmwareVersion == nil { send([0x04, 0x02]) }
         requestAudioFeatures()
@@ -2379,16 +2386,24 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     }
 
     private func resetBatteryReads() {
+        batteryObservedAt = [:]
+        lastPresentationRefresh = nil
         for read in batteryReads.values { read.timeout?.cancel() }
         batteryReads = [:]
     }
 
-    private func requestBattery() {
-        if let legacyControls {
-            for query in legacyControls.batteryQueries { send(query) }
-            return
+    private func requestBattery(onlyIfStaleAt date: Date? = nil, includeUnobserved: Bool = true) {
+        let queries = legacyControls?.batteryQueries
+            ?? SonyBatteries.queryTypes(supportedFunctions: supportedFunctions).map { [0x22, $0] }
+        for query in queries {
+            if let date {
+                if let observedAt = batteryObservedAt[query] {
+                    let age = date.timeIntervalSince(observedAt)
+                    if (-5..<30).contains(age) { continue }
+                } else if !includeUnobserved { continue }
+            }
+            send(query)
         }
-        for type in SonyBatteries.queryTypes(supportedFunctions: supportedFunctions) { send([0x22, type]) }
     }
 
     func pairedDevices(automatically: Bool,
@@ -4881,6 +4896,10 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         noiseControl = nil
         noiseControlDisplayState = nil
         batteries = SonyBatteries()
+        batteryObservedAt = [:]
+        lastPresentationRefresh = nil
+        syncPollCount = 0
+        batteryPollCount = 0
         #if !ACOUPLET_PUBLIC_APIS_ONLY
         nativeBatterySnapshot = nil
         #endif
@@ -7127,6 +7146,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             if payload[1] != 0x02 { updated.caseBattery = batteries.caseBattery }
             batteries = updated
             let observedAt = Date()
+            batteryObservedAt[[0x10, payload[1]]] = observedAt
             lastSyncDate = observedAt
             recordLowBatteryReadings(type: payload[1], observedAt: observedAt)
             return
@@ -7432,6 +7452,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         if payload[1] == 0x01 || payload[1] == 0x09 { updateChargingCasePresence() }
         let observedAt = Date()
         lastSyncDate = observedAt
+        batteryObservedAt[query] = observedAt
         recordLowBatteryReadings(type: payload[1], observedAt: observedAt)
         #if !ACOUPLET_PUBLIC_APIS_ONLY
         guard !isSimulated, isReady, deviceModel == .wfXM5,

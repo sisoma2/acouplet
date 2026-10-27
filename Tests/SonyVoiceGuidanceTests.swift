@@ -285,7 +285,7 @@ final class SonyVoiceGuidanceTests: XCTestCase {
         defer { controller.simulateControlLoss() }
         controller.simulateDeviceConnection(named: "WF-1000XM5")
         XCTAssertEqual(controller.voiceGuidance.enabled, true)
-        for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+        for _ in 0..<40 { controller.simulateAutomaticRefresh() }
         acknowledgeSimulatedCommands(controller)
         XCTAssertEqual(controller.simulatedTransmittedFrames.filter { $0.type == 0x0E && $0.payload == [0x46, 1] }.count, 1)
         XCTAssertNil(controller.simulatedPendingFrame)

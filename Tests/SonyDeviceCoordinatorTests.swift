@@ -252,7 +252,7 @@ final class SonyDeviceCoordinatorTests: XCTestCase {
     }
 
     @MainActor
-    func testQuietPollsDoNotPublishAndFifthPollStillRequestsSettings() throws {
+    func testQuietPollsDoNotPublishAndBatteryAndSettingsUseSeparateCadences() throws {
         let coordinator = makeCoordinator()
         let first = try device(firstAddress, name: "WF-1000XM5", model: .wfXM5)
         coordinator.reconcileConnectedDevices([first])
@@ -261,7 +261,7 @@ final class SonyDeviceCoordinatorTests: XCTestCase {
         var changes = 0
         let observation = coordinator.objectWillChange.sink { changes += 1 }
         defer { observation.cancel() }
-        for _ in 0..<4 { controller.simulateAutomaticRefresh() }
+        for _ in 0..<9 { controller.simulateAutomaticRefresh() }
         XCTAssertEqual(changes, 0)
         XCTAssertTrue(controller.isDeviceConnected)
         XCTAssertNil(controller.retrySecondsRemaining)
@@ -269,6 +269,19 @@ final class SonyDeviceCoordinatorTests: XCTestCase {
         controller.simulateAutomaticRefresh()
         XCTAssertGreaterThan(changes, 0)
         XCTAssertFalse(controller.simulatedTransmittedFrames.isEmpty)
+        var acknowledgments = 0
+        while let frame = controller.simulatedPendingFrame, acknowledgments < 80 {
+            XCTAssertEqual(frame.payload.first, 0x22)
+            controller.simulateProtocolData(SonyFrameCodec.encode(type: 1, sequence: 1 - frame.sequence, payload: []))
+            acknowledgments += 1
+        }
+        XCTAssertNil(controller.simulatedPendingFrame)
+        let batteryWrites = controller.simulatedTransmittedFrames.count
+        for _ in 0..<29 { controller.simulateAutomaticRefresh() }
+        XCTAssertEqual(controller.simulatedTransmittedFrames.count, batteryWrites)
+        controller.simulateAutomaticRefresh()
+        XCTAssertGreaterThan(controller.simulatedTransmittedFrames.count, batteryWrites)
+        XCTAssertNotEqual(controller.simulatedPendingFrame?.payload.first, 0x22)
     }
 
     @MainActor

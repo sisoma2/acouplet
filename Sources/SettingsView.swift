@@ -40,6 +40,7 @@ struct SettingsView: View {
         .tint(settings.tintColor)
         .accessibilityIdentifier("settings.form")
         .onAppear {
+            headphones.refreshForPresentation()
             settings.refreshLaunchStatus()
             settings.refreshAppLanguage()
             #if DEBUG
@@ -64,12 +65,14 @@ struct SettingsView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
+                headphones.refreshForPresentation()
                 settings.refreshLaunchStatus()
                 settings.refreshAppLanguage()
             }
             else { headphones.invalidateSoundPressureReading() }
         }
         .onChange(of: settings.selectedSettingsPane) { _, pane in
+            headphones.refreshForPresentation()
             if pane != "headphones" { headphones.invalidateSoundPressureReading() }
         }
         .onChange(of: headphones.connectionTransition?.alert, initial: true) { _, alert in

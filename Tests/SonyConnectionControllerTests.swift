@@ -1894,7 +1894,9 @@ final class SonyConnectionControllerTests: XCTestCase {
             count += 1
         }
         controller.isLDACStreaming = false
-        for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+        for _ in 0..<39 { controller.simulateAutomaticRefresh() }
+        XCTAssertNil(controller.simulatedPendingFrame)
+        controller.simulateAutomaticRefresh()
         XCTAssertNotNil(controller.simulatedPendingFrame)
     }
 
@@ -2833,7 +2835,7 @@ final class SonyConnectionControllerTests: XCTestCase {
 
     @MainActor
     private func pollWithoutModeReadback(_ controller: SonyHeadphonesController) {
-        for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+        for _ in 0..<40 { controller.simulateAutomaticRefresh() }
         var count = 0
         var readbacks = 0
         while let frame = controller.simulatedPendingFrame, count < 80 {

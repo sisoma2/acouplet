@@ -75,7 +75,7 @@ final class SonyPowerFeaturesTests: XCTestCase {
         deliver([0x21, 0x0B, 20, 1, 0xE2, 0], to: controller)
         deliver([0x27, 0x0B, 0, 1], to: controller)
         let initialReads = controller.simulatedTransmittedFrames.filter { $0.type == 0x0C && $0.payload == [0x26, 0x0B] }.count
-        for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+        for _ in 0..<40 { controller.simulateAutomaticRefresh() }
         acknowledgeAll(controller)
         XCTAssertEqual(controller.simulatedTransmittedFrames.filter { $0.type == 0x0C && $0.payload == [0x26, 0x0B] }.count, initialReads + 1)
 
@@ -259,7 +259,7 @@ final class SonyPowerFeaturesTests: XCTestCase {
                 if reply != testCase.valid {
                     let expired = controller.powerFeatures
                     let reads = payloads(controller, type: testCase.type).filter { $0 == testCase.query }.count
-                    for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+                    for _ in 0..<40 { controller.simulateAutomaticRefresh() }
                     acknowledgeAll(controller)
                     XCTAssertEqual(payloads(controller, type: testCase.type).filter { $0 == testCase.query }.count, reads)
                     deliver(testCase.invalid, type: testCase.type, to: controller)

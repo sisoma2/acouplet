@@ -1093,6 +1093,15 @@ static BOOL SelfTest(void) {
     return MatrixChecks() && passed;
 }
 
+typedef NS_ENUM(NSUInteger, MediaIdlePhase) {
+    MediaIdlePlaying,
+    MediaIdleDraining,
+    MediaIdleSuspending,
+    MediaIdleSuspended,
+    MediaIdleResuming,
+    MediaIdleResumed
+};
+
 @interface DirectMediaProbe : NSObject
 @property BOOL closed;
 @property BOOL failed;
@@ -1114,6 +1123,8 @@ static BOOL SelfTest(void) {
 @property BOOL pcmStarted;
 @property BOOL pcmContinuous;
 @property BOOL pcmCanSkip;
+@property MediaIdlePhase idlePhase;
+@property BOOL idleHasAudio;
 @property NSUInteger pcmReserveBytes;
 @property BOOL pcmReady;
 @property BOOL pcmComplete;
@@ -1136,6 +1147,7 @@ static BOOL SelfTest(void) {
 @property(strong) NSOutputStream *output;
 - (void)pollInput;
 - (void)pollPCM;
+- (void)discardIdleSilence;
 - (NSUInteger)discardPCMFrames:(uint64_t)maximumFrames;
 - (BOOL)checkDegradation;
 @end
@@ -1196,10 +1208,34 @@ static BOOL SelfTest(void) {
     }
     return stopped;
 }
+- (void)discardIdleSilence {
+    NSUInteger silentBytes = 0;
+    NSUInteger capacity = self.profile.capacityBytes;
+    NSUInteger head = self.pcmHead;
+    NSUInteger buffered = self.pcmBytes;
+    const uint8_t *ring = self.pcmRing;
+    for (NSUInteger offset = 0; offset + PCMBlockBytes <= buffered; offset += PCMBlockBytes) {
+        const uint8_t *block = ring + (head + offset) % capacity;
+        BOOL silent = YES;
+        for (NSUInteger sample = 0; sample < 256; sample++) {
+            float value;
+            memcpy(&value, block + sample * sizeof(value), sizeof(value));
+            if (value != 0) { silent = NO; break; }
+        }
+        if (!silent) { self.idleHasAudio = YES; break; }
+        silentBytes += PCMBlockBytes;
+    }
+    NSUInteger bytes = PCMSkipBytes(silentBytes, self.pcmReserveBytes, UINT64_MAX);
+    self.pcmHead = (self.pcmHead + bytes) % self.profile.capacityBytes;
+    self.pcmBytes -= bytes;
+    self.pcmDiscardedBytes += bytes;
+}
+
 - (void)pollPCM {
     if (!self.pcmActive || self.pcmEnded || (self.failed && !self.pcmComplete)) return;
     while (YES) {
         uint8_t discarded[4096];
+        if (self.idlePhase && !self.pcmComplete) [self discardIdleSilence];
         if (!self.pcmStarted && !self.pcmComplete) {
             NSUInteger bytes = PCMSkipBytes(self.pcmBytes, self.profile.prefillBytes, UINT64_MAX);
             self.pcmHead = (self.pcmHead + bytes) % self.profile.capacityBytes;
@@ -1491,6 +1527,10 @@ static void PollLiveControls(DirectMediaProbe *probe) {
             probe.stopRequested = YES;
             probe.closeRequested |= [command isEqualToString:@"close"];
             printf("STOP_REQUESTED source=stdin close=%d\n", probe.closeRequested);
+        } else if ([command isEqualToString:@"idle-suspended"] && probe.idlePhase == MediaIdleSuspending) {
+            probe.idlePhase = MediaIdleSuspended;
+        } else if ([command isEqualToString:@"idle-resumed"] && probe.idlePhase == MediaIdleResuming) {
+            probe.idlePhase = MediaIdleResumed;
         } else if ([command hasPrefix:@"gain "]) {
             double gain = 0;
             if (ParseGain([command substringFromIndex:5], &gain)) {
@@ -1498,6 +1538,11 @@ static void PollLiveControls(DirectMediaProbe *probe) {
                 probe.gainRampRemaining = probe.profile.gainRampFrames;
                 probe.gainAckReady = NO;
                 printf("GAIN_REQUESTED gain=%.17g rampFrames=%u\n", gain, probe.profile.gainRampFrames);
+                if (probe.idlePhase) {
+                    probe.gain = gain;
+                    probe.gainRampRemaining = 0;
+                    printf("GAIN_APPLIED gain=%.17g\n", gain);
+                }
             } else {
                 printf("COMMAND_REJECTED reason=invalid-gain\n");
                 probe.failed = YES;
@@ -1608,6 +1653,8 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                 profile.adaptive, 1000.0 * probe.pcmReserveBytes / (profile.sampleRate * 8));
         }
         double paceStart = started;
+        double lastAudioAt = started;
+        double idleDeadline = INFINITY;
         probe.degradation = NewDegradation(started, profile.sampleRate, probe.pcmSkippedBytes);
         double deadline = continuous ? INFINITY : started + seconds + 1;
         __block double nextProgress = started + 1;
@@ -1793,13 +1840,53 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
             RecordSenderStage(&timing, SenderControl);
             PollLiveControls(probe);
             RecordSenderStage(&timing, SenderOther);
-            if (continuous && !probe.stopRequested && !finishing) [probe checkDegradation];
+            if (continuous && !probe.idlePhase && !probe.stopRequested && !finishing) [probe checkDegradation];
             if (probe.closed || probe.failed || probe.inputEnded) break;
             if (probe.stopRequested) { finishing = YES; targetSamples = sourceSamples; }
 #if ACOUPLET_LDAC_PROBE_ONLY
             else if (!continuous && sourceSamples == targetSamples) finishing = YES;
 #endif
             if (finishing && !sourceSamples) { flushed = YES; break; }
+            if (probe.idlePhase) {
+                probe.pcmCanSkip = NO;
+                [probe pollInput];
+                [probe pollPCM];
+                if (service()) { serviceStopped = YES; break; }
+                if (finishing && sendQueue.head == sendQueue.tail) { flushed = YES; break; }
+                if (probe.idlePhase == MediaIdleDraining && sendQueue.head == sendQueue.tail) {
+                    probe.idlePhase = MediaIdleSuspending;
+                    idleDeadline = MonotonicTime() + 30;
+                    printf("IDLE_READY drainedPackets=%lu\n", drainedPackets);
+                }
+                if (probe.idlePhase == MediaIdleSuspended && probe.idleHasAudio) {
+                    probe.idlePhase = MediaIdleResuming;
+                    idleDeadline = MonotonicTime() + 30;
+                    printf("IDLE_AUDIO_READY bufferedFrames=%lu\n", probe.pcmBytes / 8);
+                }
+                if ((probe.idlePhase == MediaIdleSuspending || probe.idlePhase == MediaIdleResuming) && MonotonicTime() >= idleDeadline) {
+                    printf("PCM_FAILED reason=idle-transition-timeout\n");
+                    probe.failed = YES;
+                    break;
+                }
+                if (probe.idlePhase != MediaIdleResumed) { WaitForSenderService(0.01); continue; }
+                if (!ResetEncoder(probe.encoder, probe.encoderMTU, profile)) {
+                    printf("ENCODER_FAILED reason=idle-resume\n");
+                    probe.failed = YES;
+                    break;
+                }
+                double now = MonotonicTime();
+                paceStart = now - (double)(generatedSamples + probe.pcmSkippedBytes / 8) / profile.sampleRate;
+                lastAudioAt = now;
+                lastServiceAt = now;
+                lastProgressAt = now;
+                nextProgress = now + 1;
+                maximumSchedulerGap = 0;
+                adaptivePolicy = LDACAdaptivePolicyInit();
+                probe.degradation = NewDegradation(now, profile.sampleRate, probe.pcmSkippedBytes);
+                probe.idlePhase = MediaIdlePlaying;
+                probe.idleHasAudio = NO;
+                printf("IDLE_RESUMED bufferedFrames=%lu\n", probe.pcmBytes / 8);
+            }
             if (sourceSamples > UINT64_MAX - 2048 || generatedSamples > UINT64_MAX - 2048 ||
                 probe.pcmSkippedBytes / 8 > UINT64_MAX - generatedSamples - 2048 || sentPackets == NSUIntegerMax) {
                 printf("ENCODER_FAILED reason=sample-counter-overflow\n");
@@ -1919,6 +2006,19 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                 probe.gain = currentGain;
                 probe.gainRampRemaining = rampRemaining;
                 if (wasRamping && !rampRemaining) probe.gainAckReady = YES;
+                BOOL hasAudio = NO;
+                for (NSUInteger sample = 0; sample < inputFrames * 2; sample++) {
+                    float value;
+                    memcpy(&value, probe.pcmRing + probe.pcmHead + sample * sizeof(value), sizeof(value));
+                    if (value != 0) { hasAudio = YES; break; }
+                }
+                if (hasAudio) lastAudioAt = MonotonicTime();
+                if (continuous && !hasAudio && sentPackets && sourceSamples == generatedSamples &&
+                    MonotonicTime() - lastAudioAt >= 30) {
+                    probe.idlePhase = MediaIdleDraining;
+                    probe.pcmCanSkip = NO;
+                    continue;
+                }
             }
             int frames = 0;
             BOOL flushing = finishing;

@@ -906,7 +906,7 @@ final class SonyTouchCustomizationControllerTests: XCTestCase {
             XCTAssertFalse(controller.canSetTouchAssignment(key: 0))
             XCTAssertNotNil(controller.noiseControlMode)
             if notification { deliver([0xF9, 3, 2, 0x20, 0x35], to: controller) }
-            for _ in 0..<5 { controller.simulateAutomaticRefresh() }
+            for _ in 0..<40 { controller.simulateAutomaticRefresh() }
             acknowledgeAll(controller)
             deliver([0xF7, 3, 2, 0x35], to: controller)
             acknowledgeAll(controller)
