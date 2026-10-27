@@ -162,7 +162,7 @@ final class LDACCallAudioTests: XCTestCase {
         XCTAssertEqual(audio.activity, .idle)
     }
 
-    func testRoutingWaitsForNativeDevicesAndRestoresBothDefaults() {
+    func testRoutingWaitsForNativeDevicesAndRestoresAllDefaults() {
         let hardware = Hardware()
         hardware.active = true
         hardware.available = false
@@ -170,13 +170,16 @@ final class LDACCallAudioTests: XCTestCase {
         audio.monitor(address: address)
         audio.routeForCall()
         XCTAssertTrue(hardware.selections.isEmpty)
+        XCTAssertTrue(hardware.systemSelections.isEmpty)
         hardware.available = true
         audio.refresh()
         XCTAssertEqual(hardware.input, "headset-input")
         XCTAssertEqual(hardware.output, "headset-output")
+        XCTAssertEqual(hardware.systemOutput, "headset-output")
         XCTAssertTrue(audio.finishCall())
         XCTAssertEqual(hardware.input, "built-in-input")
         XCTAssertEqual(hardware.output, "built-in-output")
+        XCTAssertEqual(hardware.systemOutput, "built-in-output")
     }
 
     func testManualRouteChangesDuringCallAreKept() {
@@ -187,12 +190,78 @@ final class LDACCallAudioTests: XCTestCase {
         audio.routeForCall()
         hardware.input = "usb-input"
         hardware.output = "usb-output"
+        hardware.systemOutput = "display-output"
         audio.refresh()
         XCTAssertEqual(hardware.input, "usb-input")
         XCTAssertEqual(hardware.output, "usb-output")
+        XCTAssertEqual(hardware.systemOutput, "display-output")
         XCTAssertTrue(audio.finishCall())
         XCTAssertEqual(hardware.input, "usb-input")
         XCTAssertEqual(hardware.output, "usb-output")
+        XCTAssertEqual(hardware.systemOutput, "display-output")
+    }
+
+    func testCallRoutesSoundEffectsEvenWhenMainOutputAlreadyUsesHeadset() {
+        let hardware = Hardware()
+        hardware.input = "headset-input"
+        hardware.output = "headset-output"
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        XCTAssertTrue(hardware.selections.isEmpty)
+        XCTAssertEqual(hardware.systemSelections, ["headset-output"])
+        XCTAssertTrue(audio.finishCall())
+        XCTAssertEqual(hardware.output, "headset-output")
+        XCTAssertEqual(hardware.systemOutput, "built-in-output")
+    }
+
+    func testCallRestoresSeparateSoundEffectsOutputAfterProfileChanges() {
+        let hardware = Hardware()
+        hardware.active = true
+        hardware.systemOutput = "display-output"
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        hardware.headsetOutput = "headset-call-output"
+        hardware.systemOutput = "built-in-output"
+        audio.refresh()
+        XCTAssertEqual(hardware.systemOutput, "headset-call-output")
+        XCTAssertTrue(audio.finishCall())
+        XCTAssertEqual(hardware.systemOutput, "display-output")
+    }
+
+    func testSoundEffectsRoutingRetriesAfterFailureWithoutLosingOriginalOutput() {
+        let hardware = Hardware()
+        hardware.active = true
+        hardware.rejectSystemWrites = true
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        XCTAssertEqual(hardware.input, "headset-input")
+        XCTAssertEqual(hardware.output, "headset-output")
+        XCTAssertEqual(hardware.systemOutput, "built-in-output")
+        XCTAssertNotNil(audio.issue)
+        hardware.rejectSystemWrites = false
+        audio.refresh()
+        XCTAssertEqual(hardware.systemOutput, "headset-output")
+        XCTAssertNil(audio.issue)
+        hardware.rejectSystemWrites = true
+        XCTAssertFalse(audio.finishCall())
+        hardware.rejectSystemWrites = false
+        XCTAssertTrue(audio.finishCall())
+        XCTAssertEqual(hardware.systemOutput, "built-in-output")
+    }
+
+    func testSoundEffectsDefaultIsCapturedBeforeMicrophoneChangesIt() {
+        let hardware = Hardware()
+        hardware.systemOutput = "display-output"
+        hardware.systemOutputAfterInputSelection = "headset-output"
+        let audio = hardware.audio()
+        audio.monitor(address: address)
+        audio.routeForCall()
+        XCTAssertEqual(hardware.systemOutput, "headset-output")
+        XCTAssertTrue(audio.finishCall())
+        XCTAssertEqual(hardware.systemOutput, "display-output")
     }
 
     func testHeadsetOutputIsSelectedAfterMicrophoneChangesTheOutputRoute() {
@@ -247,25 +316,30 @@ final class LDACCallAudioTests: XCTestCase {
         hardware.available = false
         hardware.input = "fallback-input"
         hardware.output = "fallback-output"
+        hardware.systemOutput = "fallback-output"
         audio.refresh()
         hardware.available = true
         audio.refresh()
         XCTAssertEqual(hardware.input, "headset-input")
         XCTAssertEqual(hardware.output, "headset-output")
+        XCTAssertEqual(hardware.systemOutput, "headset-output")
         XCTAssertTrue(audio.finishCall())
         XCTAssertEqual(hardware.input, "built-in-input")
         XCTAssertEqual(hardware.output, "built-in-output")
+        XCTAssertEqual(hardware.systemOutput, "built-in-output")
     }
 
     func testExistingHeadsetDefaultsAreNotChangedOrRestored() {
         let hardware = Hardware()
         hardware.input = "headset-input"
         hardware.output = "headset-output"
+        hardware.systemOutput = "headset-output"
         let audio = hardware.audio()
         audio.monitor(address: address)
         audio.routeForCall()
         XCTAssertTrue(audio.finishCall())
         XCTAssertTrue(hardware.selections.isEmpty)
+        XCTAssertTrue(hardware.systemSelections.isEmpty)
     }
 
     func testMonitoringFailuresDoNotReportIdle() {
@@ -314,6 +388,7 @@ final class LDACCallAudioTests: XCTestCase {
         XCTAssertNotNil(audio.issue)
         hardware.input = "usb-input"
         hardware.output = "usb-output"
+        hardware.systemOutput = "usb-output"
         XCTAssertTrue(audio.finishCall())
         XCTAssertEqual(hardware.input, "usb-input")
         XCTAssertEqual(hardware.output, "usb-output")
@@ -516,12 +591,16 @@ final class LDACCallAudioTests: XCTestCase {
         var unreadable = false
         var rejectWrites = false
         var rejectInputWrites = false
+        var rejectSystemWrites = false
         var input = "built-in-input"
         var output = "built-in-output"
+        var systemOutput = "built-in-output"
         var headsetOutput = "headset-output"
         var outputAfterInputSelection: String?
+        var systemOutputAfterInputSelection: String?
         var time: TimeInterval = 0
         var selections: [String] = []
+        var systemSelections: [String] = []
 
         func audio() -> LDACCallAudio {
             LDACCallAudio(access: .init(microphoneIsActive: {
@@ -532,10 +611,15 @@ final class LDACCallAudioTests: XCTestCase {
                 self.input = $0
                 self.selections.append($0)
                 if $0 == "headset-input", let output = self.outputAfterInputSelection { self.output = output }
+                if $0 == "headset-input", let output = self.systemOutputAfterInputSelection { self.systemOutput = output }
             }, defaultOutputUID: { self.output }, headsetOutputUID: { _ in self.available ? self.headsetOutput : nil }, selectOutput: {
                 if self.rejectWrites { throw Failure() }
                 self.output = $0
                 self.selections.append($0)
+            }, defaultSystemOutputUID: { self.systemOutput }, selectSystemOutput: {
+                if self.rejectWrites || self.rejectSystemWrites { throw Failure() }
+                self.systemOutput = $0
+                self.systemSelections.append($0)
             }, microphoneActivity: observations == nil ? nil : { self.observations ?? [] }), pollsAutomatically: false, now: { self.time })
         }
 

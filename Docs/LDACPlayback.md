@@ -190,12 +190,15 @@ readiness, not audible resilience. Neither a smaller sender reserve nor a manual
 offset removes receiver buffering.
 
 The default microphone policy restores normal headset call audio for microphone
-activity, automatically selecting the same headset for both microphone input and
-audio output when its Bluetooth devices return. The output is selected after the
-microphone so activating the call profile does not leave audio on another output.
+activity, automatically selecting the same headset for microphone input, main
+audio output and the macOS sound-effects output when its Bluetooth devices return.
+This includes application sounds that use the sound-effects output, such as call
+mute and unmute feedback. Both outputs are selected after the microphone so
+activating the call profile does not leave audio on another output.
 Routing retries when the headset devices disappear or change during reconnection.
 After the call, the previous devices are restored before LDAC resumes; manual input
-and output changes made during the call are preserved while the headset devices
+and output changes, including a separate sound-effects output, made during the call
+are preserved while the headset devices
 remain available. Separate microphone mode selects a chosen built-in or USB input
 and keeps LDAC only when that input is appropriate; headset microphone use still
 requires handoff. Manual mode exposes explicit pause/resume controls while preserving headset

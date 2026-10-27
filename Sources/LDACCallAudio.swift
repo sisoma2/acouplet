@@ -16,6 +16,8 @@ final class LDACCallAudio: ObservableObject {
         var defaultOutputUID: () throws -> String?
         var headsetOutputUID: (String) throws -> String?
         var selectOutput: (String) throws -> Void
+        var defaultSystemOutputUID: () throws -> String?
+        var selectSystemOutput: (String) throws -> Void
         var microphoneActivity: (() throws -> [LDACMicrophoneActivity])? = nil
 
         static var live: Access {
@@ -27,6 +29,9 @@ final class LDACCallAudio: ObservableObject {
                    headsetOutputUID: { try LDACCallHardware.headsetUID(address: $0, scope: kAudioObjectPropertyScopeOutput) },
                    selectOutput: { try LDACCallHardware.select(uid: $0, selector: kAudioHardwarePropertyDefaultOutputDevice,
                                                               scope: kAudioObjectPropertyScopeOutput) },
+                   defaultSystemOutputUID: { try LDACCallHardware.defaultUID(selector: kAudioHardwarePropertyDefaultSystemOutputDevice) },
+                   selectSystemOutput: { try LDACCallHardware.select(uid: $0, selector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+                                                                    scope: kAudioObjectPropertyScopeOutput) },
                    microphoneActivity: LDACCallHardware.microphoneActivity)
         }
     }
@@ -53,6 +58,9 @@ final class LDACCallAudio: ObservableObject {
     private var routedOutputUID: String?
     private var savedOutputUID: String?
     private var selectedOutputUID: String?
+    private var routedSystemOutputUID: String?
+    private var savedSystemOutputUID: String?
+    private var selectedSystemOutputUID: String?
 
     init(access: Access = .live, pollsAutomatically: Bool = true,
          now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
@@ -96,6 +104,9 @@ final class LDACCallAudio: ObservableObject {
         routedOutputUID = nil
         savedOutputUID = nil
         selectedOutputUID = nil
+        routedSystemOutputUID = nil
+        savedSystemOutputUID = nil
+        selectedSystemOutputUID = nil
         idleSince = nil
         hasObservedActivity = false
         setIssue(nil)
@@ -188,6 +199,10 @@ final class LDACCallAudio: ObservableObject {
                try access.defaultOutputUID() == selectedOutputUID {
                 try access.selectOutput(savedOutputUID)
             }
+            if let savedSystemOutputUID, let selectedSystemOutputUID,
+               try access.defaultSystemOutputUID() == selectedSystemOutputUID {
+                try access.selectSystemOutput(savedSystemOutputUID)
+            }
             wantsHeadsetInput = false
             routedInputUID = nil
             savedInputUID = nil
@@ -195,6 +210,9 @@ final class LDACCallAudio: ObservableObject {
             routedOutputUID = nil
             savedOutputUID = nil
             selectedOutputUID = nil
+            routedSystemOutputUID = nil
+            savedSystemOutputUID = nil
+            selectedSystemOutputUID = nil
             setIssue(nil)
             return true
         } catch {
@@ -210,9 +228,13 @@ final class LDACCallAudio: ObservableObject {
     private func selectHeadsetAudio() throws {
         guard let address else { return }
         let previousOutput = try access.defaultOutputUID()
+        let previousSystemOutput = try access.defaultSystemOutputUID()
         var inputError: Error?
         do {
-            if try selectHeadsetInput(address: address) { routedOutputUID = nil }
+            if try selectHeadsetInput(address: address) {
+                routedOutputUID = nil
+                routedSystemOutputUID = nil
+            }
         } catch { inputError = error }
         if let uid = try access.headsetOutputUID(address) {
             if routedOutputUID != uid {
@@ -223,7 +245,18 @@ final class LDACCallAudio: ObservableObject {
                 selectedOutputUID = uid
                 routedOutputUID = uid
             }
-        } else { routedOutputUID = nil }
+            if routedSystemOutputUID != uid {
+                if try access.defaultSystemOutputUID() != uid {
+                    try access.selectSystemOutput(uid)
+                }
+                if selectedSystemOutputUID == nil, previousSystemOutput != uid { savedSystemOutputUID = previousSystemOutput }
+                selectedSystemOutputUID = uid
+                routedSystemOutputUID = uid
+            }
+        } else {
+            routedOutputUID = nil
+            routedSystemOutputUID = nil
+        }
         if let inputError { throw inputError }
     }
 
@@ -372,6 +405,11 @@ enum LDACCallHardware {
         for device in try objects(system, selector: kAudioHardwarePropertyDevices) {
             guard (try? string(device, selector: kAudioDevicePropertyDeviceUID)) == uid else { continue }
             guard try hasChannels(device, scope: scope) else { throw HardwareError() }
+            if selector == kAudioHardwarePropertyDefaultSystemOutputDevice {
+                let eligible: UInt32 = try read(device, selector: kAudioDevicePropertyDeviceCanBeDefaultSystemDevice,
+                                                scope: scope, initial: 0)
+                guard eligible == 1 else { throw HardwareError() }
+            }
             var property = property(selector)
             var value = device
             guard AudioObjectSetPropertyData(system, &property, 0, nil, UInt32(MemoryLayout.size(ofValue: value)), &value) == noErr else {
