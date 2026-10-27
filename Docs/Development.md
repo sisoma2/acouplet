@@ -55,7 +55,10 @@ format checks above pass before building and installing any required update.
 Skip Ruff lint and formatting checks when no Python files change. Ruff targets
 Python 3.9 and excludes build outputs and vendored code. Configure editor
 integrations to use `.venv/bin/ruff` so they use the same version as the command
-line.
+line. The shared VS Code settings already set `ruff.path` to this executable.
+Run `uv sync --locked` before using the Ruff extension in a fresh checkout.
+If the extension reports a required-version mismatch, run `Ruff: Restart Server`
+from the Command Palette to apply the workspace path.
 
 Xcode phases, packaging scripts and the isolated GUI-test VM continue to use
 their existing Python interpreters. They do not require uv or Ruff. Python
