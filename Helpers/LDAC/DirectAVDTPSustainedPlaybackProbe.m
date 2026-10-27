@@ -437,6 +437,11 @@ static NSData *PeerReply(DirectPlaybackProbe *probe, NSData *packet) {
                 [reply appendData:ServiceBytes(probe.sampleRate, bytes[1] == 12 || (bytes[1] == 4 && probe.delayReporting))];
                 return reply;
             }
+        case 6:
+            if (packet.length != 3) { error = 0x11; break; }
+            if (bytes[2] != 0x04) { error = 0x12; break; }
+            error = 0x31;
+            break;
         case 8:
             if (packet.length != 3) { error = 0x11; break; }
             if (bytes[2] != 0x04) { error = 0x12; break; }

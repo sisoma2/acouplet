@@ -400,6 +400,57 @@ final class LDACDefaultCodecTests: XCTestCase {
         XCTAssertEqual(ldac.simulatedRequestedAddress, address)
     }
 
+    func testFailedAutomaticStartDoesNotRetryItsOwnRestoredConnection() async throws {
+        let (ldac, headphones, route) = try prepared()
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+        let originalSession = headphones.notificationSession
+
+        headphones.simulateControlLoss(deviceConnected: false)
+        headphones.simulateDeviceConnection(named: "WF-1000XM5", simulatedAddress: address, galleryModel: .wfXM5)
+        XCTAssertNotEqual(headphones.notificationSession, originalSession)
+        ldac.simulateSessionFinished(.init(message: "Startup failed", canRetry: false, requiresAttention: true,
+            targetDisconnected: false, waitForReconnect: false))
+        await drainTasks()
+        route.simulateRoute(sonyOutput)
+        ldac.refreshPreferredCodec(resetAttempts: true)
+        await drainTasks()
+
+        XCTAssertEqual(ldac.state, .failed("Startup failed"))
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+        XCTAssertNil(ldac.simulatedRequestedAddress)
+
+        headphones.simulateControlLoss()
+        headphones.simulateDeviceConnection(named: "WF-1000XM5", simulatedAddress: address, galleryModel: .wfXM5)
+        route.simulateRoute(sonyOutput)
+        await drainTasks()
+        XCTAssertEqual(ldac.state, .failed("Startup failed"))
+        XCTAssertEqual(ldac.simulatedStarts, [address])
+
+        headphones.simulateControlLoss(deviceConnected: false)
+        await drainTasks()
+        headphones.simulateDeviceConnection(named: "WF-1000XM5", simulatedAddress: address, galleryModel: .wfXM5)
+        route.simulateRoute(sonyOutput)
+        await drainTasks()
+        XCTAssertEqual(ldac.simulatedStarts, [address, address])
+    }
+
+    func testManualRequestRetriesAfterAutomaticStartupFailure() async throws {
+        let (ldac, headphones, _) = try prepared()
+        defer { ldac.stop(); headphones.simulateControlLoss() }
+        await drainTasks()
+        ldac.simulateSessionFinished(.init(message: "Startup failed", canRetry: false, requiresAttention: true,
+            targetDisconnected: false, waitForReconnect: false))
+        await drainTasks()
+
+        ldac.setEnabled(true, forAddress: address, directly: true)
+        await drainTasks()
+
+        XCTAssertEqual(ldac.simulatedStarts, [address, address])
+        XCTAssertEqual(ldac.simulatedRequestedAddress, address)
+    }
+
     func testAutomaticallyStartsWithoutTheMatchingBluetoothOutput() async throws {
         for output in [nil, output(uid: "built-in-output", transport: kAudioDeviceTransportTypeBuiltIn),
                        output(uid: "02:53:4F:4E:59:02", transport: kAudioDeviceTransportTypeBluetooth),

@@ -187,6 +187,7 @@ final class Controller: ObservableObject {
     func refreshPreferredCodec(resetAttempts: Bool = false) {}
     var codecPreferences: [String: Bool] = [:]
     var automaticStartAttempts: [ObjectIdentifier: UInt64] = [:]
+    var automaticStartFailures: Set<ObjectIdentifier> = []
     let localBluetoothAddress: () -> String? = { IOBluetoothHostController.default()?.addressAsString() }
     var isSuspendedForMicrophone = false
     func checkMicrophone() -> Bool { synchronizeMicrophoneHandoff() }

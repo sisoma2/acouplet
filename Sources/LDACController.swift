@@ -42,6 +42,8 @@ final class LDACController: ObservableObject {
     private let preferredConfiguration: (String) -> LDACConfiguration?
     private var codecPreferences: [String: Bool]
     private var automaticStartAttempts: [ObjectIdentifier: UInt64] = [:]
+    private var automaticStartFailures: Set<ObjectIdentifier> = []
+    private var automaticConnectionObservations: [ObjectIdentifier: AnyCancellable] = [:]
     private var automaticSelectionAddress: String?
     private let isClassicConnected: (String) -> Bool
     private let localBluetoothAddress: () -> String?
@@ -220,7 +222,13 @@ final class LDACController: ObservableObject {
     private func observeDisconnectionRequests(_ controllers: [SonyHeadphonesController]) {
         let identifiers = Set(controllers.map(ObjectIdentifier.init))
         disconnectionObservations = disconnectionObservations.filter { identifiers.contains($0.key) }
+        automaticConnectionObservations = automaticConnectionObservations.filter { identifiers.contains($0.key) }
+        automaticStartFailures.formIntersection(identifiers)
         for controller in controllers where disconnectionObservations[ObjectIdentifier(controller)] == nil {
+            let identifier = ObjectIdentifier(controller)
+            automaticConnectionObservations[identifier] = controller.$isDeviceConnected.removeDuplicates().dropFirst().sink { [weak self] connected in
+                if !connected { self?.automaticStartFailures.remove(identifier) }
+            }
             controller.preferredAudioConnection = { [weak self, weak controller] in
                 guard let self, let controller else { return false }
                 return self.connectDirectly(forAddress: controller.address)
@@ -493,7 +501,9 @@ final class LDACController: ObservableObject {
         if automaticSelectionAddress == address {
             automaticSelectionAddress = nil
             automaticStartAttempts.removeValue(forKey: ObjectIdentifier(headphones))
+            automaticStartFailures.remove(ObjectIdentifier(headphones))
         }
+        guard !automaticStartFailures.contains(ObjectIdentifier(headphones)) else { return }
         guard automaticStartAttempts[ObjectIdentifier(headphones)] != headphones.notificationSession else { return }
         if canStartDirectly(forAddress: address) {
             setEnabled(true, forAddress: address, configuration: configuration, directly: true)
@@ -513,6 +523,7 @@ final class LDACController: ObservableObject {
         defaults?.set(codecPreferences, forKey: "ldac.codecPreferences")
         if let headphones = devices?.controller(for: address) {
             automaticStartAttempts[ObjectIdentifier(headphones)] = headphones.notificationSession
+            automaticStartFailures.remove(ObjectIdentifier(headphones))
         }
         if enabled {
             guard requestedAddress != address else { return }
@@ -1972,7 +1983,13 @@ final class LDACController: ObservableObject {
             self.retryAfterRestoration = false
             let playbackSettingsRestartAddress = self.playbackSettingsRestartAddress
             self.playbackSettingsRestartAddress = nil
+            if let address = self.targetAddress, let headphones = self.devices?.controller(for: address) {
+                self.automaticStartAttempts[ObjectIdentifier(headphones)] = headphones.notificationSession
+            }
             if !messages.isEmpty {
+                if let address = self.targetAddress, let headphones = self.devices?.controller(for: address), headphones.isDeviceConnected {
+                    self.automaticStartFailures.insert(ObjectIdentifier(headphones))
+                }
                 self.requestedAddress = nil
                 self.state = .failed(messages.joined(separator: " "))
             } else if let next = self.requestedAddress {
@@ -1982,9 +1999,6 @@ final class LDACController: ObservableObject {
                     if retry { self.scheduleRecovery(next) }
                 } else { self.startWhenMicrophoneIsIdle(next) }
             } else {
-                if let address = self.targetAddress, let headphones = self.devices?.controller(for: address) {
-                    self.automaticStartAttempts[ObjectIdentifier(headphones)] = headphones.notificationSession
-                }
                 self.targetAddress = nil
                 self.state = .off
             }

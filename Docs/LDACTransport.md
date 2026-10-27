@@ -4,6 +4,31 @@
 
 Run shell commands from the repository root.
 
+## Competing headset setup requests
+
+Acouplet owns stream setup for LDAC playback. If the headset sends its own
+AVDTP Open request on the signaling channel, Acouplet replies with Bad State
+and continues waiting for its own setup response. Invalid request lengths and
+endpoints receive their corresponding protocol errors. A competing request does
+not abort setup or disconnect the headset.
+
+On 2026-10-27, a WH-1000XM5 sent Open immediately after accepting Acouplet's
+configuration and reporting its delay. The previously unhandled request aborted
+LDAC setup, restored ordinary audio and triggered another automatic start because
+restoration had changed the control session. Completed cleanup now records the
+restored session as already attempted, including after failure. A later headphone
+connection or an explicit LDAC request can try again; restoration alone does not
+renew the automatic attempt. Reopening only the Sony controls also preserves
+the failure guard. Offline regressions replay this request ordering and exercise
+failure followed by restoration, control reconnection, a later Bluetooth connection
+and an explicit manual retry.
+
+Installed private-signed Release build 227 on macOS 26.7.1 (25G241) resumed
+96 kHz / 990 kbps LDAC through the update handoff and sustained more than
+70 seconds with zero skipped frames or reconnects. A quiet system sound produced
+nonzero captured PCM. The driver remained current and both changed executables
+matched the Release build. Audible playback still requires listener confirmation.
+
 ## Sender timing and bounded packet submission
 
 Adaptive quality starts at the connection bitrate and requires 15 seconds of

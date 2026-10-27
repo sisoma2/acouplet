@@ -242,6 +242,107 @@ with tempfile.TemporaryDirectory(prefix="acouplet-signaling-startup-") as direct
         check=True,
     )
     subprocess.run([str(binary)], check=True)
+    peer_source = Path(directory) / "PeerCommands.m"
+    peer_binary = peer_source.with_suffix("")
+    peer_source.write_text(
+        r"""#import <Foundation/Foundation.h>
+#include <assert.h>
+@interface DirectPlaybackProbe : NSObject
+@property BOOL configured, configurationSent, streamOpened, delayReporting, peerStopped;
+@property BOOL closed, failed, lastRejected, stdinEnded, stopRequested, protocolCleanup;
+@property uint32_t sampleRate;
+@property uint16_t realCID;
+@property NSMutableData *pending;
+@end
+@implementation DirectPlaybackProbe
+@end
+static NSMutableArray<NSData *> *incoming, *outgoing;
+static NSArray<NSData *> *nextReplies;
+static double elapsed;
+static double MonotonicTime(void) { return elapsed; }
+static uint8_t RateBit(uint32_t rate) { assert(rate == 96000); return 4; }
+static BOOL SendSignal(DirectPlaybackProbe *probe, NSData *packet) {
+    [outgoing addObject:packet];
+    if (!(((const uint8_t *)packet.bytes)[0] & 15)) {
+        for (NSData *reply in nextReplies) {
+            [incoming addObject:reply];
+            [probe.pending appendData:reply];
+        }
+        nextReplies = nil;
+    }
+    return YES;
+}
+static NSData *FramedReply(DirectPlaybackProbe *probe, double deadline) {
+    if (!incoming.count) { elapsed = deadline; return nil; }
+    NSData *packet = incoming.firstObject;
+    [incoming removeObjectAtIndex:0];
+    [probe.pending replaceBytesInRange:NSMakeRange(0, packet.length) withBytes:NULL length:0];
+    return packet;
+}
+static NSData *Packet(NSArray<NSNumber *> *bytes) {
+    NSMutableData *packet = [NSMutableData data];
+    for (NSNumber *value in bytes) { uint8_t byte = value.unsignedCharValue; [packet appendBytes:&byte length:1]; }
+    return packet;
+}
+"""
+        + source[
+            source.index("static NSData *ServiceBytes(") : source.index(
+                "static BOOL WaitControl("
+            )
+        ]
+        + r"""
+int main(void) {
+    @autoreleasepool {
+        DirectPlaybackProbe *probe = [DirectPlaybackProbe new];
+        probe.sampleRate = 96000;
+        probe.delayReporting = YES;
+        probe.pending = [NSMutableData data];
+        incoming = [NSMutableArray array];
+        outgoing = [NSMutableArray array];
+        uint8_t transaction = 5;
+        nextReplies = @[Packet(@[@0x52, @3]), Packet(@[@0x60, @13, @4, @7, @0xD0]), Packet(@[@0x70, @6, @4])];
+        assert(EmptyAcceptance(Query(probe, &transaction, 3, [NSData data])));
+        probe.configured = YES;
+        nextReplies = @[Packet(@[@0x62, @6])];
+        assert(EmptyAcceptance(Query(probe, &transaction, 6, Packet(@[@12]))));
+        assert([outgoing[1] isEqualToData:Packet(@[@0x62, @13])]);
+        assert([outgoing[2] isEqualToData:Packet(@[@0x73, @6, @0x31])]);
+        assert([outgoing[3] isEqualToData:Packet(@[@0x60, @6, @12])]);
+        assert(!probe.failed && !probe.peerStopped && !probe.lastRejected);
+        probe.streamOpened = YES;
+        nextReplies = @[Packet(@[@0x72, @7])];
+        assert(EmptyAcceptance(Query(probe, &transaction, 7, Packet(@[@12]))));
+        for (NSNumber *configured in @[@NO, @YES]) {
+            probe.configured = configured.boolValue;
+            assert([PeerReply(probe, Packet(@[@0x70, @6, @4])) isEqualToData:Packet(@[@0x73, @6, @0x31])]);
+            assert([PeerReply(probe, Packet(@[@0x70, @6, @8])) isEqualToData:Packet(@[@0x73, @6, @0x12])]);
+            assert([PeerReply(probe, Packet(@[@0x70, @6])) isEqualToData:Packet(@[@0x73, @6, @0x11])]);
+            assert([PeerReply(probe, Packet(@[@0x70, @6, @4, @0])) isEqualToData:Packet(@[@0x73, @6, @0x11])]);
+        }
+        probe.configured = YES;
+        nextReplies = @[Packet(@[@0x80, @6, @4]), Packet(@[@0x83, @6, @0x31])];
+        assert(!Query(probe, &transaction, 6, Packet(@[@12])) && probe.lastRejected);
+        assert(!probe.failed && !probe.peerStopped);
+        puts("PASS captured WH-1000XM5 startup: delay report and competing Open rejected without aborting local Open/Start; malformed endpoints and local rejection preserved");
+    }
+}
+"""
+    )
+    subprocess.run(
+        [
+            "xcrun",
+            "clang",
+            "-fobjc-arc",
+            "-Werror",
+            "-framework",
+            "Foundation",
+            str(peer_source),
+            "-o",
+            str(peer_binary),
+        ],
+        check=True,
+    )
+    subprocess.run([str(peer_binary)], check=True)
 for probe_only in ["0", "1"]:
     subprocess.run(
         [
