@@ -53,9 +53,12 @@ After editing Python files, run `uv run --locked ruff check .` and
 `uv run --locked ruff format .`, fix all lint errors, and confirm the lint and
 format checks above pass before building and installing any required update.
 Skip Ruff lint and formatting checks when no Python files change. Ruff targets
-Python 3.9 and excludes build outputs and vendored code. Configure editor
-integrations to use `.venv/bin/ruff` so they use the same version as the command
-line. The shared VS Code settings already set `ruff.path` to this executable.
+the Python 3.15 development interpreter and excludes build outputs and vendored
+code. `requires-python` retains the Python 3.9 minimum for scripts run with the
+system interpreter; the Release workflow checks that compatibility separately.
+Configure editor integrations to use `.venv/bin/ruff` so they use the same
+version as the command line. The shared VS Code settings already set `ruff.path`
+to this executable.
 Run `uv sync --locked` before using the Ruff extension in a fresh checkout.
 If the extension reports a required-version mismatch, run `Ruff: Restart Server`
 from the Command Palette to apply the workspace path.
