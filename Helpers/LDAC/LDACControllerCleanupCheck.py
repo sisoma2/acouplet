@@ -86,6 +86,7 @@ final class Device: ObservableObject {
     var systemFeatures = SystemFeatures()
     @Published var isReady: Bool
     var isReconnectPaused = false
+    var isWaitingForBluetoothConnection = false
     var pendingControlTransition: String?
     struct Multipoint { var selectedSource: String? }
     var multipoint = Multipoint()

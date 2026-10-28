@@ -402,6 +402,7 @@ final class LDACNativeSession: @unchecked Sendable {
         case audioCaptureAccess(LDACAudioCaptureAccess)
         case failed(String)
         case connectionLost(String)
+        case deviceDisconnected
         case finished(Completion)
     }
 
@@ -480,6 +481,7 @@ final class LDACNativeSession: @unchecked Sendable {
     /// means the current connection is not the one this session owns (L8).
     private var ownedACLEnded = false
     private var originalConnectionEnded = false
+    private var disconnectionReported = false
     private var connectorStopSent = false
     private var connectorTerminationSent = false
     private var connectorStopDeadline = DispatchTime.distantFuture
@@ -813,6 +815,7 @@ final class LDACNativeSession: @unchecked Sendable {
                 bluetoothPowerOffConfirmed = true
                 ownedACLEnded = true
                 originalConnectionEnded = true
+                reportDeviceDisconnection()
                 record("BLUETOOTH_POWER_OFF ownedChannelsClosed=1 \(line)")
                 if !shouldStop { connectionLost("The Bluetooth radio powered off.") }
             }
@@ -873,6 +876,9 @@ final class LDACNativeSession: @unchecked Sendable {
                 LDACChannelGate.captures("^CONNECTION_DISCONNECTED handle=([0-9A-Fa-f]{4}) connected=[01]$", line)?.first.flatMap({ Int($0, radix: 16) }) == connectorHandle) {
                 originalConnectionEnded = true
                 connectorSettled = true
+                if children["restore-disconnect"] == nil, !lock.withLock({ requestedStop }) {
+                    reportDeviceDisconnection()
+                }
                 if !shouldStop { connectionLost("The paired Bluetooth audio connection ended.") }
             }
             if line.hasPrefix("CONNECT_DISARMED explicit=1 ") || line.hasPrefix("CONNECT_CANCELED ") &&
@@ -892,6 +898,7 @@ final class LDACNativeSession: @unchecked Sendable {
         } else if source == "restore-disconnect" {
             if LDACChannelGate.captures("^BEFORE time=[0-9.]+ address=\(LDACChannelGate.addressPattern(address.replacingOccurrences(of: ":", with: "-"))) paired=[01] connected=(0)$", line) != nil {
                 targetUnavailableBeforeRestore = true
+                if !lock.withLock({ requestedStop }) { reportDeviceDisconnection() }
             }
             if line == "RESTORE_DISCONNECTED disconnected=1" { restoreDisconnected = true }
             if line == "RESTORE_PRESERVED native=1 connected=1" { nativeAudioRestored = true }
@@ -1518,6 +1525,12 @@ final class LDACNativeSession: @unchecked Sendable {
         restoreDeadline = DispatchTime.now() + 52
         restoreTerminationSent = false
         restoring = true
+    }
+
+    private func reportDeviceDisconnection() {
+        guard !disconnectionReported else { return }
+        disconnectionReported = true
+        emit(.deviceDisconnected)
     }
 
     private func connectionLost(_ message: String) {

@@ -1,8 +1,107 @@
+import Combine
 import XCTest
 import IOBluetooth
 @testable import Acouplet
 
 final class SonyConnectionControllerTests: XCTestCase {
+    @MainActor
+    func testInventoryDisconnectClearsFailureFromEarlierControlClosure() async {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        controller.simulateDeviceConnection(named: "WH-1000XM5")
+        let device = ServiceDiscoveryDevice()
+        device.reportedName = "WH-1000XM5"
+        device.reportedAddress = controller.address
+        controller.simulateSelectedDevice(device)
+        let channel = DeferredRFCOMMChannel()
+        controller.simulateClassicTransport(channel)
+
+        controller.classicChannelClosed(channel)
+        await fulfillment(of: [channel.closeFinished], timeout: 2)
+        XCTAssertEqual(controller.linkState, .controlBusy)
+        XCTAssertNotNil(controller.lastErrorMessage)
+        controller.simulateScheduledRetry()
+        device.connected = false
+
+        controller.simulateInventoryRefresh([device], shouldOpenLink: true)
+
+        XCTAssertEqual(controller.linkState, .disconnected)
+        XCTAssertFalse(controller.isDeviceConnected)
+        XCTAssertNil(controller.lastErrorMessage)
+        XCTAssertNil(controller.retrySecondsRemaining)
+        XCTAssertNil(controller.simulatedPendingFrame)
+    }
+
+    @MainActor
+    func testSystemDisconnectRetiresControlsAndRetriesUntilBluetoothConnectsAgain() throws {
+        for bluetoothLE in [false, true] {
+            let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+            defer { controller.simulateControlLoss() }
+            controller.simulateDeviceConnection(named: "WF-1000XM5")
+            let device = ServiceDiscoveryDevice()
+            controller.simulateSelectedDevice(device)
+            if bluetoothLE {
+                XCTAssertTrue(controller.simulateBLEReconnectWait(automatic: false, priorBluetoothLE: true, classicConnected: true))
+                controller.simulateBluetoothLEReady(identifier: UUID(), name: device.name)
+            }
+            controller.simulateScheduledRetry()
+            let session = controller.simulatedControlSession
+            var disconnections = 0
+            let observation = controller.disconnectionRequests.sink { disconnections += 1 }
+            device.connected = false
+
+            controller.bluetoothDeviceDisconnected()
+
+            XCTAssertEqual(disconnections, 1)
+            XCTAssertEqual(device.closeCount, 0)
+            XCTAssertFalse(controller.isDeviceConnected)
+            XCTAssertFalse(controller.hasOpenControlTransport)
+            XCTAssertFalse(controller.usesBluetoothLE)
+            XCTAssertEqual(controller.linkState, .disconnected)
+            XCTAssertTrue(controller.isReconnectPaused)
+            XCTAssertGreaterThan(controller.simulatedControlSession, session)
+            XCTAssertNil(controller.simulatedPendingFrame)
+            XCTAssertFalse(controller.simulatedHandshakeTimeoutPending)
+            XCTAssertNil(controller.retrySecondsRemaining)
+            let disconnectedSession = controller.simulatedControlSession
+            controller.bluetoothDeviceDisconnected()
+            for _ in 0..<3 {
+                controller.simulateAutomaticRefresh()
+                controller.setReconnectAutomatically(true)
+                controller.refresh()
+            }
+            XCTAssertEqual(controller.simulatedControlSession, disconnectedSession)
+            XCTAssertEqual(device.classicOpenCount, 0)
+            XCTAssertFalse(controller.hasPendingManualBLEConnection)
+            XCTAssertEqual(disconnections, 1)
+
+            device.connected = true
+            controller.bluetoothDeviceConnected()
+
+            XCTAssertFalse(controller.isReconnectPaused)
+            XCTAssertEqual(controller.linkState, .handshaking)
+            XCTAssertNotNil(controller.simulatedPendingFrame)
+            observation.cancel()
+        }
+    }
+
+    @MainActor
+    func testSystemDisconnectPreservesConnectionModeRecovery() {
+        let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)
+        defer { controller.simulateControlLoss() }
+        controller.simulateDeviceConnection(named: "WF-1000XM5")
+        controller.setConnectionMode(.lowLatency)
+        controller.simulateControlLoss()
+        XCTAssertEqual(controller.connectionTransition?.phase, .recovering)
+        let session = controller.simulatedControlSession
+
+        controller.bluetoothDeviceDisconnected()
+
+        XCTAssertEqual(controller.connectionTransition?.phase, .recovering)
+        XCTAssertFalse(controller.isReconnectPaused)
+        XCTAssertEqual(controller.simulatedControlSession, session)
+    }
+
     @MainActor
     func testDisconnectClosesBluetoothAndPausesReconnectUntilExplicitConnect() {
         let controller = SonyHeadphonesController(startAutomatically: false, simulated: true)

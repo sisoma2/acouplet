@@ -742,6 +742,36 @@ final class LDACRequestLifecycleTests: XCTestCase {
     private let first = "02:53:4F:4E:59:01"
     private let second = "02:53:4F:4E:59:02"
 
+    func testPowerOffCompletionClearsControlFailureAndWaitsWithoutRetryingControls() async throws {
+        for targetDisconnected in [false, true] {
+            let (ldac, devices, _) = try prepared()
+            defer { stop(ldac, devices) }
+            await drainTasks()
+            let headphones = try XCTUnwrap(devices.controller(for: first))
+            devices.setReconnectAutomatically(true, suppressing: first)
+            XCTAssertTrue(headphones.simulateBLEReconnectWait(automatic: false, priorBluetoothLE: true, classicConnected: true))
+            headphones.simulateBLEDisconnect("The headphone controls disconnected.")
+            XCTAssertNotNil(headphones.lastErrorMessage)
+
+            ldac.simulateSessionFinished(.init(message: nil, canRetry: true, requiresAttention: false,
+                targetDisconnected: targetDisconnected, waitForReconnect: true))
+            await drainTasks()
+            devices.setReconnectAutomatically(true)
+            for _ in 0..<3 { headphones.simulateAutomaticRefresh() }
+
+            XCTAssertEqual(headphones.linkState, .disconnected)
+            XCTAssertFalse(headphones.isDeviceConnected)
+            XCTAssertTrue(headphones.isWaitingForBluetoothConnection)
+            XCTAssertFalse(headphones.isDisconnectedByUser)
+            XCTAssertNil(headphones.lastErrorMessage)
+            XCTAssertNil(headphones.retrySecondsRemaining)
+            XCTAssertNil(headphones.simulatedPendingFrame)
+            XCTAssertFalse(headphones.hasPendingManualBLEConnection)
+            XCTAssertEqual(ldac.state, .waitingForDevice)
+            XCTAssertFalse(ldac.isAwaitingAutomaticRetry)
+        }
+    }
+
     func testSelectingEarbudsReplacesTheOvernightHeadphoneRequest() async throws {
         var date = Date(timeIntervalSince1970: 1_000)
         let (ldac, devices, _) = try prepared(now: { date })

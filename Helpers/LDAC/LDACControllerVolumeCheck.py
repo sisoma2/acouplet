@@ -127,6 +127,7 @@ final class SonyHeadphonesController: ObservableObject {
     var earbudFinder: EarbudFinder?
     var isReady = true
     var isReconnectPaused = false
+    var isWaitingForBluetoothConnection = false
     var isDeviceConnected = true
     var ldacRequiresMultipointOff = false
     var pendingControlTransition: String?
@@ -164,6 +165,12 @@ final class SonyHeadphonesController: ObservableObject {
     func hasCurrentMusicSourceContext(for address: String?) -> Bool { localSource }
     var connections: [Bool] = []
     func connect(preferLDAC: Bool = true) { connections.append(preferLDAC) }
+    func bluetoothDeviceDisconnected(notifyDisconnection: Bool = true) {
+        isWaitingForBluetoothConnection = true
+        isReconnectPaused = true
+        isDeviceConnected = false
+        isReady = false
+    }
     func setConnectionMode(_ mode: SonyConnectionMode) {
         guard mode != connectionMode, connectionTransition?.isFinished != false else { return }
         connectionRequests.append(mode)
@@ -303,7 +310,7 @@ final class LDACNativeSession {
     struct Completion { var message: String?; var canRetry = false; var requiresAttention = false; var targetDisconnected = false; var waitForReconnect = false }
     enum Event {
         case handoffReady, connecting, controlsRequired, active(LDACFormat), formatChanged(LDACFormat), latencyFrames(UInt32), gainApplied(Double), ldacEndpoint(Bool)
-        case audioCaptureAccess(LDACAudioCaptureAccess), failed(String), connectionLost(String), finished(Completion)
+        case audioCaptureAccess(LDACAudioCaptureAccess), failed(String), connectionLost(String), deviceDisconnected, finished(Completion)
         case health(LDACTransportHealth), compatibility(LDACRuntimeStatus), capabilities(UInt8, UInt8)
     }
     let id: UUID
@@ -515,6 +522,22 @@ enum Check {
         try await waitUntil { !interrupted.isSessionRunning }
         precondition(interruptionPauses == 1, "Fallback cleanup paused the player more than once")
         interrupted.stop()
+
+        let (immediate, immediateDevice, immediateOutput, immediateRaw) = try await active()
+        var immediatePauses = 0
+        immediate.pausePlayback = { immediatePauses += 1 }
+        immediateRaw.emit(.deviceDisconnected)
+        precondition(immediate.state == .waitingForDevice && !immediate.isRecovering && immediate.isSessionRunning,
+                     "Confirmed headset departure waited for session cleanup before leaving Reconnecting")
+        precondition(immediateDevice.isWaitingForBluetoothConnection && !immediateDevice.isDeviceConnected && !immediateOutput.ready)
+        precondition(immediatePauses == 1 && !immediate.isAwaitingAutomaticRetry)
+        immediateRaw.emit(.connectionLost("Late control-channel failure after headset power off"))
+        precondition(immediate.state == .waitingForDevice && !immediate.isRecovering && immediatePauses == 1,
+                     "A late control failure restarted recovery for a confirmed disconnected headset")
+        immediateRaw.emit(.finished(.init(message: nil, canRetry: true, targetDisconnected: true, waitForReconnect: true)))
+        try await waitUntil { !immediate.isSessionRunning }
+        immediate.stop()
+        print("PASS confirmed headset departure presents disconnected before cleanup, without retries or late-event recovery")
 
         let (departed, departedDevice, _, departedRaw) = try await active()
         var departurePauses = 0
@@ -1021,6 +1044,9 @@ enum Check {
         for _ in 0..<100 { resuming.resumeIfReady() }
         precondition(resuming.session == nil && resuming.recoveryTask == nil && returning.connectionRequests.isEmpty)
         returning.isDeviceConnected = true
+        returning.isReady = true
+        returning.isWaitingForBluetoothConnection = false
+        returning.isReconnectPaused = false
         resuming.resumeIfReady()
         try await waitUntil { resuming.session != nil }
         let resumedSession = resuming.session!

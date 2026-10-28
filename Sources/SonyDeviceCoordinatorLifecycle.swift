@@ -161,13 +161,21 @@ extension SonyDeviceCoordinator {
 
     func handleBluetoothDeviceConnected(_ device: IOBluetoothDevice) {
         inventoryNotificationCount += 1
+        if isRunning, !isSystemSleeping, let address = device.addressString {
+            controller(for: address)?.bluetoothDeviceConnected()
+        }
         watchDisconnection(of: device)
         refreshPairedInventory()
     }
 
     func handleBluetoothDeviceDisconnected(address: String?) {
         inventoryNotificationCount += 1
-        if let address { disconnectNotifications.removeValue(forKey: address)?.unregister() }
+        if let address {
+            disconnectNotifications.removeValue(forKey: address)?.unregister()
+            if isRunning, !isSystemSleeping, address != reconnectSuppressedAddress {
+                controller(for: address)?.bluetoothDeviceDisconnected()
+            }
+        }
         refreshPairedInventory()
     }
 

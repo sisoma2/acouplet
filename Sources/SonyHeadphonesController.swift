@@ -185,6 +185,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
     @Published private(set) var linkState: LinkState = .searching
     @Published private(set) var powerOffState: PowerOffState?
     @Published private(set) var isDisconnectedByUser = false
+    @Published private(set) var isWaitingForBluetoothConnection = false
     let disconnectionRequests = PassthroughSubject<Void, Never>()
     #if !ACOUPLET_PUBLIC_APIS_ONLY
     var preferredAudioConnection: (() -> Bool)?
@@ -355,7 +356,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         earTipFitTransition?.phase == .interrupted || headGesturePracticeTransition?.phase == .interrupted || legacyOptimizerTransition?.phase == .interrupted
     }
     var isPoweringOff: Bool { powerOffState == .sending }
-    var isReconnectPaused: Bool { isDisconnectedByUser || powerOffState != nil }
+    var isReconnectPaused: Bool { isDisconnectedByUser || isWaitingForBluetoothConnection || powerOffState != nil }
     var canDisconnect: Bool {
         !displayOnly && !isSystemSleeping && !isTerminating && !isPoweringOff
             && (isDeviceConnected || hasOpenControlTransport || hasPendingManualBLEConnection)
@@ -1330,6 +1331,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         deviceName = name ?? String(localized: "Sony headphones")
         address = name == nil ? pinnedAddress ?? "" : Self.normalizedAddress(nextAddress)
         isDeviceConnected = name != nil
+        isWaitingForBluetoothConnection = false
         linkState = name == nil ? .disconnected : controlBusy ? .controlBusy : .ready
         guard isReady else { return }
         noiseControlMode = .ambient
@@ -2492,6 +2494,12 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         if stage != .idle { closeSonyLink() }
         if isDeviceConnected { isDeviceConnected = false }
         if linkState != state { linkState = state }
+        if state == .disconnected {
+            if lastErrorMessage != nil { lastErrorMessage = nil }
+            if retryWorkItem != nil || nextRetryDate != nil || retrySecondsRemaining != nil {
+                cancelScheduledRetry(resetAttempts: true)
+            }
+        }
     }
 
     @discardableResult
@@ -2836,6 +2844,26 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         }
     }
 
+    func bluetoothDeviceDisconnected(notifyDisconnection: Bool = true) {
+        guard !isSystemSleeping, !isTerminating, !isDisconnectedByUser, !isWaitingForBluetoothConnection,
+              connectionTransition?.isFinished != false, multipointTransition?.isFinished != false,
+              recoveryUsesBLE == nil else { return }
+        isWaitingForBluetoothConnection = true
+        if notifyDisconnection { disconnectionRequests.send() }
+        closeSonyLink()
+        isDeviceConnected = false
+        linkState = .disconnected
+        lastErrorMessage = nil
+    }
+
+    func bluetoothDeviceConnected() {
+        guard !isSystemSleeping, !isTerminating, isDisconnectedByUser || isWaitingForBluetoothConnection else { return }
+        isDisconnectedByUser = false
+        isWaitingForBluetoothConnection = false
+        isDeviceConnected = true
+        refresh(shouldOpenLink: reconnectAutomatically)
+    }
+
     private func clearPowerOffForExplicitConnection() {
         guard powerOffState != nil else { return }
         closeSonyLink()
@@ -2848,6 +2876,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         guard !displayOnly, !isSystemSleeping, classicConnectionID == nil else { return }
         guard clearHeadphoneTestsForExplicitConnection() else { return }
         isDisconnectedByUser = false
+        isWaitingForBluetoothConnection = false
         clearPowerOffForExplicitConnection()
         guard deviceActionTransition?.isFinished != false else { return }
         deviceActionTransition = nil
@@ -2899,6 +2928,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
         guard !displayOnly, !isSystemSleeping else { return }
         guard clearHeadphoneTestsForExplicitConnection() else { return }
         isDisconnectedByUser = false
+        isWaitingForBluetoothConnection = false
         clearPowerOffForExplicitConnection()
         guard deviceActionTransition?.isFinished != false else { return }
         deviceActionTransition = nil
@@ -8051,6 +8081,7 @@ final class SonyHeadphonesController: NSObject, ObservableObject {
             scheduleRetry()
         } else {
             linkState = .disconnected
+            lastErrorMessage = nil
             if multipointTransition?.phase == .recovering || connectionTransition?.phase == .recovering || recoveryUsesBLE != nil {
                 scheduleRetry()
             }

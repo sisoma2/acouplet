@@ -134,7 +134,7 @@ struct MenuBarView: View {
     }
 
     private var showsHeadphoneControls: Bool {
-        headphones.isReady && headphones.powerOffState == nil && !headphones.headphoneTestNeedsRecovery
+        headphones.isDeviceConnected && headphones.isReady && headphones.powerOffState == nil && !headphones.headphoneTestNeedsRecovery
     }
 
     private var devicesNeedingConfirmation: [SonyHeadphonesController] {
@@ -144,14 +144,15 @@ struct MenuBarView: View {
     }
 
     private var showsConnectOnly: Bool {
-        headphones.linkState == .disconnected && !headphones.isDeviceConnected
+        headphones.address.isEmpty && headphones.linkState == .disconnected && !headphones.isDeviceConnected
             && headphones.powerOffState == nil && !headphones.headphoneTestNeedsRecovery
             && headphones.lastErrorMessage == nil && !showsLDACSession && !devices.hasOtherSelectableDevices
     }
 
     private var showsLDACSession: Bool {
         #if !ACOUPLET_PUBLIC_APIS_ONLY
-        return ldac.targetAddress == headphones.address && ldac.state.keepsMenuBarVisible(isSessionRunning: ldac.isSessionRunning)
+        return !headphones.isReconnectPaused && ldac.targetAddress == headphones.address
+            && ldac.state.keepsMenuBarVisible(isSessionRunning: ldac.isSessionRunning)
         #else
         return false
         #endif
@@ -237,13 +238,13 @@ struct MenuBarView: View {
 
     #if !ACOUPLET_PUBLIC_APIS_ONLY
     private var showsLDACControl: Bool {
-        showsLDACSession || (settings.experimentalLDACEnabled
+        showsLDACSession || (headphones.isDeviceConnected && settings.experimentalLDACEnabled
             && ((showsHeadphoneControls && ldac.deviceUnavailableReason(forAddress: headphones.address) == nil)
             || (ldac.targetAddress == headphones.address && ldac.state != .off)))
     }
 
     private var needsLDACDriverUpdate: Bool {
-        settings.experimentalLDACEnabled && ldac.driverState == .outdated && !ldac.isSessionRunning
+        headphones.isDeviceConnected && settings.experimentalLDACEnabled && ldac.driverState == .outdated && !ldac.isSessionRunning
     }
 
     private var ldacState: LDACState { ldac.targetAddress == headphones.address ? ldac.state : .off }
@@ -576,47 +577,51 @@ struct MenuBarView: View {
                 .keyboardShortcut(",")
                 .accessibilityIdentifier("menu.settings")
             Spacer()
-            Button {
-                if headphones.address.isEmpty { devices.refreshDiscovery() }
-                else { headphones.refresh() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 24, height: 24)
-            }
-                .help("Refresh headphone status")
-                .accessibilityLabel("Refresh headphone status")
-                .keyboardShortcut("r")
-                .disabled(headphones.powerOffState != nil || headphones.isRunningHeadphoneTest || (showsLDACSession && !headphones.isReady))
-            Menu {
-                Button("Custom Equalizer…", action: showEqualizer)
-                if !settings.equalizerProfiles.isEmpty {
-                    Menu("Saved Equalizers") {
-                        ForEach(settings.equalizerProfiles) { profile in
-                            Button(profile.name) {
-                                settings.customEqualizerDraft = profile.settings
-                                headphones.setCustomEqualizer(profile.settings)
-                            }
-                            .disabled(headphones.equalizer.settingsPayload(profile.settings) == nil)
-                        }
-                    }
-                    .disabled(headphones.powerOffState != nil || headphones.isRunningHeadphoneTest)
+            if headphones.isDeviceConnected {
+                Button {
+                    if headphones.address.isEmpty { devices.refreshDiscovery() }
+                    else { headphones.refresh() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .frame(width: 24, height: 24)
                 }
-                Divider()
-                Button("Disconnect", systemImage: "rectangle.portrait.and.arrow.right", action: headphones.disconnect)
-                    .disabled(!headphones.canDisconnect)
-                    .help("Disconnect from this Mac and pause automatic reconnect")
-                    .accessibilityIdentifier("headphones.disconnect")
-                if headphones.supportedFunctions.contains(0x23) {
-                    Button("Turn Off Headphones…", systemImage: "power") {
-                        if let session = headphones.powerOffSession {
-                            powerOffTarget = .init(controller: headphones, session: session, name: headphones.deviceName)
-                            showsPowerOffConfirmation = true
+                    .help("Refresh headphone status")
+                    .accessibilityLabel("Refresh headphone status")
+                    .keyboardShortcut("r")
+                    .disabled(headphones.powerOffState != nil || headphones.isRunningHeadphoneTest || (showsLDACSession && !headphones.isReady))
+            }
+            Menu {
+                if headphones.isDeviceConnected {
+                    Button("Custom Equalizer…", action: showEqualizer)
+                    if !settings.equalizerProfiles.isEmpty {
+                        Menu("Saved Equalizers") {
+                            ForEach(settings.equalizerProfiles) { profile in
+                                Button(profile.name) {
+                                    settings.customEqualizerDraft = profile.settings
+                                    headphones.setCustomEqualizer(profile.settings)
+                                }
+                                .disabled(headphones.equalizer.settingsPayload(profile.settings) == nil)
+                            }
                         }
+                        .disabled(headphones.powerOffState != nil || headphones.isRunningHeadphoneTest)
                     }
-                    .disabled(!headphones.canPowerOff)
-                    .help(headphones.powerOffUnavailableReason ?? String(localized: "Turn off the headphones on all connected devices"))
-                    .accessibilityIdentifier("headphones.powerOff")
                     Divider()
+                    Button("Disconnect", systemImage: "rectangle.portrait.and.arrow.right", action: headphones.disconnect)
+                        .disabled(!headphones.canDisconnect)
+                        .help("Disconnect from this Mac and pause automatic reconnect")
+                        .accessibilityIdentifier("headphones.disconnect")
+                    if headphones.supportedFunctions.contains(0x23) {
+                        Button("Turn Off Headphones…", systemImage: "power") {
+                            if let session = headphones.powerOffSession {
+                                powerOffTarget = .init(controller: headphones, session: session, name: headphones.deviceName)
+                                showsPowerOffConfirmation = true
+                            }
+                        }
+                        .disabled(!headphones.canPowerOff)
+                        .help(headphones.powerOffUnavailableReason ?? String(localized: "Turn off the headphones on all connected devices"))
+                        .accessibilityIdentifier("headphones.powerOff")
+                        Divider()
+                    }
                 }
                 Button("About Acouplet", action: showAbout)
                 .accessibilityIdentifier("menu.about")

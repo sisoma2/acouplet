@@ -2,6 +2,38 @@
 
 # Headphone controls
 
+## Ending a Bluetooth connection
+
+When macOS reports that a headset disconnected, Acouplet closes its control
+connection and cancels pending commands and automatic retries. It waits for a
+new Bluetooth connection or an explicit **Connect** before opening controls
+again. This also releases a separate Bluetooth LE control connection when the
+headset's ordinary Bluetooth connection ends.
+
+LDAC also confirms a headset departure through its connection watcher and session
+completion. That confirmation clears any earlier control-channel error and retry countdown, even
+when the ordinary Bluetooth notification was ignored during LDAC recovery.
+The header shows **Not Connected** with **Connect**. LDAC may keep its pending
+request while waiting for the headset to return, without retrying the controls.
+Inventory polling also clears an earlier control error when it confirms that
+the headset is disconnected.
+
+The LDAC worker reports confirmed headset or Bluetooth-radio disconnection as
+soon as it receives the connection-close evidence, before finishing audio and
+driver cleanup. The panel immediately switches to **Not Connected** and hides
+LDAC instead of showing **Reconnecting…** throughout cleanup. Temporary control
+or transport failures still use recovery while the headset remains connected.
+
+The disconnected menu shows the selected headset's name and artwork with its
+connection status and **Connect** button. Device controls, including LDAC,
+transport counters and report export, stay hidden until the headset returns.
+App settings, About and Quit remain available.
+
+Temporary disconnects managed by LDAC, connection-mode changes and multipoint
+changes keep their existing recovery flow. A missing inventory entry by itself
+does not end an open control connection, so a transient discovery gap or losing
+one earbud does not disconnect the remaining bud.
+
 ## Delayed noise-control acknowledgments
 
 Noise-control capability, availability and status reads retry once after a

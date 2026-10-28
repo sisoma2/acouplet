@@ -839,7 +839,7 @@ final class LDACController: ObservableObject {
         guard let address = requestedAddress, let devices else { return true }
         let headphones = devices.controller(for: address)
         let reason: String?
-        if headphones == nil || headphones?.isReconnectPaused == true {
+        if headphones == nil || headphones?.isReconnectPaused == true && headphones?.isWaitingForBluetoothConnection != true {
             reason = "headphones disconnected by user or removed"
         } else if let waitingDeadline, now() >= waitingDeadline {
             reason = "pending playback request expired"
@@ -1306,6 +1306,23 @@ final class LDACController: ObservableObject {
             case let .connectionLost(message):
                 if self.requestedAddress == address, self.state != .stopping { self.beginRecovery(reason: message) }
                 else { self.session?.stop(restoreAudio: self.restoreAudioOnStop) }
+            case .deviceDisconnected:
+                self.pausePlaybackForDisconnection()
+                self.suspensionRequested = true
+                self.cancelAutomaticRetry()
+                self.isRecovering = false
+                self.usable = false
+                self.nativeOutput?.silence()
+                self.setOutputGain(0)
+                self.readinessTask?.cancel()
+                self.readinessTask = nil
+                self.volumeSession.cancel()
+                self.bindingHoldTask?.cancel()
+                self.bindingHoldTask = nil
+                self.bindingHeldSince = nil
+                self.controlSession = nil
+                self.devices?.controller(for: address)?.bluetoothDeviceDisconnected(notifyDisconnection: false)
+                if self.state != .stopping { self.state = .waitingForDevice }
             case let .finished(completion):
                 self.session = nil
                 self.sessionFinished(completion, address: address)
@@ -1318,6 +1335,9 @@ final class LDACController: ObservableObject {
     /// Routes a finished LDAC or restoration session. A recoverable abort always returns the headphones to
     /// ordinary Bluetooth audio first (D1); the headphones leaving on their own waits for them to return.
     private func sessionFinished(_ completion: LDACNativeSession.Completion, address: String) {
+        if completion.waitForReconnect {
+            devices?.controller(for: address)?.bluetoothDeviceDisconnected(notifyDisconnection: false)
+        }
         if playbackSettingsRestartAddress == address, state == .stopping, completion.message == nil, !completion.canRetry {
             if requestedAddress == address, !suspensionRequested, !completion.waitForReconnect,
                restoreAudioOnStop, canStartDirectly(forAddress: address) {
@@ -1835,7 +1855,8 @@ final class LDACController: ObservableObject {
     }
 
     private func beginRecovery(reason: String, at date: Date = Date()) {
-        guard requestedAddress == targetAddress, requestedAddress != nil, state != .stopping else { return }
+        guard requestedAddress == targetAddress, requestedAddress != nil, state != .stopping,
+              headphones?.isWaitingForBluetoothConnection != true else { return }
         pausePlaybackForDisconnection()
         recordRecovery("recovering", reason: reason)
         if let stableSince, date.timeIntervalSince(stableSince) >= 30 { recoveryAttempt = 0 }

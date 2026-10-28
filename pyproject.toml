@@ -13,5 +13,5 @@ package = false
 
 [tool.ruff]
 required-version = "==0.17.2"
-target-version = "py315"
+target-version = "py39"
 extend-exclude = [".build", "Vendor"]

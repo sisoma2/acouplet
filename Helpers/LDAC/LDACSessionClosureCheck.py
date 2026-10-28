@@ -85,6 +85,7 @@ final class SessionEvents {
             switch event {
             case .health, .compatibility, .capabilities: nil
             case .connectionLost: "connectionLost"
+            case .deviceDisconnected: "deviceDisconnected"
             case .failed: "failed"
             case .active: "active"
             case .formatChanged: "formatChanged"
@@ -923,8 +924,30 @@ extension LDACNativeSession {
             try session.handle("daemon", line: line)
         }
         for _ in 0..<100 { await Task.yield() }
-        try require(session.recoverableFailure && !session.hardFailure && events.names == ["connectionLost"],
+        try require(session.recoverableFailure && !session.hardFailure && events.names == ["deviceDisconnected", "connectionLost"],
             "Late or repeated Bluetooth events changed power-off recovery")
+    }
+
+    @MainActor
+    static func headsetDisconnectionEvidenceCheck() async throws {
+        for alreadyRecovering in [false, true] {
+            let events = SessionEvents()
+            let session = try lossSession(active: true, events: events)
+            session.connectorReady = true
+            session.connectorHandle = 0x1234
+            if alreadyRecovering { session.connectionLost("Control channel closed before headset departure") }
+            try session.handle("connector", line: "CONNECTION_DISCONNECTED handle=5678 connected=0")
+            for _ in 0..<10 { await Task.yield() }
+            try require(!session.originalConnectionEnded && !events.names.contains("deviceDisconnected"),
+                "A different Bluetooth connection was mistaken for headset departure")
+            for _ in 0..<2 {
+                try session.handle("connector", line: "CONNECTION_DISCONNECTED handle=1234 connected=0")
+            }
+            for _ in 0..<100 { await Task.yield() }
+            let expected = alreadyRecovering ? ["connectionLost", "deviceDisconnected"] : ["deviceDisconnected", "connectionLost"]
+            try require(session.originalConnectionEnded && events.names == expected,
+                "Headset departure was delayed until cleanup, duplicated or lost during recovery: \(events.names)")
+        }
     }
 
     @MainActor
@@ -1306,6 +1329,7 @@ enum LDACSessionClosureCheck {
         let closureFailures = failures
         var ownershipChecks = 0
         try await LDACNativeSession.powerOffEvidenceCheck()
+        try await LDACNativeSession.headsetDisconnectionEvidenceCheck()
         print("PASS Bluetooth power-off evidence: confirmed shutdown only, repeated events and replacement channels")
         for line in ["PEER_COMMAND_UNSUPPORTED", "CONTROL_FAILED expected=media-finished closed=0", "LDAC_UNAVAILABLE rate=48000 channels=2"] {
             for source in ["probe", "media", "daemon"] {
