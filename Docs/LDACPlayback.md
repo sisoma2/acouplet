@@ -24,9 +24,14 @@ LDAC, requests AVDTP Start. A short silent pre-roll and the first returning audi
 remain buffered until Start is confirmed, then the encoder and pacing resume.
 Muting the output gain does not make a playing source count as idle.
 
-The normal capture ring bounds the audio retained during a resume. Protocol
-rejection, a transition timeout or buffer overflow uses the existing failure and
-ordinary-audio recovery path. Quit, microphone handoff and disconnection keep
+The sender grows its PCM ring as needed while waiting for Suspend or Start,
+retaining the first returning audio when acknowledgment takes longer than the
+normal one-second ring permits. Growth is bounded by the two 30-second protocol
+waits plus the normal ring capacity. Buffered audio retains its order; a delayed
+Start can add playback latency until the source becomes idle again. The buffer
+returns to its normal size when idle silence drains the backlog. Protocol
+rejection, a transition timeout, allocation failure or buffer overflow uses the
+existing failure and ordinary-audio recovery path. Quit, microphone handoff and disconnection keep
 their normal shutdown ownership checks, including when playback is suspended.
 The lifecycle log records `IDLE_SUSPENDED` and `IDLE_PLAYBACK_RESUMED`.
 
@@ -153,6 +158,14 @@ retries that disconnect once within the same startup, after confirming the nativ
 headset output is present. Each attempt waits at most five seconds. Ordinary-audio
 restoration retains its existing connection ownership checks and does not use this
 takeover retry.
+
+If the headset reconnects after disconnection but before the connection helper
+starts, the helper observes that connection and waits for the session owner to
+confirm a fresh ACL event for the selected headset. Only that confirmation admits
+the connection to LDAC and enables owner-exit recovery. Unconfirmed connections
+time out without being disconnected; stopped or replaced connections cannot be
+claimed.
+
 During startup, LDAC takes precedence when macOS automatically selects the same
 headphones as its ordinary Bluetooth output, including a late switch after handoff.
 Other output choices and output changes after playback starts remain respected.

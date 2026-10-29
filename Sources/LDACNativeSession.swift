@@ -472,6 +472,9 @@ final class LDACNativeSession: @unchecked Sendable {
     private var connected = false
     private var signalingArmed = false
     private var connectorReady = false
+    private var connectorObserved = false
+    private var connectorObservedHandle: Int?
+    private var connectorClaimSent = false
     private var connectorHandle: Int?
     /// Whether `connectorHandle` can tell connections apart. IOBluetooth reports handle 0000 for every ACL on
     /// current macOS, so the helper's `--expected-handle` comparison cannot reject a connection that is not ours.
@@ -862,10 +865,19 @@ final class LDACNativeSession: @unchecked Sendable {
                 }
             }
         } else if source == "connector" {
-            if line.hasPrefix("CONNECT_READY") {
+            if line.hasPrefix("CONNECT_OBSERVED") {
+                guard !connectorObserved, !connectorReady,
+                      let value = LDACChannelGate.captures("^CONNECT_OBSERVED handle=([0-9A-Fa-f]{4})$", line)?.first,
+                      let handle = Int(value, radix: 16), handle != 0xFFFF else {
+                    throw LDACSessionError("The paired Bluetooth audio connection reported invalid observation.")
+                }
+                connectorObserved = true
+                connectorObservedHandle = handle
+            } else if line.hasPrefix("CONNECT_READY") {
                 guard !connectorReady,
                       let values = LDACChannelGate.captures("^CONNECT_READY handle=([0-9A-Fa-f]{4}) guarded=([01])$", line),
-                      let handle = Int(values[0], radix: 16), handle != 0xFFFF else {
+                      let handle = Int(values[0], radix: 16), handle != 0xFFFF,
+                      !connectorObserved || connectorClaimSent && connectorObservedHandle == handle else {
                     throw LDACSessionError("The paired Bluetooth audio connection reported invalid readiness.")
                 }
                 connectorReady = true
@@ -1208,6 +1220,11 @@ final class LDACNativeSession: @unchecked Sendable {
             }
         }
         if !shouldStop {
+            if connectorObserved && !connectorClaimSent && connected && !ownedACLEnded {
+                try send("connector", "claim")
+                connectorClaimSent = true
+                record("CONNECT_EXISTING_CLAIMED evidence=fresh-acl")
+            }
             if let connector = children["connector"], connector.finished || connector.outputEnded {
                 throw LDACSessionError("The paired Bluetooth audio connection failed.")
             }

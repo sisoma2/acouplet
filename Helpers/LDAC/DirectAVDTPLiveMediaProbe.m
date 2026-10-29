@@ -1102,6 +1102,8 @@ typedef NS_ENUM(NSUInteger, MediaIdlePhase) {
     MediaIdleResumed
 };
 
+enum { MediaIdleTransitionSeconds = 30 };
+
 @interface DirectMediaProbe : NSObject
 @property BOOL closed;
 @property BOOL failed;
@@ -1114,6 +1116,8 @@ typedef NS_ENUM(NSUInteger, MediaIdlePhase) {
 @property FILE *traceOutput;
 @property int pcmFD;
 @property uint8_t *pcmRing;
+@property NSUInteger pcmAllocatedBytes;
+@property(readonly) NSUInteger pcmCapacityBytes;
 @property NSUInteger pcmHead;
 @property NSUInteger pcmBytes;
 @property uint64_t pcmReadBytes;
@@ -1148,11 +1152,28 @@ typedef NS_ENUM(NSUInteger, MediaIdlePhase) {
 - (void)pollInput;
 - (void)pollPCM;
 - (void)discardIdleSilence;
+- (BOOL)resizePCMBuffer:(NSUInteger)capacity;
 - (NSUInteger)discardPCMFrames:(uint64_t)maximumFrames;
 - (BOOL)checkDegradation;
 @end
 
 @implementation DirectMediaProbe
+- (NSUInteger)pcmCapacityBytes {
+    return self.pcmAllocatedBytes ?: self.profile.capacityBytes;
+}
+- (BOOL)resizePCMBuffer:(NSUInteger)capacity {
+    if (capacity < self.pcmBytes) return NO;
+    uint8_t *ring = malloc(capacity);
+    if (!ring) return NO;
+    NSUInteger first = MIN(self.pcmBytes, self.pcmCapacityBytes - self.pcmHead);
+    memcpy(ring, self.pcmRing + self.pcmHead, first);
+    memcpy(ring + first, self.pcmRing, self.pcmBytes - first);
+    free(self.pcmRing);
+    self.pcmRing = ring;
+    self.pcmAllocatedBytes = capacity;
+    self.pcmHead = 0;
+    return YES;
+}
 - (void)dealloc {
     if (_traceOutput) fclose(_traceOutput);
     if (_encoder) ldacBT_free_handle(_encoder);
@@ -1168,7 +1189,7 @@ typedef NS_ENUM(NSUInteger, MediaIdlePhase) {
         self.failed = YES;
         return 0;
     }
-    self.pcmHead = (self.pcmHead + bytes) % self.profile.capacityBytes;
+    self.pcmHead = (self.pcmHead + bytes) % self.pcmCapacityBytes;
     self.pcmBytes -= bytes;
     self.pcmSkippedBytes += bytes;
     self.pcmDiscardedBytes += bytes;
@@ -1210,7 +1231,7 @@ typedef NS_ENUM(NSUInteger, MediaIdlePhase) {
 }
 - (void)discardIdleSilence {
     NSUInteger silentBytes = 0;
-    NSUInteger capacity = self.profile.capacityBytes;
+    NSUInteger capacity = self.pcmCapacityBytes;
     NSUInteger head = self.pcmHead;
     NSUInteger buffered = self.pcmBytes;
     const uint8_t *ring = self.pcmRing;
@@ -1226,9 +1247,11 @@ typedef NS_ENUM(NSUInteger, MediaIdlePhase) {
         silentBytes += PCMBlockBytes;
     }
     NSUInteger bytes = PCMSkipBytes(silentBytes, self.pcmReserveBytes, UINT64_MAX);
-    self.pcmHead = (self.pcmHead + bytes) % self.profile.capacityBytes;
+    self.pcmHead = (self.pcmHead + bytes) % self.pcmCapacityBytes;
     self.pcmBytes -= bytes;
     self.pcmDiscardedBytes += bytes;
+    if (bytes && self.pcmCapacityBytes > self.profile.capacityBytes && self.pcmBytes <= self.profile.capacityBytes)
+        [self resizePCMBuffer:self.profile.capacityBytes];
 }
 
 - (void)pollPCM {
@@ -1238,18 +1261,29 @@ typedef NS_ENUM(NSUInteger, MediaIdlePhase) {
         if (self.idlePhase && !self.pcmComplete) [self discardIdleSilence];
         if (!self.pcmStarted && !self.pcmComplete) {
             NSUInteger bytes = PCMSkipBytes(self.pcmBytes, self.profile.prefillBytes, UINT64_MAX);
-            self.pcmHead = (self.pcmHead + bytes) % self.profile.capacityBytes;
+            self.pcmHead = (self.pcmHead + bytes) % self.pcmCapacityBytes;
             self.pcmBytes -= bytes;
             self.pcmDiscardedBytes += bytes;
         }
-        NSUInteger available = self.profile.capacityBytes - self.pcmBytes;
+        NSUInteger available = self.pcmCapacityBytes - self.pcmBytes;
+        NSUInteger idleLimit = self.profile.capacityBytes * (2 * MediaIdleTransitionSeconds + 1);
+        if (!available && self.idlePhase && !self.pcmComplete && self.pcmCapacityBytes < idleLimit) {
+            NSUInteger capacity = MIN(self.pcmCapacityBytes * 2, idleLimit);
+            if (![self resizePCMBuffer:capacity]) {
+                printf("PCM_FAILED reason=idle-buffer-allocation capacityFrames=%lu\n", capacity / 8);
+                self.failed = YES;
+                return;
+            }
+            printf("IDLE_BUFFER_GROWN capacityFrames=%lu bufferedFrames=%lu\n", capacity / 8, self.pcmBytes / 8);
+            available = self.pcmCapacityBytes - self.pcmBytes;
+        }
         if (!available && !self.pcmComplete && self.pcmContinuous && self.pcmCanSkip) {
             [self discardPCMFrames:UINT64_MAX];
             if (self.failed) return;
-            available = self.profile.capacityBytes - self.pcmBytes;
+            available = self.pcmCapacityBytes - self.pcmBytes;
         }
-        NSUInteger tail = (self.pcmHead + self.pcmBytes) % self.profile.capacityBytes;
-        NSUInteger maximum = MIN(available, self.profile.capacityBytes - tail);
+        NSUInteger tail = (self.pcmHead + self.pcmBytes) % self.pcmCapacityBytes;
+        NSUInteger maximum = MIN(available, self.pcmCapacityBytes - tail);
         uint8_t *destination = self.pcmRing + tail;
         if (self.pcmComplete || !available) { destination = discarded; maximum = self.pcmComplete ? sizeof(discarded) : 1; }
         ssize_t count = read(self.pcmFD, destination, maximum);
@@ -1269,7 +1303,7 @@ typedef NS_ENUM(NSUInteger, MediaIdlePhase) {
         self.pcmReadBytes += (uint64_t)count;
         if (self.pcmComplete) { self.pcmDiscardedBytes += (uint64_t)count; continue; }
         if (!available) {
-            printf("PCM_FAILED reason=ring-overflow capacityFrames=%lu readBytes=%llu\n", self.profile.capacityBytes / 8, self.pcmReadBytes);
+            printf("PCM_FAILED reason=ring-overflow capacityFrames=%lu readBytes=%llu\n", self.pcmCapacityBytes / 8, self.pcmReadBytes);
             self.failed = YES;
             return;
         }
@@ -1855,12 +1889,12 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
                 if (finishing && sendQueue.head == sendQueue.tail) { flushed = YES; break; }
                 if (probe.idlePhase == MediaIdleDraining && sendQueue.head == sendQueue.tail) {
                     probe.idlePhase = MediaIdleSuspending;
-                    idleDeadline = MonotonicTime() + 30;
+                    idleDeadline = MonotonicTime() + MediaIdleTransitionSeconds;
                     printf("IDLE_READY drainedPackets=%lu\n", drainedPackets);
                 }
                 if (probe.idlePhase == MediaIdleSuspended && probe.idleHasAudio) {
                     probe.idlePhase = MediaIdleResuming;
-                    idleDeadline = MonotonicTime() + 30;
+                    idleDeadline = MonotonicTime() + MediaIdleTransitionSeconds;
                     printf("IDLE_AUDIO_READY bufferedFrames=%lu\n", probe.pcmBytes / 8);
                 }
                 if ((probe.idlePhase == MediaIdleSuspending || probe.idlePhase == MediaIdleResuming) && MonotonicTime() >= idleDeadline) {
@@ -2032,7 +2066,7 @@ static BOOL FeedLive(DirectMediaProbe *probe, CBL2CAPChannel *owned, double gain
             RecordSenderStage(&timing, SenderOther);
             if (!flushing) {
                 NSUInteger inputFrames = continuous ? 128 : MIN((uint64_t)128, targetSamples - sourceSamples);
-                probe.pcmHead = (probe.pcmHead + inputFrames * 8) % profile.capacityBytes;
+                probe.pcmHead = (probe.pcmHead + inputFrames * 8) % probe.pcmCapacityBytes;
                 probe.pcmBytes -= inputFrames * 8;
                 sourceSamples += inputFrames;
             }

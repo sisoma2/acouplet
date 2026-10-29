@@ -17,6 +17,7 @@
 
 static BOOL inputEnded;
 static BOOL disarmed;
+static BOOL connectionClaimed;
 static char parentCommand[16];
 static size_t parentCommandLength;
 
@@ -53,6 +54,7 @@ static BOOL ParentInputEnded(void) {
         for (ssize_t index = 0; index < count; index++) {
             if (values[index] == '\n') {
                 disarmed |= parentCommandLength == 6 && !memcmp(parentCommand, "disarm", 6);
+                connectionClaimed |= parentCommandLength == 5 && !memcmp(parentCommand, "claim", 5);
                 parentCommandLength = 0;
             } else if (parentCommandLength < sizeof(parentCommand)) {
                 parentCommand[parentCommandLength++] = values[index];
@@ -271,6 +273,29 @@ static int WatchConnection(IOBluetoothDevice *device, ConnectionObserver *observ
     return 6;
 }
 
+static int ObserveExistingConnection(IOBluetoothDevice *device, ConnectionObserver *observer, NSString *address, NSString *priorityUID, int parentEvents) {
+    observer.originalHandle = device.connectionHandle;
+    printf("CONNECT_OBSERVED handle=%04X\n", observer.originalHandle);
+    double deadline = MonotonicTime() + 5;
+    while (MonotonicTime() < deadline) {
+        if (ParentInputEnded() || ParentExited(parentEvents)) {
+            printf("CONNECT_CANCELED issued=0 settled=1\n");
+            [observer.disconnectNotification unregister];
+            return 0;
+        }
+        if (observer.disconnected || !SonyClassicIsConnected(device) || device.connectionHandle != observer.originalHandle) {
+            printf("CONNECT_CANCELED issued=0 retired=1\n");
+            [observer.disconnectNotification unregister];
+            return 0;
+        }
+        if (connectionClaimed) return WatchConnection(device, observer, address, priorityUID, parentEvents);
+        RunLoopFor(0.01);
+    }
+    printf("CONNECT_EXISTING_UNCONFIRMED\n");
+    [observer.disconnectNotification unregister];
+    return 6;
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         NSString *address = nil;
@@ -385,7 +410,7 @@ int main(int argc, const char *argv[]) {
             if (restore && disconnected) printf("RESTORE_DISCONNECTED disconnected=1\n");
             return disconnected ? 0 : 4;
         }
-        if (SonyClassicIsConnected(device)) return 2;
+        if (!watchParent && SonyClassicIsConnected(device)) return 2;
         if (watchParent && (ParentInputEnded() || ParentExited(parentEvents))) {
             printf("CONNECT_CANCELED issued=0 settled=1\n");
             return 0;
@@ -394,10 +419,14 @@ int main(int argc, const char *argv[]) {
         if (watchParent) {
             observer.disconnectNotification = [device registerForDisconnectNotification:observer selector:@selector(disconnected:device:)];
             if (!observer.disconnectNotification) return 3;
+            if (SonyClassicIsConnected(device)) return ObserveExistingConnection(device, observer, address, priorityUID, parentEvents);
         }
         IOReturn status = [device openConnection:observer];
         printf("CONNECT_RETURN time=%.6f status=0x%08X\n", NSDate.date.timeIntervalSince1970, status);
-        if (status != kIOReturnSuccess) return 3;
+        if (status != kIOReturnSuccess) {
+            if (watchParent && SonyClassicIsConnected(device)) return ObserveExistingConnection(device, observer, address, priorityUID, parentEvents);
+            return 3;
+        }
         double deadline = restore ? restoreDeadline : MonotonicTime() + 45;
         BOOL cancelled = NO;
         while (!observer.done && MonotonicTime() < deadline) {
@@ -432,6 +461,8 @@ int main(int argc, const char *argv[]) {
             return 5;
         }
         printf("AFTER callback=%d status=0x%08X connected=%d\n", observer.done, observer.status, SonyClassicIsConnected(device));
+        if (watchParent && observer.done && observer.status != kIOReturnSuccess && SonyClassicIsConnected(device))
+            return ObserveExistingConnection(device, observer, address, priorityUID, parentEvents);
         if (!observer.done) printf("CONNECT_TERMINAL_UNCONFIRMED callback=0 connected=%d\n", SonyClassicIsConnected(device));
         if (watchParent && observer.done && observer.status == kIOReturnSuccess && SonyClassicIsConnected(device) &&
             observer.originalHandle != kBluetoothConnectionHandleNone)

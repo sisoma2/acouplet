@@ -56,12 +56,15 @@ __LIFETIME__
 static FixtureDevice *fixtureDevice;
 static ConnectionObserver *activeObserver;
 static BOOL disarmed;
+static BOOL connectionClaimed;
+static double claimAt = -1;
 static int inputChecks;
 static int cancelAtCheck = -1;
 static double cancelAt = -1;
 static double completeAt = 0;
 static IOReturn callbackStatus = kIOReturnSuccess;
 static IOReturn acquisitionStatus = kIOReturnSuccess;
+static BOOL connectOnRejection;
 static void Complete(void);
 static int fixtureNative;
 static double elapsed;
@@ -73,7 +76,7 @@ static void (*tick)(void);
 static double MonotonicTime(void) { return elapsed; }
 static void RunLoopFor(double seconds) { elapsed += seconds; if (tick) tick(); Complete(); if (disconnectAt >= 0 && elapsed >= disconnectAt) fixtureDevice.connected = NO; }
 static int ConnectionLock(NSString *address, BOOL watching) { return 42; }
-static BOOL ParentInputEnded(void) { inputChecks++; if ((cancelAtCheck >= 0 && inputChecks >= cancelAtCheck) || (cancelAt >= 0 && elapsed >= cancelAt)) disarmed = YES; return disarmed; }
+static BOOL ParentInputEnded(void) { inputChecks++; if (claimAt >= 0 && elapsed >= claimAt) connectionClaimed = YES; if ((cancelAtCheck >= 0 && inputChecks >= cancelAtCheck) || (cancelAt >= 0 && elapsed >= cancelAt)) disarmed = YES; return disarmed; }
 static BOOL ParentExited(int descriptor) { return NO; }
 static int PriorityIdle(NSString *uid) { return 1; }
 static int NativeOutputState(NSString *address) { return publishAt >= 0 && elapsed >= publishAt ? 1 : fixtureNative; }
@@ -89,7 +92,7 @@ static BOOL FixtureConnected(FixtureDevice *device) { return device.connected; }
 - (BOOL)isPaired { return self.paired; }
 - (BOOL)isConnected { return self.connected; }
 - (IOReturn)closeConnection { self.closes++; if (closeStatus == 0 && self.closes > reconnectingCloses) self.connected = NO; return closeStatus; }
-- (IOReturn)openConnection:(ConnectionObserver *)observer { self.opens++; if (acquisitionStatus != kIOReturnSuccess) return acquisitionStatus; self.connected = YES; activeObserver = observer; Complete(); return 0; }
+- (IOReturn)openConnection:(ConnectionObserver *)observer { self.opens++; if (acquisitionStatus != kIOReturnSuccess) { self.connected |= connectOnRejection; return acquisitionStatus; } self.connected = YES; activeObserver = observer; Complete(); return 0; }
 - (IOBluetoothUserNotification *)registerForDisconnectNotification:(id)observer selector:(SEL)selector { return (IOBluetoothUserNotification *)[FixtureNotification new]; }
 @end
 static void Complete(void) {
@@ -112,6 +115,7 @@ static int Invoke(NSArray<NSString *> *arguments, BOOL connected, UInt16 handle,
     elapsed = 0;
     inputChecks = 0;
     disarmed = NO;
+    connectionClaimed = NO;
     activeObserver = nil;
     const char *values[32];
     for (NSUInteger i = 0; i < arguments.count; ++i) values[i] = arguments[i].UTF8String;
@@ -143,6 +147,35 @@ int main(int argc, const char **argv) {
         cancelAtCheck = -1;
         activeObserver = nil;
         puts("PASS actual helper cancellation before issuance, pending/failed acquisition including zero, and disarm after completion");
+        cancelAt = 0.2;
+        claimAt = 0.1;
+        for (NSNumber *handle in @[@0, @1]) {
+            int observed = Invoke(connect, YES, handle.unsignedShortValue, 0);
+            assert(observed == 0 && fixtureDevice.opens == 0 && fixtureDevice.closes == 0 && connectionClaimed);
+        }
+        acquisitionStatus = kIOReturnError;
+        connectOnRejection = YES;
+        int racedOpen = Invoke(connect, NO, 0, 0);
+        assert(racedOpen == 0 && fixtureDevice.opens == 1 && fixtureDevice.closes == 0 && connectionClaimed);
+        connectOnRejection = NO;
+        acquisitionStatus = kIOReturnSuccess;
+        callbackStatus = kIOReturnError;
+        int racedCallback = Invoke(connect, NO, 0, 0);
+        assert(racedCallback == 0 && fixtureDevice.opens == 1 && fixtureDevice.closes == 0 && connectionClaimed);
+        callbackStatus = kIOReturnSuccess;
+        claimAt = -1;
+        int unclaimedCancel = Invoke(connect, YES, 0, 0);
+        assert(unclaimedCancel == 0 && fixtureDevice.opens == 0 && fixtureDevice.closes == 0);
+        cancelAt = -1;
+        int unclaimed = Invoke(connect, YES, 0, 0);
+        assert(unclaimed == 6 && elapsed >= 5 && fixtureDevice.opens == 0 && fixtureDevice.closes == 0);
+        claimAt = 0.2;
+        disconnectAt = 0.1;
+        int observedLost = Invoke(connect, YES, 0, 0);
+        assert(observedLost == 0 && !connectionClaimed && fixtureDevice.opens == 0 && fixtureDevice.closes == 0);
+        disconnectAt = -1;
+        claimAt = -1;
+        puts("PASS existing startup ACL waits for its owner's fresh-ACL claim; cancellation, timeout and disconnection preserve unclaimed connections");
         for (NSNumber *done in @[@NO, @YES]) {
             for (NSNumber *success in @[@NO, @YES]) {
                 elapsed = 0;

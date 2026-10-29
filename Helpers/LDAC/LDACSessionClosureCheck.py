@@ -760,6 +760,52 @@ extension LDACNativeSession {
         return session
     }
 
+    static func existingConnectionCheck(executable: URL) throws {
+        for mode in ["fresh-first", "observed-first", "other-target", "replaced", "stopped"] {
+            let session = LDACNativeSession(id: UUID(), address: "02:00:00:00:00:01",
+                helpers: Helpers(fixture: executable), gain: 0) { _ in }
+            session.preflightCompleted = true
+            let connector = try LDACNativeChild(executable: executable,
+                arguments: ["--fixture", "echo", "READY", "end", "0"], inheritedPCM: nil)
+            session.children["connector"] = connector
+            session.children["daemon"] = try LDACNativeChild(executable: executable,
+                arguments: ["--fixture", "read", "READY", "end", "0"], inheritedPCM: nil)
+            defer { cleanUp(Array(session.children.values)) }
+            let fresh = "ACL connected: 02:00:00:00:00:01, result 0"
+            if mode == "fresh-first" { try session.handle("daemon", line: fresh) }
+            try session.handle("connector", line: "CONNECT_OBSERVED handle=0000")
+            try require(session.connectorHandle == nil, "Unclaimed observation supplied a restoration ownership handle")
+            try session.advance()
+            try require(session.connectorClaimSent == (mode == "fresh-first"),
+                "Existing ACL was claimed without matching fresh connection evidence")
+            if mode == "stopped" { session.stop(restoreAudio: false) }
+            if mode == "replaced" { session.ownedACLEnded = true }
+            if mode != "fresh-first" {
+                try session.handle("daemon", line: mode == "other-target"
+                    ? "ACL connected: 02:00:00:00:00:09, result 0" : fresh)
+            }
+            try session.advance()
+            let claimed = mode == "fresh-first" || mode == "observed-first"
+            try require(session.connectorClaimSent == claimed, "An ended, stopped or unrelated ACL was claimed")
+            if claimed {
+                try session.advance()
+                var lines: [String] = []
+                try waitUntil { lines += try connector.readLines(); return lines.contains("RX claim") }
+                try require(lines.filter { $0 == "RX claim" }.count == 1, "Existing ACL claim was repeated")
+                var mismatched = false
+                do { try session.handle("connector", line: "CONNECT_READY handle=0001 guarded=1") } catch { mismatched = true }
+                try require(mismatched && !session.connectorReady, "Claimed ACL changed handles before readiness")
+                try session.handle("connector", line: "CONNECT_READY handle=0000 guarded=0")
+                try require(session.connectorReady && !session.connectorHandleGuarded, "Claimed ACL did not become ready")
+            } else {
+                var rejected = false
+                do { try session.handle("connector", line: "CONNECT_READY handle=0000 guarded=0") } catch { rejected = true }
+                try require(rejected && !session.connectorReady, "Unclaimed ACL reported readiness")
+            }
+        }
+        print("PASS startup reconnection: fresh ACL evidence in either order, single claim, unrelated/replaced/stopped ACLs rejected")
+    }
+
     @MainActor
     static func idlePlaybackCheck(executable: URL) throws {
         let session = try lossSession(active: true, events: SessionEvents())
@@ -1221,6 +1267,7 @@ enum LDACSessionClosureCheck {
         }
         if CommandLine.arguments.dropFirst().first == "--fixture" { child() }
         let executable = URL(fileURLWithPath: CommandLine.arguments[0])
+        try LDACNativeSession.existingConnectionCheck(executable: executable)
         try LDACNativeSession.idlePlaybackCheck(executable: executable)
         print("PASS idle playback ownership: repeated Suspend/Start acknowledgments, retained session, invalid events and stop races")
         try LDACNativeSession.updateHandoffCheck(executable: executable)
@@ -1600,6 +1647,7 @@ int main(void) {
 static double elapsed, wallOffset, jump;
 static NSUInteger ticks;
 static BOOL disarmed;
+static BOOL connectionClaimed;
 static int commandFD = -1;
 static uint64_t ClockNanoseconds(clockid_t clock) {
     assert(clock == CLOCK_MONOTONIC);

@@ -12,6 +12,8 @@ static int idleControlFD = -1;
 static unsigned idleTransitions, resumeTransitions;
 static _Atomic unsigned idlePackets;
 static unsigned packetsAtIdle;
+static double resumeDelay;
+static unsigned idleBufferGrowths;
 static int IdlePrintf(const char *format, ...);
 #define printf IdlePrintf
 #define main ProductionMain
@@ -40,9 +42,17 @@ static int IdlePrintf(const char *format, ...) {
         Require(write(idleControlFD, "idle-suspended\n", 15) == 15, "Idle confirmation failed");
     } else if (idleControlFD >= 0 && !strncmp(message, "IDLE_AUDIO_READY ", 16)) {
         Require(atomic_load(&idlePackets) == packetsAtIdle, "Media packets were sent while idle");
-        Require(write(idleControlFD, "idle-resumed\n", 13) == 13, "Resume confirmation failed");
+        int control = idleControlFD;
+        unsigned packetCount = packetsAtIdle;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(resumeDelay * NSEC_PER_SEC)),
+            dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                Require(atomic_load(&idlePackets) == packetCount, "Media was sent before resume acknowledgment");
+                Require(write(control, "idle-resumed\n", 13) == 13, "Resume confirmation failed");
+            });
     } else if (idleControlFD >= 0 && !strncmp(message, "IDLE_RESUMED ", 13)) {
         resumeTransitions++;
+    } else if (!strncmp(message, "IDLE_BUFFER_GROWN ", 18)) {
+        idleBufferGrowths++;
     }
     return length;
 }
@@ -93,6 +103,8 @@ static void Check(uint32_t rate, NSString *quality, NSUInteger idle) {
         int receiver = sockets[1], pcmWriter = pcm[1], controlWriter = control[1];
         idleControlFD = idle ? controlWriter : -1;
         idleTransitions = resumeTransitions = 0;
+        idleBufferGrowths = 0;
+        resumeDelay = idle == 3 ? 1.1 : 0;
         atomic_store(&idlePackets, 0);
         __block NSUInteger received = 0;
         dispatch_group_async(group, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -120,8 +132,8 @@ static void Check(uint32_t rate, NSString *quality, NSUInteger idle) {
         dispatch_group_async(group, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             float block[256] = {0};
             uint64_t started = mach_absolute_time();
-            for (NSUInteger frame = 0; frame < rate * 1.2; frame += 128) {
-                if (idle == 1 && frame >= rate * 0.8) {
+            for (NSUInteger frame = 0; frame < rate * (idle == 3 ? 2.5 : 1.2); frame += 128) {
+                if ((idle == 1 || idle == 3) && frame >= rate * 0.8) {
                     for (NSUInteger index = 0; index < 256; index++) block[index] = 0.25;
                 }
                 Require(write(pcmWriter, block, sizeof(block)) == sizeof(block), "PCM write failed");
@@ -149,8 +161,9 @@ static void Check(uint32_t rate, NSString *quality, NSUInteger idle) {
         Require(succeeded && !probe.failed && !probe.pcmSkippedBytes, "Sender did not recover the simulated link stall without skipping PCM");
         Require(received > (idle ? 10 : 30), "Too few packets were verified");
         if (idle) {
-            Require(idleTransitions == 1 && resumeTransitions == (idle == 1), "Unexpected idle transition count");
-            Require((atomic_load(&idlePackets) > packetsAtIdle) == (idle == 1), "Media resume did not follow returning audio");
+            Require(idleTransitions == 1 && resumeTransitions == (idle == 1 || idle == 3), "Unexpected idle transition count");
+            Require((atomic_load(&idlePackets) > packetsAtIdle) == (idle == 1 || idle == 3), "Media resume did not follow returning audio");
+            if (idle == 3) Require(idleBufferGrowths > 0, "Delayed resume did not exercise buffer growth");
         }
         idleControlFD = -1;
         Require(dup2(originalInput, STDIN_FILENO) >= 0, "Could not restore control input");
@@ -185,6 +198,20 @@ static void CheckIdleBuffer(void) {
         float retained;
         memcpy(&retained, probe.pcmRing + firstPosition, sizeof(retained));
         Require(retained == firstAudio, "First audio sample was overwritten at the ring boundary");
+        NSMutableData *expected = [NSMutableData dataWithLength:probe.pcmBytes];
+        for (NSUInteger byte = 0; byte < probe.pcmBytes; byte++)
+            ((uint8_t *)expected.mutableBytes)[byte] = probe.pcmRing[(probe.pcmHead + byte) % probe.pcmCapacityBytes];
+        Require([probe resizePCMBuffer:profile.capacityBytes * 2], "Could not grow wrapped PCM");
+        Require(probe.pcmHead == 0 && !memcmp(probe.pcmRing, expected.bytes, expected.length), "Ring growth changed retained audio");
+        Require([probe resizePCMBuffer:profile.capacityBytes], "Could not shrink PCM after idle");
+        Require(!memcmp(probe.pcmRing, expected.bytes, expected.length), "Ring shrink changed retained audio");
+        Require([probe resizePCMBuffer:profile.capacityBytes * 2], "Could not prepare idle backlog");
+        memset(probe.pcmRing, 0, probe.pcmCapacityBytes);
+        probe.pcmHead = probe.pcmCapacityBytes - PCMBlockBytes;
+        probe.pcmBytes = probe.pcmCapacityBytes;
+        [probe discardIdleSilence];
+        Require(probe.pcmCapacityBytes == profile.capacityBytes && probe.pcmBytes <= profile.prefillBytes + PCMBlockBytes,
+            "Idle silence did not release the expanded buffer");
     }
 }
 
@@ -194,6 +221,10 @@ int main(int argc, const char *argv[]) {
         Check(48000, @"low", YES);
         Check(96000, @"auto", YES);
         Check(48000, @"mid", 2);
+        Check(48000, @"high", 3);
+        Check(96000, @"high", 3);
+        Check(44100, @"high", 3);
+        Check(88200, @"high", 3);
         return 0;
     }
     for (NSUInteger rate = 48000; rate <= 96000; rate += 48000)
@@ -276,10 +307,30 @@ with tempfile.TemporaryDirectory(prefix="acouplet-media-queue-") as directory:
         check=False,
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=20,
     )
     assert result.returncode == 0, result.stdout[-6000:] + result.stderr
     print(
         "PASS idle playback at 48 and 96 kHz: drained suspension, no idle media, "
         "buffered resume, contiguous RTP, orderly stop"
+    )
+    prior.write_text(
+        idle_source.replace(
+            "!available && self.idlePhase && !self.pcmComplete",
+            "!available && NO && !self.pcmComplete",
+        )
+    )
+    subprocess.run(command, check=True)
+    result = subprocess.run(
+        [str(binary), "idle"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert (
+        result.returncode != 0 and "PCM_FAILED reason=ring-overflow" in result.stdout
+    ), result.stdout[-6000:] + result.stderr
+    print(
+        "PASS negative control: delayed resume reproduces the original PCM ring overflow"
     )
